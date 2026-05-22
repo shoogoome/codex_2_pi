@@ -1,0 +1,31 @@
+{
+  "name": "pi-codex-replica",
+  "version": "0.1.0",
+  "description": "Codex-style commands and tools for Pi coding agent.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["pi-package", "codex", "pi-extension"],
+  "files": ["extensions", "README.md", "package.json"],
+  "scripts": {
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "pi": {
+    "extensions": [
+      "extensions/diff",
+      "extensions/review",
+      "extensions/user-input"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.74.1",
+    "@types/node": "^20.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.0.0",
+    "vitest": "^3.0.0"
+  }
+}
