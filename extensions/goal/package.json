@@ -1,0 +1,21 @@
+{
+  "name": "pi-goal-extension",
+  "version": "1.0.0",
+  "description": "Codex-compatible thread goal tools for Pi.",
+  "type": "module",
+  "license": "MIT",
+  "main": "index.ts",
+  "files": [
+    "index.ts",
+    "package.json"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "index.ts"
+    ]
+  }
+}
