@@ -12,6 +12,7 @@
 | `extensions/subagents` | 添加 Codex 风格的 subagent 工具，由 Pi RPC 子进程驱动。 |
 | `extensions/init` | 添加 `/init`，通过主 agent 创建项目 `AGENTS.md` 指南。 |
 | `extensions/imagegen` | 添加 `generate_image` 生图工具和 `/images` 图片路径展示器。 |
+| `extensions/todo` | 添加 Codex 风格 `update_plan` 工具、计划更新渲染和常驻 plan overlay。 |
 
 ## 命令
 
@@ -111,6 +112,34 @@ Pi 也支持 `.pi/SYSTEM.md` 和 `APPEND_SYSTEM.md`，但 `/init` 有意以 `AGE
 `generate_image` 会生成图片并保存到 `~/.pi/agent/generated_images/<date>/<tool-call-id>.png`，工具结果只返回文本路径，不返回图片 bytes，避免图片内容进入模型上下文。工具会用 custom entry 记录生成图片索引，这类 entry 不参与 LLM 上下文。
 
 `/images` 会打开一个 TUI 图片展示器，列出当前有效 LLM 上下文中提到的本地图片路径，以及本扩展生成并记录的图片路径；它不会扫描磁盘目录。也支持手动输入 path 后预览。预览只发生在 UI 层，不写入 LLM 上下文。终端 inline 图片显示依赖 Kitty/Ghostty/WezTerm/iTerm2 等支持图片协议的终端；Pi TUI 当前在 tmux/screen 中会保守禁用图片协议，因此 tmux 下通常只会提示路径，建议在外层终端直接运行 Pi 或用终端自己的图片打开方式查看。
+
+## Codex Todo / `update_plan`
+
+`extensions/todo` 复刻 Codex CLI 的核心 todo 能力：模型调用 `update_plan`，传入当前完整计划快照，而不是对单个任务做 CRUD。一次调用可以同时新增、删除、重排多个步骤并批量更新状态。
+
+工具参数：
+
+```ts
+{
+  explanation?: string;
+  plan: Array<{
+    step: string;
+    status: "pending" | "in_progress" | "completed";
+  }>;
+}
+```
+
+工具成功时只向模型返回 `Plan updated`。Pi TUI 会把计划渲染成 Codex 风格 checklist，并在输入框上方显示常驻 overlay：
+
+```text
+● Plan (2/4)
+├─ ✓ Inspect Codex source
+├─ ✓ Design Pi extension
+├─ ◐ Implement update_plan
+└─ ○ Run verification
+```
+
+最新计划会保存为 session custom entry。`/resume`、`/reload`、session tree 切换或 compaction 后，扩展会根据当前分支最后一次 `codex-plan` 快照恢复状态：如果仍有 `pending` 或 `in_progress` 步骤，则恢复 overlay；如果最后一次计划已经全部 `completed`，则不会显示陈旧的常驻列表。
 
 ## 安装
 
