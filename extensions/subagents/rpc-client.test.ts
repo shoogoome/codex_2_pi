@@ -72,6 +72,24 @@ describe("createRpcClientFromProcess", () => {
     expect(registry.recordEvent).toHaveBeenCalledWith("agent_1", expect.objectContaining({ kind: "tool_end", summary: expect.stringContaining("bash") }));
   });
 
+  it("keeps the subagent running while tool calls are active", () => {
+    const proc = new FakeProcess();
+    const registry = fakeRegistry();
+    createRpcClientFromProcess("agent_1", "worker", proc as any, registry);
+
+    proc.stdout.write(`${JSON.stringify({ type: "tool_execution_start", toolName: "bash", args: { command: "sleep 30" } })}\n`);
+    proc.stdout.write(`${JSON.stringify({ type: "turn_end" })}\n`);
+
+    expect(registry.markRunning).toHaveBeenCalledWith("agent_1");
+    expect(registry.markIdle).not.toHaveBeenCalled();
+
+    proc.stdout.write(`${JSON.stringify({ type: "tool_execution_end", toolName: "bash", isError: false, result: { content: [{ type: "text", text: "" }] } })}\n`);
+    proc.stdout.write(`${JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done" }] } })}\n`);
+    proc.stdout.write(`${JSON.stringify({ type: "turn_end" })}\n`);
+
+    expect(registry.markIdle).toHaveBeenCalledWith("agent_1", "completed");
+  });
+
   it("marks unexpected exit as failed", () => {
     const proc = new FakeProcess();
     const registry = fakeRegistry();

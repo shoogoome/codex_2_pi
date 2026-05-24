@@ -16,10 +16,13 @@ interface Waiter {
   timer: NodeJS.Timeout;
 }
 
+type RegistryListener = (summaries: SubagentSummary[]) => void;
+
 export class SubagentRegistry {
   private readonly entries = new Map<string, SubagentEntry>();
   private readonly idsByTaskName = new Map<string, string>();
   private readonly waiters = new Set<Waiter>();
+  private readonly listeners = new Set<RegistryListener>();
   private nextId = 1;
 
   constructor(private readonly options: SubagentRuntimeOptions) {}
@@ -57,6 +60,14 @@ export class SubagentRegistry {
 
   list(): SubagentSummary[] {
     return Array.from(this.entries.values()).map((entry) => this.toSummary(entry));
+  }
+
+  subscribe(listener: RegistryListener): () => void {
+    this.listeners.add(listener);
+    listener(this.list());
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   resolve(target: string): SubagentEntry | undefined {
@@ -173,6 +184,8 @@ export class SubagentRegistry {
 
   private notify(_entry: SubagentEntry): void {
     for (const waiter of Array.from(this.waiters)) this.flushWaiter(waiter);
+    const summaries = this.list();
+    for (const listener of Array.from(this.listeners)) listener(summaries);
   }
 
   private flushWaiter(waiter: Waiter): void {

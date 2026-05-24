@@ -99,4 +99,36 @@ describe("SubagentRegistry", () => {
     await expect(wait).resolves.toMatchObject({ timedOut: true });
     vi.useRealTimers();
   });
+
+  it("notifies subscribers with current summaries when entries change", () => {
+    const registry = new SubagentRegistry({ ...options });
+    const listener = vi.fn();
+
+    const unsubscribe = registry.subscribe(listener);
+    const entry = registry.createEntry({ taskName: "worker", cwd: "/repo" });
+    registry.markRunning(entry.id);
+
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(listener.mock.calls[0][0]).toEqual([]);
+    expect(listener.mock.calls[1][0]).toEqual([
+      expect.objectContaining({ taskName: "worker", status: "starting" }),
+    ]);
+    expect(listener.mock.calls[2][0]).toEqual([
+      expect.objectContaining({ taskName: "worker", status: "running" }),
+    ]);
+
+    unsubscribe();
+  });
+
+  it("stops notifying subscribers after unsubscribe", () => {
+    const registry = new SubagentRegistry({ ...options });
+    const listener = vi.fn();
+
+    const unsubscribe = registry.subscribe(listener);
+    unsubscribe();
+    registry.createEntry({ taskName: "worker", cwd: "/repo" });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenLastCalledWith([]);
+  });
 });

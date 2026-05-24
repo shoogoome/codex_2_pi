@@ -35,6 +35,8 @@ export function createRpcClientFromProcess(
   let buffer = "";
   let intentionalClose = false;
   let lastTurnCompleted = false;
+  let activeToolCount = 0;
+  let deferredTurnEnd = false;
 
   process.stdout.on("data", (chunk: Buffer | string) => {
     buffer += chunk.toString();
@@ -90,12 +92,18 @@ export function createRpcClientFromProcess(
     }
 
     if (event.type === "tool_execution_start") {
+      activeToolCount += 1;
+      registry.markRunning(id);
       registry.recordEvent(id, { kind: "tool_start", timestamp: Date.now(), summary: `${event.toolName ?? "tool"} ${previewJson(event.args ?? {}, 160)}` });
       return;
     }
 
     if (event.type === "tool_execution_end") {
+      activeToolCount = Math.max(0, activeToolCount - 1);
       registry.recordEvent(id, { kind: "tool_end", timestamp: Date.now(), summary: `${event.toolName ?? "tool"} ${event.isError ? "failed" : "completed"}`, isError: Boolean(event.isError) });
+      if (activeToolCount === 0 && deferredTurnEnd) {
+        completeTurn();
+      }
       return;
     }
 
@@ -109,11 +117,21 @@ export function createRpcClientFromProcess(
     }
 
     if (event.type === "turn_end") {
-      registry.markIdle(id, lastTurnCompleted ? "completed" : "none");
-      registry.recordEvent(id, { kind: "turn_end", timestamp: Date.now(), summary: "turn ended" });
-      lastTurnCompleted = false;
+      if (activeToolCount > 0) {
+        deferredTurnEnd = true;
+        registry.recordEvent(id, { kind: "turn_end", timestamp: Date.now(), summary: "turn ended with active tools" });
+      } else {
+        completeTurn();
+      }
       return;
     }
+  }
+
+  function completeTurn(): void {
+    registry.markIdle(id, lastTurnCompleted ? "completed" : "none");
+    registry.recordEvent(id, { kind: "turn_end", timestamp: Date.now(), summary: "turn ended" });
+    lastTurnCompleted = false;
+    deferredTurnEnd = false;
   }
 
   function recordUsage(usage: any): void {
