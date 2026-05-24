@@ -129,6 +129,10 @@ export class SubagentRegistry {
   }
 
   waitForUpdate(target: string | undefined, timeoutMs: number): Promise<WaitResult> {
+    if (this.hasCompletedMailbox(target)) {
+      return Promise.resolve({ timedOut: false, agents: this.summariesForTarget(target) });
+    }
+
     const sinceVersion = this.maxMailboxVersion(target);
     return new Promise((resolve) => {
       const waiter: Waiter = {
@@ -179,13 +183,19 @@ export class SubagentRegistry {
   }
 
   private maxMailboxVersion(target: string | undefined): number {
-    const entries = target ? [this.resolve(target)].filter((entry): entry is SubagentEntry => Boolean(entry)) : Array.from(this.entries.values());
-    return entries.reduce((max, entry) => Math.max(max, entry.mailboxVersion), 0);
+    return this.entriesForTarget(target).reduce((max, entry) => Math.max(max, entry.mailboxVersion), 0);
+  }
+
+  private hasCompletedMailbox(target: string | undefined): boolean {
+    return this.entriesForTarget(target).some((entry) => entry.status === "idle" || entry.status === "failed" || entry.status === "closed");
   }
 
   private summariesForTarget(target: string | undefined): SubagentSummary[] {
-    const entries = target ? [this.resolve(target)].filter((entry): entry is SubagentEntry => Boolean(entry)) : Array.from(this.entries.values());
-    return entries.map((entry) => this.toSummary(entry));
+    return this.entriesForTarget(target).map((entry) => this.toSummary(entry));
+  }
+
+  private entriesForTarget(target: string | undefined): SubagentEntry[] {
+    return target ? [this.resolve(target)].filter((entry): entry is SubagentEntry => Boolean(entry)) : Array.from(this.entries.values());
   }
 
   private toSummary(entry: SubagentEntry): SubagentSummary {

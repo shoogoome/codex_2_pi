@@ -58,6 +58,36 @@ describe("SubagentRegistry", () => {
     vi.useRealTimers();
   });
 
+  it("returns an already completed subagent result without waiting for another event", async () => {
+    const registry = new SubagentRegistry({ ...options });
+    const entry = registry.createEntry({ taskName: "worker", cwd: "/repo" });
+    registry.markRunning(entry.id);
+    registry.updateAssistantMessage(entry.id, "done");
+    registry.markIdle(entry.id, "completed");
+
+    const wait = registry.waitForUpdate(undefined, 5_000);
+
+    await expect(wait).resolves.toMatchObject({
+      timedOut: false,
+      agents: [expect.objectContaining({ taskName: "worker", lastTurnStatus: "completed", lastAssistantPreview: "done" })],
+    });
+  });
+
+  it("does not treat a freshly running agent as an already completed result", async () => {
+    vi.useFakeTimers();
+    const registry = new SubagentRegistry({ ...options });
+    const entry = registry.createEntry({ taskName: "worker", cwd: "/repo" });
+    registry.markRunning(entry.id);
+
+    const wait = registry.waitForUpdate(undefined, 1_000);
+    await expect(Promise.race([wait.then(() => "resolved"), Promise.resolve("pending")])).resolves.toBe("pending");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(wait).resolves.toMatchObject({ timedOut: true });
+    vi.useRealTimers();
+  });
+
   it("times out waiting for updates", async () => {
     vi.useFakeTimers();
     const registry = new SubagentRegistry({ ...options });
