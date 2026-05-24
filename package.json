@@ -12,15 +12,10 @@
   },
   "pi": {
     "extensions": [
-      "extensions/diff",
-      "extensions/review",
-      "extensions/user-input",
-      "extensions/subagents",
-      "extensions/init",
-      "extensions/imagegen"
+      "./extensions"
     ],
     "themes": [
-      "themes"
+      "./themes"
     ]
   },
   "peerDependencies": {
