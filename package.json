@@ -16,7 +16,8 @@
       "extensions/review",
       "extensions/user-input",
       "extensions/subagents",
-      "extensions/init"
+      "extensions/init",
+      "extensions/imagegen"
     ]
   },
   "peerDependencies": {

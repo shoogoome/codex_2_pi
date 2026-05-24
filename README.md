@@ -1,22 +1,23 @@
 # Pi Codex Replica
 
-A standalone Pi package that recreates selected Codex CLI capabilities without modifying Pi core.
+一个独立的 Pi 包，用于在不修改 Pi 核心的情况下复刻部分 Codex CLI 能力。
 
-## Included extensions
+## 包含的扩展
 
-| Extension | Capability |
+| 扩展 | 能力 |
 |---|---|
-| `extensions/diff` | Adds `/diff` to show tracked and untracked git changes. |
-| `extensions/review` | Adds `/review` with Codex-style review presets. |
-| `extensions/user-input` | Adds `request_user_input`, `ask_user_question`, and `askUserQuestion` tools. |
-| `extensions/subagents` | Adds Codex-style subagent tools backed by Pi RPC child processes. |
-| `extensions/init` | Adds `/init` to create project `AGENTS.md` guidance through the main agent. |
+| `extensions/diff` | 添加 `/diff`，展示已跟踪和未跟踪的 git 变更。 |
+| `extensions/review` | 添加 `/review`，提供 Codex 风格的评审预设。 |
+| `extensions/user-input` | 添加 `request_user_input`、`ask_user_question` 和 `askUserQuestion` 工具。 |
+| `extensions/subagents` | 添加 Codex 风格的 subagent 工具，由 Pi RPC 子进程驱动。 |
+| `extensions/init` | 添加 `/init`，通过主 agent 创建项目 `AGENTS.md` 指南。 |
+| `extensions/imagegen` | 添加 `generate_image` 生图工具和 `/images` 图片路径展示器。 |
 
-## Commands
+## 命令
 
 ### `/diff`
 
-Shows the current git working tree diff, including untracked files. Outside a git repository it displays:
+显示当前 git 工作树 diff，包括未跟踪文件。在非 git 仓库中会显示：
 
 ```text
 `/diff` — _not inside a git repository_
@@ -24,47 +25,47 @@ Shows the current git working tree diff, including untracked files. Outside a gi
 
 ### `/review`
 
-In interactive mode, opens these presets:
+在交互模式下打开以下预设：
 
-- Review against a base branch (PR Style)
-- Review uncommitted changes
-- Review a commit
-- Custom review instructions
+- 对比基准分支进行评审（PR 风格）
+- 评审未提交变更
+- 评审某个提交
+- 自定义评审指令
 
 ### `/review <instructions>`
 
-Sends custom review instructions directly to the agent without opening the preset selector.
+直接向 agent 发送自定义评审指令，不打开预设选择器。
 
-## Subagent tools
+## Subagent 工具
 
-The package registers Codex-style multi-agent tools:
+此包注册了 Codex 风格的多 agent 工具：
 
-- `spawn_agent` starts a background `pi --mode rpc --no-session` child agent and immediately returns its task name and status.
-- `wait_agent` waits for a subagent mailbox update or timeout.
-- `send_message` sends a steering message to a running subagent, or starts a new prompt turn when the subagent is idle.
-- `followup_task` queues a follow-up message for a running subagent, or starts a new prompt turn when the subagent is idle.
-- `list_agents` lists subagents in the current Pi session.
-- `close_agent` aborts and closes a subagent process.
+- `spawn_agent` 启动一个后台 `pi --mode rpc --no-session` 子 agent，并立即返回任务名和状态。
+- `wait_agent` 等待某个 subagent 的邮箱更新或超时。
+- `send_message` 向运行中的 subagent 发送引导消息；如果该 subagent 空闲，则启动新的提示轮次。
+- `followup_task` 向运行中的 subagent 排队后续任务；如果该 subagent 空闲，则启动新的提示轮次。
+- `list_agents` 列出当前 Pi 会话中的 subagents。
+- `close_agent` 中止并关闭 subagent 进程。
 
-Collapsed TUI rows follow Codex-style summaries: spawned agents, sent input, waiting, finished waiting, and closed agents. Expanded rows show Pi-specific debugging details such as recent child tool calls, stderr previews, and usage counters. These details are for UI observability and are not returned as full logs to the parent model.
+折叠后的 TUI 行使用 Codex 风格摘要：已启动 agent、已发送输入、等待中、等待结束、已关闭 agent。展开后的行显示 Pi 特定的调试信息，例如最近的子进程工具调用、stderr 预览和用量计数。这些信息只用于 UI 可观测性，不会作为完整日志返回给父模型。
 
 ## `/init`
 
-`/init` mirrors Codex behavior for project guidance files. If `AGENTS.md` already exists in the current directory, the command skips to avoid overwriting it. If it is missing, the command sends a prompt to the main agent asking it to inspect the project and create a concise `AGENTS.md` with repository structure, common commands, coding conventions, and safety notes.
+`/init` 复刻 Codex 针对项目指南文件的行为。如果当前目录已经存在 `AGENTS.md`，该命令会跳过以避免覆盖。如果不存在，它会向主 agent 发送提示，请主 agent 检查项目并创建一份简洁的 `AGENTS.md`，内容包括仓库结构、常用命令、编码约定和安全注意事项。
 
-Pi also supports `.pi/SYSTEM.md` and `APPEND_SYSTEM.md`, but `/init` intentionally targets `AGENTS.md` because Pi loads it as a project context file.
+Pi 也支持 `.pi/SYSTEM.md` 和 `APPEND_SYSTEM.md`，但 `/init` 有意以 `AGENTS.md` 为目标，因为 Pi 会将它作为项目上下文文件加载。
 
-## User-input tools
+## 用户输入工具
 
-The package registers three equivalent tool names:
+此包注册了三个等价的工具名：
 
 - `request_user_input`
 - `ask_user_question`
 - `askUserQuestion`
 
-Each tool accepts 1-3 questions. Each question has an `id`, `header`, `question`, and option list. The UI automatically adds an `Other` option for free-form user input.
+每个工具接受 1 到 3 个问题。每个问题包含 `id`、`header`、`question` 和选项列表。UI 会自动添加一个 `Other` 选项，用于自由文本输入。
 
-Tool responses use this shape:
+工具响应格式如下：
 
 ```json
 {
@@ -76,13 +77,46 @@ Tool responses use this shape:
 }
 ```
 
-## Install
+## Imagegen 生图
+
+`extensions/imagegen` 使用 `~/.pi/agent/models.json` 中 `type: "image"` 的 provider 配置。第一版支持 OpenAI Images API。为了让该配置仍通过 Pi 原生 `models.json` 校验，image provider 也要带上一个 Pi 已知的 `api` 和空的 `models` 数组；真正的生图模型放在 extension 自定义的 `imageModels` 中：
+
+```json
+{
+  "providers": {
+    "openai-image": {
+      "type": "image",
+      "baseUrl": "https://api.openai.com/v1",
+      "apiKey": "OPENAI_API_KEY",
+      "api": "openai-responses",
+      "models": [],
+      "imageModels": [
+        {
+          "id": "gpt-image-1",
+          "name": "GPT Image 1",
+          "api": "openai-images",
+          "defaultSize": "1024x1024",
+          "defaultFormat": "png"
+        }
+      ]
+    }
+  }
+}
+```
+
+`apiKey` 支持环境变量名或直接写入 key；推荐使用环境变量名，例如上例中的 `OPENAI_API_KEY`。
+
+`generate_image` 会生成图片并保存到 `~/.pi/agent/generated_images/<date>/<tool-call-id>.png`，工具结果只返回文本路径，不返回图片 bytes，避免图片内容进入模型上下文。工具会用 custom entry 记录生成图片索引，这类 entry 不参与 LLM 上下文。
+
+`/images` 会打开一个 TUI 图片展示器，列出当前有效 LLM 上下文中提到的本地图片路径，以及本扩展生成并记录的图片路径；它不会扫描磁盘目录。也支持手动输入 path 后预览。预览只发生在 UI 层，不写入 LLM 上下文。终端 inline 图片显示依赖 Kitty/Ghostty/WezTerm/iTerm2 等支持图片协议的终端；Pi TUI 当前在 tmux/screen 中会保守禁用图片协议，因此 tmux 下通常只会提示路径，建议在外层终端直接运行 Pi 或用终端自己的图片打开方式查看。
+
+## 安装
 
 ```bash
 pi install .
 ```
 
-## Development
+## 开发
 
 ```bash
 npm install
@@ -90,12 +124,12 @@ npm test
 npm run typecheck
 ```
 
-## Reference source
+## 参考源码
 
-The local `codex/` directory is a reference checkout of OpenAI Codex source. It is ignored by git and is not part of this package.
+本地 `codex/` 目录是 OpenAI Codex 源码的参考检出。它被 git 忽略，也不是此包的一部分。
 
-## Deferred
+## 暂缓内容
 
-`/side` is intentionally not included. Codex `/side` depends on transient thread state and Ctrl+C return behavior that cannot be fully reproduced from a Pi extension without Pi core support.
+`/side` 有意未包含。Codex 的 `/side` 依赖临时线程状态和 Ctrl+C 返回行为，如果没有 Pi 核心支持，无法通过 Pi 扩展完整复现。
 
-Subagent fork-history, agent roles/profiles, and cross-session subagent restoration are also deferred. The first subagent version focuses on Codex-style asynchronous collaboration tools backed by Pi RPC child processes.
+Subagent fork-history、agent 角色/配置文件，以及跨会话 subagent 恢复也暂缓实现。首个 subagent 版本专注于由 Pi RPC 子进程驱动的 Codex 风格异步协作工具。
