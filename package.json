@@ -5,7 +5,7 @@
   "type": "module",
   "license": "MIT",
   "keywords": ["pi-package", "codex", "pi-extension"],
-  "files": ["extensions", "README.md", "package.json"],
+  "files": ["extensions", "themes", "README.md", "package.json"],
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit"
@@ -18,6 +18,9 @@
       "extensions/subagents",
       "extensions/init",
       "extensions/imagegen"
+    ],
+    "themes": [
+      "themes"
     ]
   },
   "peerDependencies": {
