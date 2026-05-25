@@ -203,11 +203,16 @@ function resolveForkedSession(ctx: ExtensionContext, forkSession: SubagentSessio
     return { error: "spawn_agent fork_context requires a current parent session entry; omit fork_context for a normal subagent." };
   }
   const sessionDir = ctx.sessionManager.getSessionDir();
-  const sessionPath = forkSession({ sessionFile, sessionDir, leafId });
-  if (!sessionPath) {
-    return { error: "failed to create forked subagent session." };
+  try {
+    const sessionPath = forkSession({ sessionFile, sessionDir, leafId });
+    if (!sessionPath) {
+      return { error: "failed to create forked subagent session." };
+    }
+    return { sessionPath };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { error: `failed to create forked subagent session: ${message}` };
   }
-  return { sessionPath };
 }
 
 async function sendToTarget(

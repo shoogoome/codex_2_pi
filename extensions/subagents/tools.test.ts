@@ -116,6 +116,24 @@ describe("subagent tools", () => {
     expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("requires a current parent session entry");
   });
 
+  it("spawn_agent returns an error when fork_context session creation throws", async () => {
+    const registry = new SubagentRegistry({ ...options });
+    const factory: SubagentRpcFactory = { spawn: vi.fn((input) => makeRpcClient("agent_1", input.taskName)) };
+    const tools = createSubagentTools(registry, factory, { forkSession: vi.fn(() => { throw new Error("disk full"); }) });
+    const spawnTool = tools.find((tool) => tool.name === "spawn_agent")!;
+
+    const result = await spawnTool.execute(
+      "call_1",
+      { task_name: "worker", message: "Use current context", fork_context: true },
+      undefined,
+      undefined,
+      makeForkableCtx(),
+    );
+
+    expect(factory.spawn).not.toHaveBeenCalled();
+    expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("failed to create forked subagent session: disk full");
+  });
+
   it("send_message steers running agents", async () => {
     const registry = new SubagentRegistry({ ...options });
     const client = makeRpcClient("agent_1", "worker");
