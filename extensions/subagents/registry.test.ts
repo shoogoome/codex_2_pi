@@ -33,6 +33,21 @@ describe("SubagentRegistry", () => {
     expect(registry.resolve("missing")).toBeUndefined();
   });
 
+  it("stores forked session metadata", () => {
+    const registry = new SubagentRegistry({ ...options });
+
+    registry.createEntry({ taskName: "worker", cwd: "/repo", sessionPath: "/tmp/subagent.jsonl", forked: true });
+
+    expect(registry.resolve("worker")).toMatchObject({
+      sessionPath: "/tmp/subagent.jsonl",
+      forked: true,
+    });
+    expect(registry.list()[0]).toMatchObject({
+      sessionPath: "/tmp/subagent.jsonl",
+      forked: true,
+    });
+  });
+
   it("truncates internal events", () => {
     const registry = new SubagentRegistry({ ...options, maxEventLogEntries: 2 });
     const entry = registry.createEntry({ taskName: "worker", cwd: "/repo" });

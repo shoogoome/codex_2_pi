@@ -38,6 +38,9 @@ export function renderSubagentResult(result: AgentToolResult<SubagentToolDetails
   box.addChild(new Text(theme.fg(text.startsWith("Error:") ? "error" : "toolTitle", text), 0, 0));
   for (const agent of details.agents) {
     box.addChild(new Text(theme.fg("accent", formatAgentSummary(agent)), 0, 0));
+    if (agent.forked && agent.sessionPath) {
+      box.addChild(new Text(theme.fg("dim", `  forked session: ${agent.sessionPath}`), 0, 0));
+    }
     for (const event of agent.recentEvents.slice(-10)) {
       const rendered = formatEventSummary(event);
       box.addChild(new Text(theme.fg(event.isError ? "error" : "dim", `  ${rendered}`), 0, 0));
