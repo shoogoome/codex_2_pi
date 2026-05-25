@@ -14,6 +14,7 @@
 | `extensions/init` | 添加 `/init`，通过主 agent 创建项目 `AGENTS.md` 指南。 |
 | `extensions/imagegen` | 添加 `generate_image` 生图工具和 `/images` 图片路径展示器。 |
 | `extensions/todo` | 添加 Codex 风格 `update_plan` 工具、计划更新渲染和常驻 plan overlay。 |
+| `extensions/compact-ui` | 添加 Codex 风格紧凑 UI：用户/模型消息前缀化，并让常见内置工具使用更短的调用与结果渲染。 |
 
 ## 命令
 
@@ -149,6 +150,16 @@ Pi 也支持 `.pi/SYSTEM.md` 和 `APPEND_SYSTEM.md`，但 `/init` 有意以 `AGE
 ```
 
 最新计划会保存为 session custom entry。`/resume`、`/reload`、session tree 切换或 compaction 后，扩展会根据当前分支最后一次 `codex-plan` 快照恢复状态：如果仍有 `pending` 或 `in_progress` 步骤，则恢复 overlay；如果最后一次计划已经全部 `completed`，则不会显示陈旧的常驻列表。
+
+## Compact UI
+
+此包包含 Codex 风格紧凑 UI 扩展：
+
+- 用户消息使用 `›` 前缀和主题 `userMessageBg` 背景，不再显示 Pi 默认的大气泡。
+- 模型消息使用 `•` 前缀和后续行缩进，减少消息块间的视觉重量。
+- `read`、`grep`、`find`、`ls`、`bash`、`edit` 和 `write` 使用紧凑渲染；执行逻辑仍委托给 Pi 原生工具。
+
+紧凑间距不是 theme token 能力；该行为由 `extensions/compact-ui` 扩展实现。
 
 ## 安装
 

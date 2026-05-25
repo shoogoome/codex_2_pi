@@ -16,20 +16,20 @@ const theme = {
 describe("patchUserMessagePrototype", () => {
   it("renders user messages with a Codex prompt prefix", () => {
     const prototype = {
-      render() {
+      render(_width?: number) {
         return ["", "hello", "world", ""];
       },
     };
 
     patchUserMessagePrototype(prototype, () => theme);
-    const output = prototype.render.call({}, 12);
+    const output = prototype.render(12);
 
     expect(output).toEqual(["› hello     ", "  world     "]);
   });
 
   it("is idempotent when applied multiple times", () => {
     const prototype = {
-      render() {
+      render(_width?: number) {
         return ["hello"];
       },
     };
@@ -37,20 +37,20 @@ describe("patchUserMessagePrototype", () => {
     patchUserMessagePrototype(prototype, () => theme);
     patchUserMessagePrototype(prototype, () => theme);
 
-    expect(prototype.render.call({}, 10)).toEqual(["› hello   "]);
+    expect(prototype.render(10)).toEqual(["› hello   "]);
   });
 });
 
 describe("patchAssistantMessagePrototype", () => {
   it("renders assistant messages with a Codex bullet prefix", () => {
     const prototype = {
-      render() {
+      render(_width?: number) {
         return ["", "answer", "line two"];
       },
     };
 
     patchAssistantMessagePrototype(prototype, () => theme);
-    const output = prototype.render.call({}, 12);
+    const output = prototype.render(12);
 
     expect(output).toEqual(["• answer    ", "  line two  "]);
   });
