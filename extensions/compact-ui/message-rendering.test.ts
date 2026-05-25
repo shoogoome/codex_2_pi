@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { patchAssistantMessagePrototype, patchUserMessagePrototype } from "./message-rendering.js";
+import { extractMarkdownText, patchAssistantMessagePrototype, patchUserMessagePrototype } from "./message-rendering.js";
 
 const theme = {
   fg(_color: string, text: string) {
@@ -13,16 +13,35 @@ const theme = {
   },
 };
 
+describe("extractMarkdownText", () => {
+  it("finds nested markdown text stored by Pi Markdown components", () => {
+    const instance = {
+      children: [
+        {
+          children: [
+            { text: "**hello**\nworld" },
+          ],
+        },
+      ],
+    };
+
+    expect(extractMarkdownText(instance)).toBe("**hello**\nworld");
+  });
+});
+
 describe("patchUserMessagePrototype", () => {
-  it("renders user messages with a Codex prompt prefix", () => {
+  it("renders user messages from nested markdown text instead of original padded box output", () => {
     const prototype = {
       render(_width?: number) {
-        return ["", "hello", "world", ""];
+        return ["original padded box"];
       },
+    };
+    const instance = {
+      children: [{ children: [{ text: "hello\nworld" }] }],
     };
 
     patchUserMessagePrototype(prototype, () => theme);
-    const output = prototype.render(12);
+    const output = prototype.render.call(instance, 12);
 
     expect(output).toEqual(["› hello     ", "  world     "]);
   });

@@ -1,3 +1,5 @@
+import { Markdown } from "@earendil-works/pi-tui";
+import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { prefixWrappedLines, trimVisualBlankEdges, type CompactThemeLike } from "./text.js";
 
 export type RenderFn = (width: number) => string[];
@@ -10,6 +12,36 @@ export interface PatchableRenderPrototype {
 }
 
 const PATCH_VERSION = 1;
+
+type RecordLike = Record<string, unknown>;
+
+function isRecord(value: unknown): value is RecordLike {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function extractMarkdownText(value: unknown): string | undefined {
+  if (isRecord(value) && typeof value.text === "string") {
+    return value.text;
+  }
+
+  if (!isRecord(value)) return undefined;
+
+  const children = Array.isArray(value.children) ? value.children : [];
+  for (const child of children) {
+    const text = extractMarkdownText(child);
+    if (text !== undefined) return text;
+  }
+
+  return undefined;
+}
+
+function renderMarkdownText(text: string, width: number): string[] {
+  try {
+    return new Markdown(text, 0, 0, getMarkdownTheme()).render(width);
+  } catch {
+    return text.split("\n");
+  }
+}
 
 function patchPrototype(
   prototype: PatchableRenderPrototype,
@@ -33,7 +65,8 @@ function patchPrototype(
       return original.call(this, safeWidth);
     }
 
-    const body = trimVisualBlankEdges(originalLines);
+    const markdownText = kind === "user" ? extractMarkdownText(this) : undefined;
+    const body = trimVisualBlankEdges(markdownText !== undefined ? renderMarkdownText(markdownText, safeWidth - 2) : originalLines);
     const theme = getTheme();
     if (kind === "user") {
       return prefixWrappedLines(body, {
