@@ -1,6 +1,7 @@
 {
   "name": "pi-codex-compact-ui",
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "description": "Compact tool display, diff visualization, user message box, and thinking labels for Pi coding agent.",
   "type": "module",
   "main": "./index.ts",
   "peerDependencies": {
