@@ -4,6 +4,7 @@ import { createRpcClientFromProcess, spawnRpcProcess } from "./rpc-client.js";
 import { createSubagentTools } from "./tools.js";
 import { DEFAULT_SUBAGENT_OPTIONS, type SubagentRpcFactory, type SubagentToolDetails } from "./types.js";
 import { renderSubagentResult } from "./render.js";
+import { SubagentRuntime } from "./runtime.js";
 import { formatRunningSubagentWidget } from "./status-widget.js";
 
 const RUNNING_WIDGET_KEY = "codex-subagents-running";
@@ -23,12 +24,14 @@ export default function subagentsExtension(pi: ExtensionAPI, deps: SubagentsExte
     spawn(input) {
       const entry = registry.resolve(input.taskName);
       if (!entry) throw new Error(`subagent not found after create: ${input.taskName}`);
-      const proc = spawnRpcProcess(input.cwd, input.model, input.sessionPath);
+      const proc = spawnRpcProcess(input.cwd, input.model, input.sessionPath, input.provider, input.apiKey);
       return createRpcClientFromProcess(entry.id, input.taskName, proc, registry);
     },
   };
 
-  for (const tool of createSubagentTools(registry, rpcFactory)) {
+  const runtime = new SubagentRuntime(registry, rpcFactory);
+
+  for (const tool of createSubagentTools(registry, runtime)) {
     pi.registerTool(tool);
   }
 
@@ -61,7 +64,7 @@ export default function subagentsExtension(pi: ExtensionAPI, deps: SubagentsExte
     unsubscribeWidget = undefined;
     clearRunningWidget(widgetContext);
     widgetContext = undefined;
-    registry.closeAll();
+    runtime.closeAll();
   });
 
   function stopRefreshTimer(): void {

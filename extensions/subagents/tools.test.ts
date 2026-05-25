@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { SubagentRegistry } from "./registry.js";
 import { createSubagentTools } from "./tools.js";
+import { SubagentRuntime } from "./runtime.js";
 import type { RpcClient, RpcResponse, SubagentRpcFactory, SubagentSessionForker } from "./types.js";
 
 function makeCtx(cwd = "/repo") {
@@ -30,6 +31,11 @@ function makeRpcClient(id: string, taskName: string): RpcClient {
   };
 }
 
+function makeTools(registry: SubagentRegistry, factory: SubagentRpcFactory, forkSession?: SubagentSessionForker) {
+  const runtime = new SubagentRuntime(registry, factory, forkSession ? { forkSession } : {});
+  return createSubagentTools(registry, runtime);
+}
+
 const options = { maxAgents: 8, maxEventLogEntries: 100, defaultWaitTimeoutMs: 30_000, minWaitTimeoutMs: 1_000, maxWaitTimeoutMs: 300_000 };
 
 describe("subagent tools", () => {
@@ -37,7 +43,7 @@ describe("subagent tools", () => {
     const registry = new SubagentRegistry({ ...options });
     const spawned: RpcClient[] = [];
     const factory: SubagentRpcFactory = { spawn: vi.fn((input) => { const client = makeRpcClient("agent_1", input.taskName); spawned.push(client); return client; }) };
-    const tools = createSubagentTools(registry, factory);
+    const tools = makeTools(registry, factory);
     const spawnTool = tools.find((tool) => tool.name === "spawn_agent")!;
 
     const result = await spawnTool.execute("call_1", { task_name: "Worker-1", message: "Inspect tests" }, undefined, undefined, makeCtx());
@@ -59,7 +65,7 @@ describe("subagent tools", () => {
         return makeRpcClient("agent_1", input.taskName);
       }),
     };
-    const tools = createSubagentTools(registry, factory, { forkSession });
+    const tools = makeTools(registry, factory, forkSession);
     const spawnTool = tools.find((tool) => tool.name === "spawn_agent")!;
 
     const result = await spawnTool.execute(
@@ -83,7 +89,7 @@ describe("subagent tools", () => {
   it("spawn_agent returns an error when fork_context has no parent session file", async () => {
     const registry = new SubagentRegistry({ ...options });
     const factory: SubagentRpcFactory = { spawn: vi.fn((input) => makeRpcClient("agent_1", input.taskName)) };
-    const tools = createSubagentTools(registry, factory, { forkSession: vi.fn() });
+    const tools = makeTools(registry, factory, vi.fn());
     const spawnTool = tools.find((tool) => tool.name === "spawn_agent")!;
 
     const result = await spawnTool.execute(
@@ -101,7 +107,7 @@ describe("subagent tools", () => {
   it("spawn_agent returns an error when fork_context has no leaf entry", async () => {
     const registry = new SubagentRegistry({ ...options });
     const factory: SubagentRpcFactory = { spawn: vi.fn((input) => makeRpcClient("agent_1", input.taskName)) };
-    const tools = createSubagentTools(registry, factory, { forkSession: vi.fn() });
+    const tools = makeTools(registry, factory, vi.fn());
     const spawnTool = tools.find((tool) => tool.name === "spawn_agent")!;
 
     const result = await spawnTool.execute(
@@ -119,7 +125,7 @@ describe("subagent tools", () => {
   it("spawn_agent returns an error when fork_context session creation throws", async () => {
     const registry = new SubagentRegistry({ ...options });
     const factory: SubagentRpcFactory = { spawn: vi.fn((input) => makeRpcClient("agent_1", input.taskName)) };
-    const tools = createSubagentTools(registry, factory, { forkSession: vi.fn(() => { throw new Error("disk full"); }) });
+    const tools = makeTools(registry, factory, vi.fn(() => { throw new Error("disk full"); }));
     const spawnTool = tools.find((tool) => tool.name === "spawn_agent")!;
 
     const result = await spawnTool.execute(
@@ -138,7 +144,7 @@ describe("subagent tools", () => {
     const registry = new SubagentRegistry({ ...options });
     const client = makeRpcClient("agent_1", "worker");
     const factory: SubagentRpcFactory = { spawn: () => client };
-    const tools = createSubagentTools(registry, factory);
+    const tools = makeTools(registry, factory);
     const spawnTool = tools.find((tool) => tool.name === "spawn_agent")!;
     const sendTool = tools.find((tool) => tool.name === "send_message")!;
 
@@ -151,7 +157,7 @@ describe("subagent tools", () => {
   it("followup_task queues follow up for running agents", async () => {
     const registry = new SubagentRegistry({ ...options });
     const client = makeRpcClient("agent_1", "worker");
-    const tools = createSubagentTools(registry, { spawn: () => client });
+    const tools = makeTools(registry, { spawn: () => client });
 
     await tools.find((tool) => tool.name === "spawn_agent")!.execute("call_1", { task_name: "worker", message: "Start" }, undefined, undefined, makeCtx());
     await tools.find((tool) => tool.name === "followup_task")!.execute("call_2", { target: "worker", message: "Next" }, undefined, undefined, makeCtx());
@@ -161,7 +167,7 @@ describe("subagent tools", () => {
 
   it("list_agents returns summaries", async () => {
     const registry = new SubagentRegistry({ ...options });
-    const tools = createSubagentTools(registry, { spawn: (input) => makeRpcClient("agent_1", input.taskName) });
+    const tools = makeTools(registry, { spawn: (input) => makeRpcClient("agent_1", input.taskName) });
 
     await tools.find((tool) => tool.name === "spawn_agent")!.execute("call_1", { task_name: "worker", message: "Start" }, undefined, undefined, makeCtx());
     const result = await tools.find((tool) => tool.name === "list_agents")!.execute("call_2", {}, undefined, undefined, makeCtx());
@@ -173,7 +179,7 @@ describe("subagent tools", () => {
   it("close_agent closes target", async () => {
     const registry = new SubagentRegistry({ ...options });
     const client = makeRpcClient("agent_1", "worker");
-    const tools = createSubagentTools(registry, { spawn: () => client });
+    const tools = makeTools(registry, { spawn: () => client });
 
     await tools.find((tool) => tool.name === "spawn_agent")!.execute("call_1", { task_name: "worker", message: "Start" }, undefined, undefined, makeCtx());
     await tools.find((tool) => tool.name === "close_agent")!.execute("call_2", { target: "worker" }, undefined, undefined, makeCtx());

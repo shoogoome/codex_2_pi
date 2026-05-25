@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { buildRpcProcessArgs, createRpcClientFromProcess, resolvePiCommand } from "./rpc-client.js";
+import { buildRpcProcessArgs, buildRpcProcessEnv, createRpcClientFromProcess, resolvePiCommand } from "./rpc-client.js";
 import type { SubagentRegistry } from "./registry.js";
 
 class FakeProcess extends EventEmitter {
@@ -58,6 +58,29 @@ describe("createRpcClientFromProcess", () => {
     expect(registry.updateAssistantMessage).toHaveBeenCalledWith("agent_1", "done");
     expect(registry.updateUsage).toHaveBeenCalledWith("agent_1", { input: 3, output: 4, cacheRead: 1, cacheWrite: 2, cost: 0.01 });
     expect(registry.markIdle).toHaveBeenCalledWith("agent_1", "completed");
+  });
+
+  it("records assistant text from turn_end when message_end is not emitted", () => {
+    const proc = new FakeProcess();
+    const registry = fakeRegistry();
+    createRpcClientFromProcess("agent_1", "worker", proc as any, registry);
+
+    proc.stdout.write(`${JSON.stringify({ type: "turn_end", message: { role: "assistant", content: [{ type: "text", text: "done" }], usage: { input: 3, output: 4, cacheRead: 1, cacheWrite: 2, cost: { total: 0.01 } } } })}\n`);
+
+    expect(registry.updateAssistantMessage).toHaveBeenCalledWith("agent_1", "done");
+    expect(registry.updateUsage).toHaveBeenCalledWith("agent_1", { input: 3, output: 4, cacheRead: 1, cacheWrite: 2, cost: 0.01 });
+    expect(registry.markIdle).toHaveBeenCalledWith("agent_1", "completed");
+  });
+
+  it("records assistant deltas from message_update", () => {
+    const proc = new FakeProcess();
+    const registry = fakeRegistry();
+    createRpcClientFromProcess("agent_1", "worker", proc as any, registry);
+
+    proc.stdout.write(`${JSON.stringify({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "partial" }] } })}\n`);
+
+    expect(registry.updateAssistantMessage).toHaveBeenCalledWith("agent_1", "partial");
+    expect(registry.recordEvent).toHaveBeenCalledWith("agent_1", expect.objectContaining({ kind: "message_update" }));
   });
 
   it("records tool execution summaries", () => {
@@ -130,5 +153,51 @@ describe("buildRpcProcessArgs", () => {
       "--model",
       "test-model",
     ]);
+  });
+
+  it("passes provider with model when provided", () => {
+    expect(buildRpcProcessArgs("test-model", "/tmp/subagent.jsonl", "azure-openai-responses")).toEqual([
+      "--mode",
+      "rpc",
+      "--session",
+      "/tmp/subagent.jsonl",
+      "--provider",
+      "azure-openai-responses",
+      "--model",
+      "test-model",
+    ]);
+  });
+});
+
+describe("buildRpcProcessEnv", () => {
+  it("maps inherited azure api key to the child process environment", () => {
+    const env = buildRpcProcessEnv("azure-openai-responses", "secret", { PATH: "/bin", AZURE_OPENAI_BASE_URL: "https://example.openai.azure.com", AZURE_OPENAI_API_VERSION: "v2", AZURE_OPENAI_DEPLOYMENT_NAME_MAP: "gpt-5.4=prod" });
+    expect(env).toMatchObject({
+      PATH: "/bin",
+      AZURE_OPENAI_API_KEY: "secret",
+      AZURE_OPENAI_BASE_URL: "https://example.openai.azure.com",
+      AZURE_OPENAI_API_VERSION: "v2",
+      AZURE_OPENAI_DEPLOYMENT_NAME_MAP: "gpt-5.4=prod",
+    });
+  });
+
+  it("returns a copy of the base environment when provider has no env mapping", () => {
+    const baseEnv = { PATH: "/bin" } as NodeJS.ProcessEnv;
+
+    const env = buildRpcProcessEnv("custom-provider", "secret", baseEnv);
+
+    expect(env).toEqual(baseEnv);
+    expect(env).not.toBe(baseEnv);
+  });
+
+  it("inherits anthropic oauth token alongside api key", () => {
+    const env = buildRpcProcessEnv("anthropic", "runtime-key", { ANTHROPIC_OAUTH_TOKEN: "oauth", PATH: "/bin" });
+    expect(env.ANTHROPIC_OAUTH_TOKEN).toBe("oauth");
+    expect(env.ANTHROPIC_API_KEY).toBe("runtime-key");
+  });
+
+  it("prefers existing api key env over runtime key", () => {
+    const env = buildRpcProcessEnv("openai", "runtime-key", { OPENAI_API_KEY: "existing", PATH: "/bin" });
+    expect(env.OPENAI_API_KEY).toBe("existing");
   });
 });

@@ -10,15 +10,105 @@ interface PendingRequest {
 
 let nextRequestId = 1;
 
-export function spawnRpcProcess(cwd: string, model: string | undefined, sessionPath?: string): ChildProcessWithoutNullStreams {
-  return spawn(resolvePiCommand(), buildRpcProcessArgs(model, sessionPath), { cwd, stdio: "pipe", shell: false });
+export function spawnRpcProcess(cwd: string, model: string | undefined, sessionPath?: string, provider?: string, apiKey?: string): ChildProcessWithoutNullStreams {
+  return spawn(resolvePiCommand(), buildRpcProcessArgs(model, sessionPath, provider), {
+    cwd,
+    stdio: "pipe",
+    shell: false,
+    env: buildRpcProcessEnv(provider, apiKey),
+  });
 }
 
-export function buildRpcProcessArgs(model: string | undefined, sessionPath?: string): string[] {
+export function buildRpcProcessArgs(model: string | undefined, sessionPath?: string, provider?: string): string[] {
   const args = sessionPath ? ["--mode", "rpc", "--session", sessionPath] : ["--mode", "rpc", "--no-session"];
+  if (provider && model) args.push("--provider", provider);
   if (model) args.push("--model", model);
   return args;
 }
+
+export function buildRpcProcessEnv(provider: string | undefined, apiKey: string | undefined, baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...baseEnv };
+  for (const key of providerRequiredEnv(provider)) {
+    const value = baseEnv[key];
+    if (value !== undefined) env[key] = value;
+  }
+  if (provider && apiKey) {
+    const apiKeyVar = apiKeyEnvVarForProvider(provider);
+    if (apiKeyVar && !env[apiKeyVar]) env[apiKeyVar] = apiKey;
+  }
+  return env;
+}
+
+function apiKeyEnvVarForProvider(provider: string): string | undefined {
+  return PROVIDER_API_KEY_ENV[provider];
+}
+
+function providerRequiredEnv(provider: string | undefined): readonly string[] {
+  if (!provider) return [];
+  const apiKeyVars = PROVIDER_API_KEY_ENV[provider] ? [PROVIDER_API_KEY_ENV[provider]] : [];
+  return [...apiKeyVars, ...(PROVIDER_EXTRA_ENV[provider] ?? [])];
+}
+
+const PROVIDER_API_KEY_ENV: Record<string, string> = {
+  openai: "OPENAI_API_KEY",
+  "azure-openai-responses": "AZURE_OPENAI_API_KEY",
+  deepseek: "DEEPSEEK_API_KEY",
+  google: "GEMINI_API_KEY",
+  "google-vertex": "GOOGLE_CLOUD_API_KEY",
+  groq: "GROQ_API_KEY",
+  cerebras: "CEREBRAS_API_KEY",
+  xai: "XAI_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+  "vercel-ai-gateway": "AI_GATEWAY_API_KEY",
+  zai: "ZAI_API_KEY",
+  mistral: "MISTRAL_API_KEY",
+  minimax: "MINIMAX_API_KEY",
+  "minimax-cn": "MINIMAX_CN_API_KEY",
+  moonshotai: "MOONSHOT_API_KEY",
+  "moonshotai-cn": "MOONSHOT_API_KEY",
+  huggingface: "HF_TOKEN",
+  fireworks: "FIREWORKS_API_KEY",
+  together: "TOGETHER_API_KEY",
+  opencode: "OPENCODE_API_KEY",
+  "opencode-go": "OPENCODE_API_KEY",
+  "kimi-coding": "KIMI_API_KEY",
+  "cloudflare-workers-ai": "CLOUDFLARE_API_KEY",
+  "cloudflare-ai-gateway": "CLOUDFLARE_API_KEY",
+  xiaomi: "XIAOMI_API_KEY",
+  "xiaomi-token-plan-cn": "XIAOMI_TOKEN_PLAN_CN_API_KEY",
+  "xiaomi-token-plan-ams": "XIAOMI_TOKEN_PLAN_AMS_API_KEY",
+  "xiaomi-token-plan-sgp": "XIAOMI_TOKEN_PLAN_SGP_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY",
+  "github-copilot": "COPILOT_GITHUB_TOKEN",
+};
+
+const PROVIDER_EXTRA_ENV: Record<string, readonly string[]> = {
+  "azure-openai-responses": [
+    "AZURE_OPENAI_BASE_URL",
+    "AZURE_OPENAI_RESOURCE_NAME",
+    "AZURE_OPENAI_API_VERSION",
+    "AZURE_OPENAI_DEPLOYMENT_NAME_MAP",
+  ],
+  "google-vertex": [
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "GOOGLE_CLOUD_PROJECT",
+    "GCLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION",
+  ],
+  "amazon-bedrock": [
+    "AWS_PROFILE",
+    "AWS_REGION",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_BEARER_TOKEN_BEDROCK",
+    "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+    "AWS_WEB_IDENTITY_TOKEN_FILE",
+  ],
+  anthropic: ["ANTHROPIC_OAUTH_TOKEN"],
+  "cloudflare-workers-ai": ["CLOUDFLARE_ACCOUNT_ID"],
+  "cloudflare-ai-gateway": ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"],
+};
 
 export function resolvePiCommand(runtime: { argv1?: string; execPath: string } = { argv1: process.argv[1], execPath: process.execPath }): string {
   if (runtime.argv1?.startsWith("/$bunfs/root/")) return runtime.execPath;
@@ -87,6 +177,10 @@ export function createRpcClientFromProcess(
     }
 
     if (event.type === "message_update") {
+      if (event.message?.role === "assistant") {
+        const text = extractText(event.message);
+        if (text) registry.updateAssistantMessage(id, text);
+      }
       registry.recordEvent(id, { kind: "message_update", timestamp: Date.now(), summary: "assistant message streaming" });
       return;
     }
@@ -120,6 +214,14 @@ export function createRpcClientFromProcess(
       if (activeToolCount > 0) {
         deferredTurnEnd = true;
         registry.recordEvent(id, { kind: "turn_end", timestamp: Date.now(), summary: "turn ended with active tools" });
+      } else if (event.message?.role === "assistant") {
+        const text = extractText(event.message);
+        if (text) {
+          registry.updateAssistantMessage(id, text);
+          recordUsage(event.message.usage);
+          lastTurnCompleted = true;
+        }
+        completeTurn();
       } else {
         completeTurn();
       }

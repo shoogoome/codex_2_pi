@@ -10,6 +10,7 @@
 | `extensions/review` | 添加 `/review`，提供 Codex 风格的评审预设。 |
 | `extensions/user-input` | 添加 `request_user_input`、`ask_user_question` 和 `askUserQuestion` 工具。 |
 | `extensions/subagents` | 添加 Codex 风格的 subagent 工具，由 Pi RPC 子进程驱动。 |
+| `extensions/side` | 添加 `/side`，在 Pi overlay 中启动临时 fork subagent，关闭窗口即关闭 side 会话。 |
 | `extensions/init` | 添加 `/init`，通过主 agent 创建项目 `AGENTS.md` 指南。 |
 | `extensions/imagegen` | 添加 `generate_image` 生图工具和 `/images` 图片路径展示器。 |
 | `extensions/todo` | 添加 Codex 风格 `update_plan` 工具、计划更新渲染和常驻 plan overlay。 |
@@ -53,6 +54,12 @@
 折叠后的 TUI 行使用 Codex 风格摘要：已启动 agent、已发送输入、等待中、等待结束、已关闭 agent。展开后的行显示 Pi 特定的调试信息，例如最近的子进程工具调用、stderr 预览和用量计数。这些信息只用于 UI 可观测性，不会作为完整日志返回给父模型。
 
 在交互式 TUI 中，`extensions/subagents` 还会在聊天输入框下方显示当前 `starting` / `running` 的 subagent 列表。列表只作为 UI 状态提示，不会写入模型上下文；所有 subagent 都结束后该提示会自动消失。
+
+## `/side`
+
+`/side [message]` 打开 Codex 风格的临时 side conversation。它会从当前主会话 leaf fork 一个 Pi session，启动独立 RPC subagent，并在 Pi 原生 overlay 中显示 side 对话。关闭 overlay（Esc 或 Ctrl+C）会终止 side subagent；主会话不会切换，也不会收到 side 的历史。
+
+这个实现复刻 Codex `/side` 的核心语义：继承当前上下文作为参考、使用 side boundary 指令、默认只做轻量非修改探索。它不使用系统新终端窗口或 tmux split。
 
 ## `/init`
 
@@ -163,6 +170,6 @@ npm run typecheck
 
 ## 暂缓内容
 
-`/side` 有意未包含。Codex 的 `/side` 依赖临时线程状态和 Ctrl+C 返回行为，如果没有 Pi 核心支持，无法通过 Pi 扩展完整复现。
+`/side` 现在作为 extension-only 版本提供：它使用 fork subagent 和 Pi overlay 复刻 Codex 的临时 side conversation。它不依赖 Pi 核心线程切换，因此 UI 行为不完全等同 Codex 原生实现，但关闭 overlay 即关闭 side 会话。
 
 Subagent 的 `fork_context: true` 已支持基于 Pi session clone 的显式上下文 fork。agent 角色/配置文件，以及跨会话 subagent 恢复仍暂缓实现。

@@ -107,6 +107,8 @@ export interface SpawnSubagentInput {
   message: string;
   cwd: string;
   model?: string;
+  provider?: string;
+  apiKey?: string;
   sessionPath?: string;
   forked?: boolean;
 }
