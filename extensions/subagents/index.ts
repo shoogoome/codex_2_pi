@@ -23,7 +23,7 @@ export default function subagentsExtension(pi: ExtensionAPI, deps: SubagentsExte
     spawn(input) {
       const entry = registry.resolve(input.taskName);
       if (!entry) throw new Error(`subagent not found after create: ${input.taskName}`);
-      const proc = spawnRpcProcess(input.cwd, input.model);
+      const proc = spawnRpcProcess(input.cwd, input.model, input.sessionPath);
       return createRpcClientFromProcess(entry.id, input.taskName, proc, registry);
     },
   };

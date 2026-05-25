@@ -115,6 +115,14 @@ export interface SubagentRpcFactory {
   spawn(input: SpawnSubagentInput): RpcClient;
 }
 
+export interface SubagentSessionForkInput {
+  sessionFile: string;
+  sessionDir: string;
+  leafId: string;
+}
+
+export type SubagentSessionForker = (input: SubagentSessionForkInput) => string | undefined;
+
 export interface CreateEntryInput {
   taskName: string;
   cwd: string;

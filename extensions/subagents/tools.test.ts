@@ -2,10 +2,22 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { SubagentRegistry } from "./registry.js";
 import { createSubagentTools } from "./tools.js";
-import type { RpcClient, RpcResponse, SubagentRpcFactory } from "./types.js";
+import type { RpcClient, RpcResponse, SubagentRpcFactory, SubagentSessionForker } from "./types.js";
 
 function makeCtx(cwd = "/repo") {
   return { cwd, hasUI: false, ui: { notify: vi.fn() } } as any;
+}
+
+function makeForkableCtx(overrides: Record<string, unknown> = {}) {
+  return {
+    ...makeCtx(),
+    sessionManager: {
+      getSessionFile: vi.fn(() => "/parent/session.jsonl"),
+      getSessionDir: vi.fn(() => "/parent"),
+      getLeafId: vi.fn(() => "leaf_1"),
+    },
+    ...overrides,
+  } as any;
 }
 
 function makeRpcClient(id: string, taskName: string): RpcClient {
@@ -33,7 +45,75 @@ describe("subagent tools", () => {
     expect(result.content[0]?.type).toBe("text");
     expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("Spawned worker_1");
     expect(registry.resolve("worker_1")?.status).toBe("running");
+    expect((factory.spawn as any).mock.calls[0][0]).toMatchObject({ sessionPath: undefined, forked: false });
     expect(spawned[0].send).toHaveBeenCalledWith({ type: "prompt", message: "Inspect tests" });
+  });
+
+  it("spawn_agent forks parent session only when fork_context is true", async () => {
+    const registry = new SubagentRegistry({ ...options });
+    const forkSession: SubagentSessionForker = vi.fn(() => "/parent/forked-subagent.jsonl");
+    const spawned: any[] = [];
+    const factory: SubagentRpcFactory = {
+      spawn: vi.fn((input) => {
+        spawned.push(input);
+        return makeRpcClient("agent_1", input.taskName);
+      }),
+    };
+    const tools = createSubagentTools(registry, factory, { forkSession });
+    const spawnTool = tools.find((tool) => tool.name === "spawn_agent")!;
+
+    const result = await spawnTool.execute(
+      "call_1",
+      { task_name: "worker", message: "Use current context", fork_context: true },
+      undefined,
+      undefined,
+      makeForkableCtx(),
+    );
+
+    expect(forkSession).toHaveBeenCalledWith({
+      sessionFile: "/parent/session.jsonl",
+      sessionDir: "/parent",
+      leafId: "leaf_1",
+    });
+    expect(spawned[0]).toMatchObject({ sessionPath: "/parent/forked-subagent.jsonl", forked: true });
+    expect(registry.resolve("worker")).toMatchObject({ sessionPath: "/parent/forked-subagent.jsonl", forked: true });
+    expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("forked session");
+  });
+
+  it("spawn_agent returns an error when fork_context has no parent session file", async () => {
+    const registry = new SubagentRegistry({ ...options });
+    const factory: SubagentRpcFactory = { spawn: vi.fn((input) => makeRpcClient("agent_1", input.taskName)) };
+    const tools = createSubagentTools(registry, factory, { forkSession: vi.fn() });
+    const spawnTool = tools.find((tool) => tool.name === "spawn_agent")!;
+
+    const result = await spawnTool.execute(
+      "call_1",
+      { task_name: "worker", message: "Use current context", fork_context: true },
+      undefined,
+      undefined,
+      makeForkableCtx({ sessionManager: { getSessionFile: () => undefined, getSessionDir: () => "/parent", getLeafId: () => "leaf_1" } }),
+    );
+
+    expect(factory.spawn).not.toHaveBeenCalled();
+    expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("requires a persisted parent session");
+  });
+
+  it("spawn_agent returns an error when fork_context has no leaf entry", async () => {
+    const registry = new SubagentRegistry({ ...options });
+    const factory: SubagentRpcFactory = { spawn: vi.fn((input) => makeRpcClient("agent_1", input.taskName)) };
+    const tools = createSubagentTools(registry, factory, { forkSession: vi.fn() });
+    const spawnTool = tools.find((tool) => tool.name === "spawn_agent")!;
+
+    const result = await spawnTool.execute(
+      "call_1",
+      { task_name: "worker", message: "Use current context", fork_context: true },
+      undefined,
+      undefined,
+      makeForkableCtx({ sessionManager: { getSessionFile: () => "/parent/session.jsonl", getSessionDir: () => "/parent", getLeafId: () => null } }),
+    );
+
+    expect(factory.spawn).not.toHaveBeenCalled();
+    expect(result.content[0]?.type === "text" ? result.content[0].text : "").toContain("requires a current parent session entry");
   });
 
   it("send_message steers running agents", async () => {

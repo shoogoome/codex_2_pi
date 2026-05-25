@@ -1,7 +1,8 @@
-import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { SubagentRegistry } from "./registry.js";
-import type { RpcClient, SubagentRpcFactory, SubagentSummary, SubagentToolDetails } from "./types.js";
+import type { RpcClient, SubagentRpcFactory, SubagentSessionForker, SubagentSummary, SubagentToolDetails } from "./types.js";
 import { DEFAULT_SUBAGENT_OPTIONS } from "./types.js";
 import { normalizeTaskName, previewText } from "./text.js";
 import { renderSubagentCall, renderSubagentResult } from "./render.js";
@@ -11,6 +12,9 @@ const SpawnAgentParams = Type.Object({
   message: Type.String({ description: "Initial message to send to the new subagent." }),
   model: Type.Optional(Type.String({ description: "Optional model override for the new agent." })),
   cwd: Type.Optional(Type.String({ description: "Optional working directory for the subagent process." })),
+  fork_context: Type.Optional(Type.Boolean({
+    description: "When true, clone the current parent session and start the subagent from that cloned context. Only set this when the user explicitly asks for a forked/cloned/current-context subagent. Omit or set false for normal independent subagents.",
+  })),
 });
 
 const TargetMessageParams = Type.Object({
@@ -33,13 +37,31 @@ const CloseAgentParams = Type.Object({
 
 const clients = new Map<string, RpcClient>();
 
-export function createSubagentTools(registry: SubagentRegistry, rpcFactory: SubagentRpcFactory): ToolDefinition<any, SubagentToolDetails>[] {
+export interface CreateSubagentToolsOptions {
+  forkSession?: SubagentSessionForker;
+}
+
+const FORK_CONTEXT_GUIDELINE =
+  "Only set spawn_agent.fork_context to true when the user explicitly asks for a forked/cloned/current-context subagent. Omit it for normal independent subagents.";
+
+export const defaultForkSession: SubagentSessionForker = ({ sessionFile, sessionDir, leafId }) => {
+  const sourceManager = SessionManager.open(sessionFile, sessionDir);
+  return sourceManager.createBranchedSession(leafId);
+};
+
+export function createSubagentTools(
+  registry: SubagentRegistry,
+  rpcFactory: SubagentRpcFactory,
+  options: CreateSubagentToolsOptions = {},
+): ToolDefinition<any, SubagentToolDetails>[] {
+  const forkSession = options.forkSession ?? defaultForkSession;
   return [
     {
       name: "spawn_agent",
       label: "Spawn agent",
       description: "Spawn a background subagent in a separate Pi RPC process. Returns immediately with the task name and status.",
       promptSnippet: "Spawn background subagents for independent work; use wait_agent before relying on their results.",
+      promptGuidelines: [FORK_CONTEXT_GUIDELINE],
       parameters: SpawnAgentParams,
       executionMode: "parallel",
       renderCall(args, theme) {
@@ -49,13 +71,17 @@ export function createSubagentTools(registry: SubagentRegistry, rpcFactory: Suba
         return renderSubagentResult(result, expanded, theme);
       },
       async execute(_toolCallId, rawParams, _signal, _onUpdate, ctx) {
-        const params = rawParams as { task_name: string; message: string; model?: string; cwd?: string };
+        const params = rawParams as { task_name: string; message: string; model?: string; cwd?: string; fork_context?: boolean };
         const taskName = normalizeTaskName(params.task_name);
         const message = params.message.trim();
         if (!message) return errorResult("spawn", "message is required", []);
         const cwd = params.cwd?.trim() || ctx.cwd;
-        const entry = registry.createEntry({ taskName, cwd });
-        const client = rpcFactory.spawn({ taskName, message, cwd, model: params.model });
+        const forked = params.fork_context === true;
+        const forkResult = forked ? resolveForkedSession(ctx, forkSession) : {};
+        if (forkResult.error) return errorResult("spawn", forkResult.error, registry.list());
+        const sessionPath = forkResult.sessionPath;
+        const entry = registry.createEntry({ taskName, cwd, sessionPath, forked });
+        const client = rpcFactory.spawn({ taskName, message, cwd, model: params.model, sessionPath, forked });
         entry.process = client.process;
         clients.set(entry.id, client);
         registry.markRunning(entry.id);
@@ -64,7 +90,8 @@ export function createSubagentTools(registry: SubagentRegistry, rpcFactory: Suba
           registry.markFailed(entry.id, response.error ?? "prompt rejected");
           return errorResult("spawn", response.error ?? "prompt rejected", registry.list());
         }
-        return okResult("spawn", `Spawned ${taskName}: ${previewText(message, 160)}`, registry.list(), taskName);
+        const suffix = sessionPath ? ` (forked session: ${sessionPath})` : "";
+        return okResult("spawn", `Spawned ${taskName}${suffix}: ${previewText(message, 160)}`, registry.list(), taskName);
       },
     },
     {
@@ -164,6 +191,23 @@ export function createSubagentTools(registry: SubagentRegistry, rpcFactory: Suba
       },
     },
   ];
+}
+
+function resolveForkedSession(ctx: ExtensionContext, forkSession: SubagentSessionForker): { sessionPath?: string; error?: string } {
+  const sessionFile = ctx.sessionManager.getSessionFile();
+  if (!sessionFile) {
+    return { error: "spawn_agent fork_context requires a persisted parent session; omit fork_context for a normal subagent." };
+  }
+  const leafId = ctx.sessionManager.getLeafId();
+  if (!leafId) {
+    return { error: "spawn_agent fork_context requires a current parent session entry; omit fork_context for a normal subagent." };
+  }
+  const sessionDir = ctx.sessionManager.getSessionDir();
+  const sessionPath = forkSession({ sessionFile, sessionDir, leafId });
+  if (!sessionPath) {
+    return { error: "failed to create forked subagent session." };
+  }
+  return { sessionPath };
 }
 
 async function sendToTarget(
