@@ -41,12 +41,14 @@
 
 此包注册了 Codex 风格的多 agent 工具：
 
-- `spawn_agent` 启动一个后台 `pi --mode rpc --no-session` 子 agent，并立即返回任务名和状态。
+- `spawn_agent` 启动一个后台 `pi --mode rpc --no-session` 子 agent，并立即返回任务名和状态。默认不继承主 agent 会话上下文。只有当工具调用显式传入 `fork_context: true` 时，扩展会 clone 当前 Pi session 的 active branch，并用 `pi --mode rpc --session <forked-session>` 启动子 agent。
 - `wait_agent` 等待某个 subagent 的邮箱更新或超时。
 - `send_message` 向运行中的 subagent 发送引导消息；如果该 subagent 空闲，则启动新的提示轮次。
 - `followup_task` 向运行中的 subagent 排队后续任务；如果该 subagent 空闲，则启动新的提示轮次。
 - `list_agents` 列出当前 Pi 会话中的 subagents。
 - `close_agent` 中止并关闭 subagent 进程。
+
+`fork_context` 是显式 opt-in。模型不应因为任务复杂或需要并行分析就自动启用它；只有当用户明确要求 fork、clone、继承当前完整上下文，或让 subagent 使用当前会话上下文时才应设置为 `true`。如果当前主会话没有持久化 session 文件，fork 模式会报错；普通模式仍可使用。
 
 折叠后的 TUI 行使用 Codex 风格摘要：已启动 agent、已发送输入、等待中、等待结束、已关闭 agent。展开后的行显示 Pi 特定的调试信息，例如最近的子进程工具调用、stderr 预览和用量计数。这些信息只用于 UI 可观测性，不会作为完整日志返回给父模型。
 
@@ -163,4 +165,4 @@ npm run typecheck
 
 `/side` 有意未包含。Codex 的 `/side` 依赖临时线程状态和 Ctrl+C 返回行为，如果没有 Pi 核心支持，无法通过 Pi 扩展完整复现。
 
-Subagent fork-history、agent 角色/配置文件，以及跨会话 subagent 恢复也暂缓实现。首个 subagent 版本专注于由 Pi RPC 子进程驱动的 Codex 风格异步协作工具。
+Subagent 的 `fork_context: true` 已支持基于 Pi session clone 的显式上下文 fork。agent 角色/配置文件，以及跨会话 subagent 恢复仍暂缓实现。

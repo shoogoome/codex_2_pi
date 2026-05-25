@@ -4,8 +4,7 @@ import { formatAgentSummary, formatEventSummary, formatToolCallTitle, renderSuba
 import type { SubagentSummary } from "./types.js";
 
 function textFromComponent(component: Text | Box): string {
-  if (component instanceof Text) return component.text;
-  return component.children.map((child) => textFromComponent(child as Text | Box)).join("\n");
+  return component.render(500).join("\n");
 }
 
 const theme = {
