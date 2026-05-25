@@ -10,12 +10,12 @@ interface PendingRequest {
 
 let nextRequestId = 1;
 
-export function spawnRpcProcess(cwd: string, model: string | undefined): ChildProcessWithoutNullStreams {
-  return spawn(resolvePiCommand(), buildRpcProcessArgs(model), { cwd, stdio: "pipe", shell: false });
+export function spawnRpcProcess(cwd: string, model: string | undefined, sessionPath?: string): ChildProcessWithoutNullStreams {
+  return spawn(resolvePiCommand(), buildRpcProcessArgs(model, sessionPath), { cwd, stdio: "pipe", shell: false });
 }
 
-export function buildRpcProcessArgs(model: string | undefined): string[] {
-  const args = ["--mode", "rpc", "--no-session"];
+export function buildRpcProcessArgs(model: string | undefined, sessionPath?: string): string[] {
+  const args = sessionPath ? ["--mode", "rpc", "--session", sessionPath] : ["--mode", "rpc", "--no-session"];
   if (model) args.push("--model", model);
   return args;
 }

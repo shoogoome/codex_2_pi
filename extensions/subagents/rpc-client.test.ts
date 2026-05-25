@@ -113,7 +113,22 @@ describe("resolvePiCommand", () => {
 
 
 describe("buildRpcProcessArgs", () => {
-  it("starts codex-style rpc process with no session", () => {
+  it("starts codex-style rpc process with no session by default", () => {
     expect(buildRpcProcessArgs("test-model")).toEqual(["--mode", "rpc", "--no-session", "--model", "test-model"]);
+  });
+
+  it("starts rpc process with a session when sessionPath is provided", () => {
+    expect(buildRpcProcessArgs(undefined, "/tmp/subagent.jsonl")).toEqual(["--mode", "rpc", "--session", "/tmp/subagent.jsonl"]);
+  });
+
+  it("keeps model override with sessionPath", () => {
+    expect(buildRpcProcessArgs("test-model", "/tmp/subagent.jsonl")).toEqual([
+      "--mode",
+      "rpc",
+      "--session",
+      "/tmp/subagent.jsonl",
+      "--model",
+      "test-model",
+    ]);
   });
 });

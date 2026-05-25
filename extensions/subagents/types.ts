@@ -33,6 +33,8 @@ export interface SubagentEntry {
   id: string;
   taskName: string;
   cwd: string;
+  sessionPath?: string;
+  forked?: boolean;
   status: SubagentLifecycleStatus;
   lastTurnStatus: SubagentTurnStatus;
   startedAt: number;
@@ -52,6 +54,8 @@ export interface SubagentSummary {
   id: string;
   taskName: string;
   cwd: string;
+  sessionPath?: string;
+  forked?: boolean;
   status: SubagentLifecycleStatus;
   lastTurnStatus: SubagentTurnStatus;
   startedAt: number;
@@ -103,6 +107,8 @@ export interface SpawnSubagentInput {
   message: string;
   cwd: string;
   model?: string;
+  sessionPath?: string;
+  forked?: boolean;
 }
 
 export interface SubagentRpcFactory {
@@ -112,6 +118,8 @@ export interface SubagentRpcFactory {
 export interface CreateEntryInput {
   taskName: string;
   cwd: string;
+  sessionPath?: string;
+  forked?: boolean;
 }
 
 export interface WaitResult {
