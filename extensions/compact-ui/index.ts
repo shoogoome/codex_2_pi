@@ -32,25 +32,27 @@ function registerCompactTool(
   nativeTool: ToolDefinition<any, any>,
   resultMode: CompactResultMode,
   renderCallSummary: (args: unknown) => string,
+  getRuntimeTool: (cwd: string) => ToolDefinition<any, any>,
 ): void {
   pi.registerTool(createCompactToolDefinition(nativeTool, {
     resultMode,
     maxCollapsedLines: nativeTool.name === "bash" ? 10 : 8,
     renderCallSummary,
+    getRuntimeTool,
   }));
 }
 
 function registerCompactTools(pi: ExtensionAPI, cwd: string): void {
-  registerCompactTool(pi, createReadTool(cwd), "hidden", pathArg);
-  registerCompactTool(pi, createGrepTool(cwd), "summary", (args) => `/${patternArg(args)}/ in ${pathArg(args)}`);
-  registerCompactTool(pi, createFindTool(cwd), "summary", (args) => `${patternArg(args)} in ${pathArg(args)}`);
-  registerCompactTool(pi, createLsTool(cwd), "summary", pathArg);
+  registerCompactTool(pi, createReadTool(cwd), "hidden", pathArg, createReadTool);
+  registerCompactTool(pi, createGrepTool(cwd), "summary", (args) => `/${patternArg(args)}/ in ${pathArg(args)}`, createGrepTool);
+  registerCompactTool(pi, createFindTool(cwd), "summary", (args) => `${patternArg(args)} in ${pathArg(args)}`, createFindTool);
+  registerCompactTool(pi, createLsTool(cwd), "summary", pathArg, createLsTool);
   registerCompactTool(pi, createBashTool(cwd), "preview", (args) => {
     const record = args && typeof args === "object" ? args as Record<string, unknown> : {};
     return typeof record.command === "string" ? record.command : "...";
-  });
-  registerCompactTool(pi, createEditTool(cwd), "summary", pathArg);
-  registerCompactTool(pi, createWriteTool(cwd), "summary", pathArg);
+  }, createBashTool);
+  registerCompactTool(pi, createEditTool(cwd), "summary", pathArg, createEditTool);
+  registerCompactTool(pi, createWriteTool(cwd), "summary", pathArg, createWriteTool);
 }
 
 export default function compactUiExtension(pi: ExtensionAPI) {

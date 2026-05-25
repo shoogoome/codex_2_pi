@@ -12,16 +12,17 @@ class CompactText implements Component {
   constructor(private readonly text: string) {}
 
   render(_width: number): string[] {
-    return [this.text];
+    return this.text.split("\n");
   }
 
   invalidate(): void {}
 }
 
-export interface CompactToolOptions {
+export interface CompactToolOptions<TDetails = unknown> {
   renderCallSummary(args: unknown): string;
   resultMode: CompactResultMode;
   maxCollapsedLines?: number;
+  getRuntimeTool?: (cwd: string) => ToolDefinition<any, TDetails>;
 }
 
 export function compactLines(lines: string[]): string[] {
@@ -81,10 +82,14 @@ function renderSummaryResult(result: AgentToolResult<unknown>, theme: RenderThem
 
 export function createCompactToolDefinition<TDetails>(
   nativeTool: ToolDefinition<any, TDetails>,
-  options: CompactToolOptions,
+  options: CompactToolOptions<TDetails>,
 ): ToolDefinition<any, TDetails> {
   return {
     ...nativeTool,
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const runtimeTool = options.getRuntimeTool ? options.getRuntimeTool(ctx.cwd) : nativeTool;
+      return runtimeTool.execute(toolCallId, params, signal, onUpdate, ctx);
+    },
     renderCall(args, theme) {
       const summary = options.renderCallSummary(args);
       return renderCompactCallLine(nativeTool.name, summary, theme as unknown as RenderThemeLike);

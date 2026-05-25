@@ -32,7 +32,7 @@ describe("renderCompactTextResult", () => {
   });
 
   it("limits collapsed output and shows a remaining hint", () => {
-    expect(render(renderCompactTextResult("1\n2\n3", { expanded: false, maxLines: 2 }, theme))).toEqual(["1\n2\n... (1 more line)"]);
+    expect(render(renderCompactTextResult("1\n2\n3", { expanded: false, maxLines: 2 }, theme))).toEqual(["1", "2", "... (1 more line)"]);
   });
 });
 
@@ -56,6 +56,44 @@ describe("createCompactToolDefinition", () => {
     await expect(wrapped.execute("tool-1", { value: "ok" } as never, undefined, undefined, { cwd: process.cwd() } as never)).resolves.toEqual({
       content: [{ type: "text", text: "ok" }],
       details: { ok: true },
+    });
+  });
+});
+
+describe("CompactText rendering", () => {
+  it("renders multiline compact results as separate TUI lines", () => {
+    expect(render(renderCompactTextResult("1\n2\n3", { expanded: false, maxLines: 2 }, theme))).toEqual(["1", "2", "... (1 more line)"]);
+  });
+});
+
+describe("createCompactToolDefinition runtime tool lookup", () => {
+  it("uses the runtime cwd tool when provided", async () => {
+    const native = {
+      name: "read",
+      label: "Read",
+      description: "Read a file",
+      parameters: {},
+      async execute() {
+        return { content: [{ type: "text" as const, text: "bootstrap" }], details: { cwd: "bootstrap" } };
+      },
+    };
+
+    const wrapped = createCompactToolDefinition(native, {
+      renderCallSummary: () => "read file.txt",
+      resultMode: "preview",
+      getRuntimeTool(cwd) {
+        return {
+          ...native,
+          async execute() {
+            return { content: [{ type: "text" as const, text: cwd }], details: { cwd } };
+          },
+        };
+      },
+    });
+
+    await expect(wrapped.execute("tool-1", {} as never, undefined, undefined, { cwd: "/tmp/project" } as never)).resolves.toEqual({
+      content: [{ type: "text", text: "/tmp/project" }],
+      details: { cwd: "/tmp/project" },
     });
   });
 });
