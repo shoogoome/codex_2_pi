@@ -37,9 +37,38 @@ describe("plan overlay formatting", () => {
     ]);
   });
 
-  it("truncates long lists and adds an overflow summary", () => {
+  it("truncates long lists by hiding completed prefix before current work", () => {
     const lines = formatPlanOverlayLines(snapshot(20), plainTheme, 80, { maxLines: 5 });
-    expect(lines).toEqual(["● Plan (1/20)", "├─ ✓ ~Step 1~", "├─ ◐ Step 2", "├─ ○ Step 3", "└─ +17 more"]);
+    expect(lines).toEqual(["● Plan (1/20)", "├─ +1 completed hidden", "├─ ◐ Step 2", "├─ ○ Step 3", "└─ +17 more"]);
+  });
+
+  it("keeps active and remaining tasks visible when many completed tasks lead the plan", () => {
+    const plan: PlanSnapshot = {
+      plan: [
+        ...Array.from({ length: 15 }, (_, index) => ({ step: `Task ${index}`, status: "completed" as const })),
+        { step: "Task 15", status: "in_progress" },
+        { step: "Task 16", status: "pending" },
+        { step: "Task 17", status: "pending" },
+        { step: "Task 18", status: "pending" },
+        { step: "Task 19", status: "pending" },
+      ],
+      updatedAt: 1,
+    };
+
+    expect(formatPlanOverlayLines(plan, plainTheme, 120, { maxLines: 12 })).toEqual([
+      "● Plan (15/20)",
+      "├─ +10 completed hidden",
+      "├─ ✓ ~Task 10~",
+      "├─ ✓ ~Task 11~",
+      "├─ ✓ ~Task 12~",
+      "├─ ✓ ~Task 13~",
+      "├─ ✓ ~Task 14~",
+      "├─ ◐ Task 15",
+      "├─ ○ Task 16",
+      "├─ ○ Task 17",
+      "├─ ○ Task 18",
+      "└─ ○ Task 19",
+    ]);
   });
 });
 

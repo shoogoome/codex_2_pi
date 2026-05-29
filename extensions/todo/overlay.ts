@@ -31,21 +31,58 @@ export function formatPlanOverlayLines(
 
   if (maxLines === 1) return lines;
 
-  const overflow = snapshot.plan.length > maxLines - 1;
-  const maxItems = Math.max(0, maxLines - (overflow ? 2 : 1));
-  const visibleItems = snapshot.plan.slice(0, maxItems);
-  const hidden = snapshot.plan.length - visibleItems.length;
-
-  visibleItems.forEach((item, index) => {
-    const isLast = hidden === 0 && index === visibleItems.length - 1;
-    lines.push(truncate(`${theme.fg("dim", isLast ? "└─" : "├─")} ${formatOverlayItem(item, theme)}`));
+  const rows = selectOverlayRows(snapshot.plan, maxLines - 1);
+  rows.forEach((row, index) => {
+    const connector = index === rows.length - 1 ? "└─" : "├─";
+    const content = row.type === "item" ? formatOverlayItem(row.item, theme) : theme.fg("dim", row.text);
+    lines.push(truncate(`${theme.fg("dim", connector)} ${content}`));
   });
 
-  if (hidden > 0) {
-    lines.push(truncate(`${theme.fg("dim", "└─")} ${theme.fg("dim", `+${hidden} more`)}`));
+  return lines;
+}
+
+type OverlayRow = { type: "item"; item: PlanItem } | { type: "summary"; text: string };
+
+function selectOverlayRows(plan: PlanItem[], slots: number): OverlayRow[] {
+  if (slots <= 0) return [];
+  if (plan.length <= slots) return plan.map((item) => ({ type: "item", item }));
+
+  const firstInProgress = plan.findIndex((item) => item.status === "in_progress");
+  const firstUnfinished = plan.findIndex((item) => item.status === "pending" || item.status === "in_progress");
+  const focusIndex = firstInProgress >= 0 ? firstInProgress : firstUnfinished;
+  if (focusIndex < 0) return selectPrefixRows(plan, slots);
+
+  const tailCount = plan.length - focusIndex;
+  const hasCompletedPrefix = focusIndex > 0;
+  if (tailCount + (hasCompletedPrefix ? 1 : 0) <= slots) {
+    const completedSlots = slots - tailCount - (hasCompletedPrefix ? 1 : 0);
+    const visibleStart = Math.max(0, focusIndex - completedSlots);
+    return rowsForWindow(plan, visibleStart, plan.length);
   }
 
-  return lines;
+  const prefixSummarySlots = hasCompletedPrefix && slots >= 3 ? 1 : 0;
+  const suffixSummarySlots = slots - prefixSummarySlots >= 2 ? 1 : 0;
+  const itemSlots = Math.max(1, slots - prefixSummarySlots - suffixSummarySlots);
+  const visibleEnd = Math.min(plan.length, focusIndex + itemSlots);
+  return rowsForWindow(plan, focusIndex, visibleEnd);
+}
+
+function selectPrefixRows(plan: PlanItem[], slots: number): OverlayRow[] {
+  const overflow = plan.length > slots;
+  const itemSlots = Math.max(0, slots - (overflow ? 1 : 0));
+  const rows: OverlayRow[] = plan.slice(0, itemSlots).map((item) => ({ type: "item", item }));
+  const hidden = plan.length - itemSlots;
+  if (hidden > 0) rows.push({ type: "summary", text: `+${hidden} more` });
+  return rows;
+}
+
+function rowsForWindow(plan: PlanItem[], visibleStart: number, visibleEnd: number): OverlayRow[] {
+  const rows: OverlayRow[] = [];
+  if (visibleStart > 0) rows.push({ type: "summary", text: `+${visibleStart} completed hidden` });
+  rows.push(...plan.slice(visibleStart, visibleEnd).map((item) => ({ type: "item" as const, item })));
+  const hiddenAfter = plan.length - visibleEnd;
+  if (hiddenAfter > 0) rows.push({ type: "summary", text: `+${hiddenAfter} more` });
+  return rows;
 }
 
 function formatOverlayItem(item: PlanItem, theme: Pick<Theme, "fg" | "strikethrough">): string {
