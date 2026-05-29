@@ -124,7 +124,7 @@ test and every implementation is shown verbatim.
 **Files:**
 - Modify: `package.json` (root)
 
-- [ ] **Step 1: Install `jimp` as a runtime dependency**
+- [x] **Step 1: Install `jimp` as a runtime dependency**
 
 Run:
 
@@ -137,7 +137,7 @@ Expected: `package.json` now contains `"jimp": "^1.6.1"` under
 in this plan; older 0.x has a different default-export API), and
 `package-lock.json` is updated.
 
-- [ ] **Step 2: Verify the install did not break anything**
+- [x] **Step 2: Verify the install did not break anything**
 
 Run:
 
@@ -148,7 +148,7 @@ npm run typecheck
 
 Expected: both commands exit 0 with the current test suite still passing.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add package.json package-lock.json
@@ -164,7 +164,7 @@ git commit -m "chore: add jimp dependency for pets extension"
 - Create: `extensions/pets/index.ts`
 - Create: `extensions/pets/index.test.ts`
 
-- [ ] **Step 1: Write the failing entry-point test**
+- [x] **Step 1: Write the failing entry-point test**
 
 Create `extensions/pets/index.test.ts`:
 
@@ -196,7 +196,7 @@ describe("pets extension entry point", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run:
 
@@ -206,7 +206,7 @@ npx vitest run extensions/pets/index.test.ts
 
 Expected: FAIL. The file `extensions/pets/index.ts` does not exist yet.
 
-- [ ] **Step 3: Create the package manifest**
+- [x] **Step 3: Create the package manifest**
 
 Create `extensions/pets/package.json`:
 
@@ -227,7 +227,7 @@ Create `extensions/pets/package.json`:
 }
 ```
 
-- [ ] **Step 4: Create the minimal entry point**
+- [x] **Step 4: Create the minimal entry point**
 
 Create `extensions/pets/index.ts`:
 
@@ -252,7 +252,7 @@ export default async function petsExtension(pi: ExtensionAPI): Promise<void> {
 }
 ```
 
-- [ ] **Step 5: Run the test to confirm it passes**
+- [x] **Step 5: Run the test to confirm it passes**
 
 Run:
 
@@ -263,7 +263,7 @@ npm run typecheck
 
 Expected: PASS, and `tsc --noEmit` reports no errors.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add extensions/pets/package.json extensions/pets/index.ts extensions/pets/index.test.ts
@@ -278,7 +278,7 @@ git commit -m "feat(pets): scaffold pets extension entry point"
 - Create: `extensions/pets/loader/pet-manifest.ts`
 - Create: `extensions/pets/loader/pet-manifest.test.ts`
 
-- [ ] **Step 1: Write the failing manifest parser tests**
+- [x] **Step 1: Write the failing manifest parser tests**
 
 Create `extensions/pets/loader/pet-manifest.test.ts`:
 
@@ -349,7 +349,7 @@ describe("parsePetManifest", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run:
 
@@ -359,7 +359,7 @@ npx vitest run extensions/pets/loader/pet-manifest.test.ts
 
 Expected: FAIL — `pet-manifest.ts` does not exist.
 
-- [ ] **Step 3: Implement the parser**
+- [x] **Step 3: Implement the parser**
 
 Create `extensions/pets/loader/pet-manifest.ts`:
 
@@ -518,7 +518,7 @@ function parseBlockArt(
 }
 ```
 
-- [ ] **Step 4: Run the test to confirm it passes**
+- [x] **Step 4: Run the test to confirm it passes**
 
 Run:
 
@@ -529,7 +529,7 @@ npm run typecheck
 
 Expected: PASS, no type errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add extensions/pets/loader/pet-manifest.ts extensions/pets/loader/pet-manifest.test.ts
@@ -549,7 +549,7 @@ git commit -m "feat(pets): parse pet manifest with state-keyed animations"
   generated programmatically — see step 4 below)
 - Create: `extensions/pets/catalog/default/fallback.ts`
 
-- [ ] **Step 1: Write the failing catalog test**
+- [x] **Step 1: Write the failing catalog test**
 
 Create `extensions/pets/catalog/catalog.test.ts`:
 
@@ -572,7 +572,7 @@ describe("pets catalog", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run:
 
@@ -582,7 +582,7 @@ npx vitest run extensions/pets/catalog/catalog.test.ts
 
 Expected: FAIL — `catalog.ts` not found.
 
-- [ ] **Step 3: Implement the catalog**
+- [x] **Step 3: Implement the catalog**
 
 Create `extensions/pets/catalog/catalog.ts`:
 
@@ -615,7 +615,7 @@ export function builtinPets(): readonly BuiltinPetEntry[] {
 }
 ```
 
-- [ ] **Step 4: Create the bundled pet manifest, license, and placeholder
+- [x] **Step 4: Create the bundled pet manifest, license, and placeholder
   spritesheet**
 
 Create `extensions/pets/catalog/default/pet.json`:
@@ -709,7 +709,7 @@ export const FALLBACK_ASCII: Record<PetStateName, string[]> = {
 };
 ```
 
-- [ ] **Step 5: Run the test to confirm it passes**
+- [x] **Step 5: Run the test to confirm it passes**
 
 Run:
 
@@ -720,7 +720,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add extensions/pets/catalog
@@ -735,7 +735,7 @@ git commit -m "feat(pets): bundle a CC0 default pet with placeholder spritesheet
 - Create: `extensions/pets/loader/pet-loader.ts`
 - Create: `extensions/pets/loader/pet-loader.test.ts`
 
-- [ ] **Step 1: Write the failing loader test**
+- [x] **Step 1: Write the failing loader test**
 
 Create `extensions/pets/loader/pet-loader.test.ts`:
 
@@ -803,7 +803,7 @@ describe("loadPet", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run:
 
@@ -813,7 +813,7 @@ npx vitest run extensions/pets/loader/pet-loader.test.ts
 
 Expected: FAIL — `pet-loader.ts` does not exist.
 
-- [ ] **Step 3: Implement the loader**
+- [x] **Step 3: Implement the loader**
 
 Create `extensions/pets/loader/pet-loader.ts`:
 
@@ -884,7 +884,7 @@ function parseAndAttach(manifestPath: string): LoadedPet {
 }
 ```
 
-- [ ] **Step 4: Run the test to confirm it passes**
+- [x] **Step 4: Run the test to confirm it passes**
 
 Run:
 
@@ -895,7 +895,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add extensions/pets/loader/pet-loader.ts extensions/pets/loader/pet-loader.test.ts
@@ -910,7 +910,7 @@ git commit -m "feat(pets): resolve pet id to manifest + spritesheet"
 - Create: `extensions/pets/loader/frames.ts`
 - Create: `extensions/pets/loader/frames.test.ts`
 
-- [ ] **Step 1: Write the failing frame-extraction test**
+- [x] **Step 1: Write the failing frame-extraction test**
 
 Create `extensions/pets/loader/frames.test.ts`:
 
@@ -967,7 +967,7 @@ describe("extractFrames", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run:
 
@@ -977,7 +977,7 @@ npx vitest run extensions/pets/loader/frames.test.ts
 
 Expected: FAIL — `frames.ts` does not exist.
 
-- [ ] **Step 3: Implement frame extraction**
+- [x] **Step 3: Implement frame extraction**
 
 Create `extensions/pets/loader/frames.ts`:
 
@@ -1021,7 +1021,7 @@ export async function extractFrames(pet: LoadedPet): Promise<RgbaFrame[]> {
 }
 ```
 
-- [ ] **Step 4: Run the test to confirm it passes**
+- [x] **Step 4: Run the test to confirm it passes**
 
 Run:
 
@@ -1032,7 +1032,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add extensions/pets/loader/frames.ts extensions/pets/loader/frames.test.ts
@@ -1047,7 +1047,7 @@ git commit -m "feat(pets): extract per-frame RGBA buffers from spritesheet"
 - Create: `extensions/pets/render/capability.ts`
 - Create: `extensions/pets/render/capability.test.ts`
 
-- [ ] **Step 1: Write the failing capability tests**
+- [x] **Step 1: Write the failing capability tests**
 
 Create `extensions/pets/render/capability.test.ts`:
 
@@ -1112,7 +1112,7 @@ describe("detectPetCapability", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run:
 
@@ -1122,7 +1122,7 @@ npx vitest run extensions/pets/render/capability.test.ts
 
 Expected: FAIL — `capability.ts` does not exist.
 
-- [ ] **Step 3: Implement capability detection**
+- [x] **Step 3: Implement capability detection**
 
 Create `extensions/pets/render/capability.ts`:
 
@@ -1190,7 +1190,7 @@ export async function detectPetCapability(options: DetectOptions): Promise<PetCa
 }
 ```
 
-- [ ] **Step 4: Run the test to confirm it passes**
+- [x] **Step 4: Run the test to confirm it passes**
 
 Run:
 
@@ -1201,7 +1201,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add extensions/pets/render/capability.ts extensions/pets/render/capability.test.ts
@@ -1216,7 +1216,7 @@ git commit -m "feat(pets): detect terminal + tmux capability for renderer pick"
 - Create: `extensions/pets/render/tmux-passthrough.ts`
 - Create: `extensions/pets/render/tmux-passthrough.test.ts`
 
-- [ ] **Step 1: Write the failing passthrough test**
+- [x] **Step 1: Write the failing passthrough test**
 
 Create `extensions/pets/render/tmux-passthrough.test.ts`:
 
@@ -1251,7 +1251,7 @@ describe("wrapKittyEscapesForTmux", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run:
 
@@ -1261,7 +1261,7 @@ npx vitest run extensions/pets/render/tmux-passthrough.test.ts
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement the wrapper**
+- [x] **Step 3: Implement the wrapper**
 
 Create `extensions/pets/render/tmux-passthrough.ts`:
 
@@ -1280,7 +1280,7 @@ export function wrapKittyEscapesInLines(lines: string[]): string[] {
 }
 ```
 
-- [ ] **Step 4: Run the test to confirm it passes**
+- [x] **Step 4: Run the test to confirm it passes**
 
 Run:
 
@@ -1291,7 +1291,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add extensions/pets/render/tmux-passthrough.ts extensions/pets/render/tmux-passthrough.test.ts
@@ -1306,7 +1306,7 @@ git commit -m "feat(pets): wrap Kitty graphics escapes in tmux DCS passthrough"
 - Create: `extensions/pets/render/block-art.ts`
 - Create: `extensions/pets/render/block-art.test.ts`
 
-- [ ] **Step 1: Write the failing block-art tests**
+- [x] **Step 1: Write the failing block-art tests**
 
 Create `extensions/pets/render/block-art.test.ts`:
 
@@ -1365,7 +1365,7 @@ describe("renderBlockArt", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run:
 
@@ -1375,7 +1375,7 @@ npx vitest run extensions/pets/render/block-art.test.ts
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement the block-art renderer**
+- [x] **Step 3: Implement the block-art renderer**
 
 Create `extensions/pets/render/block-art.ts`:
 
@@ -1461,7 +1461,7 @@ function nearest256(color: Rgba): number {
 }
 ```
 
-- [ ] **Step 4: Run the test to confirm it passes**
+- [x] **Step 4: Run the test to confirm it passes**
 
 Run:
 
@@ -1472,7 +1472,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add extensions/pets/render/block-art.ts extensions/pets/render/block-art.test.ts
@@ -1487,7 +1487,7 @@ git commit -m "feat(pets): half-block + truecolor block-art renderer"
 - Create: `extensions/pets/render/select-renderer.ts`
 - Create: `extensions/pets/render/select-renderer.test.ts`
 
-- [ ] **Step 1: Write the failing strategy test**
+- [x] **Step 1: Write the failing strategy test**
 
 Create `extensions/pets/render/select-renderer.test.ts`:
 
@@ -1568,7 +1568,7 @@ describe("selectRenderer", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run:
 
@@ -1578,7 +1578,7 @@ npx vitest run extensions/pets/render/select-renderer.test.ts
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement the strategy**
+- [x] **Step 3: Implement the strategy**
 
 Create `extensions/pets/render/select-renderer.ts`:
 
@@ -1623,7 +1623,7 @@ export function selectRenderer(input: {
 }
 ```
 
-- [ ] **Step 4: Run the test to confirm it passes**
+- [x] **Step 4: Run the test to confirm it passes**
 
 Run:
 
@@ -1634,7 +1634,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add extensions/pets/render/select-renderer.ts extensions/pets/render/select-renderer.test.ts
@@ -1649,7 +1649,7 @@ git commit -m "feat(pets): deterministic renderer-selection strategy"
 - Create: `extensions/pets/render/image-renderer.ts`
 - Create: `extensions/pets/render/image-renderer.test.ts`
 
-- [ ] **Step 1: Write the failing image-renderer tests**
+- [x] **Step 1: Write the failing image-renderer tests**
 
 Create `extensions/pets/render/image-renderer.test.ts`:
 
@@ -1707,7 +1707,7 @@ describe("createImageRenderer", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run:
 
@@ -1717,7 +1717,7 @@ npx vitest run extensions/pets/render/image-renderer.test.ts
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement the renderer**
+- [x] **Step 3: Implement the renderer**
 
 Create `extensions/pets/render/image-renderer.ts`:
 
@@ -1769,7 +1769,7 @@ export function createImageRenderer(options: ImageRendererOptions): ImageRendere
 }
 ```
 
-- [ ] **Step 4: Run the test to confirm it passes**
+- [x] **Step 4: Run the test to confirm it passes**
 
 Run:
 
@@ -1780,7 +1780,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add extensions/pets/render/image-renderer.ts extensions/pets/render/image-renderer.test.ts
@@ -1795,7 +1795,7 @@ git commit -m "feat(pets): pi-tui Image wrapper with frame cache + tmux wrap"
 - Create: `extensions/pets/state/pet-state.ts`
 - Create: `extensions/pets/state/pet-state.test.ts`
 
-- [ ] **Step 1: Write the failing state-machine tests**
+- [x] **Step 1: Write the failing state-machine tests**
 
 Create `extensions/pets/state/pet-state.test.ts`:
 
@@ -1909,7 +1909,7 @@ describe("PetState", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run:
 
@@ -1919,7 +1919,7 @@ npx vitest run extensions/pets/state/pet-state.test.ts
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement the state machine**
+- [x] **Step 3: Implement the state machine**
 
 Create `extensions/pets/state/pet-state.ts`:
 
@@ -2026,7 +2026,7 @@ export class PetState {
 }
 ```
 
-- [ ] **Step 4: Run the test to confirm it passes**
+- [x] **Step 4: Run the test to confirm it passes**
 
 Run:
 
@@ -2037,7 +2037,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add extensions/pets/state/pet-state.ts extensions/pets/state/pet-state.test.ts
@@ -2052,7 +2052,7 @@ git commit -m "feat(pets): event-driven pet state machine"
 - Create: `extensions/pets/config/settings.ts`
 - Create: `extensions/pets/config/settings.test.ts`
 
-- [ ] **Step 1: Write the failing settings test**
+- [x] **Step 1: Write the failing settings test**
 
 Create `extensions/pets/config/settings.test.ts`:
 
@@ -2093,7 +2093,7 @@ describe("pets settings", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run:
 
@@ -2103,7 +2103,7 @@ npx vitest run extensions/pets/config/settings.test.ts
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement settings**
+- [x] **Step 3: Implement settings**
 
 Create `extensions/pets/config/settings.ts`:
 
@@ -2162,7 +2162,7 @@ function normalize(raw: Record<string, unknown>): PetSettings {
 }
 ```
 
-- [ ] **Step 4: Run the test to confirm it passes**
+- [x] **Step 4: Run the test to confirm it passes**
 
 Run:
 
@@ -2173,7 +2173,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add extensions/pets/config/settings.ts extensions/pets/config/settings.test.ts
@@ -2188,7 +2188,7 @@ git commit -m "feat(pets): persist pet settings under getAgentDir/pets.json"
 - Create: `extensions/pets/widget/pet-component.ts`
 - Create: `extensions/pets/widget/pet-component.test.ts`
 
-- [ ] **Step 1: Write the failing component tests**
+- [x] **Step 1: Write the failing component tests**
 
 Create `extensions/pets/widget/pet-component.test.ts`:
 
@@ -2270,7 +2270,7 @@ describe("createPetComponent", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run:
 
@@ -2280,7 +2280,7 @@ npx vitest run extensions/pets/widget/pet-component.test.ts
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement the component**
+- [x] **Step 3: Implement the component**
 
 Create `extensions/pets/widget/pet-component.ts`:
 
@@ -2371,7 +2371,7 @@ export function createPetComponent(options: CreatePetComponentOptions): PetCompo
 }
 ```
 
-- [ ] **Step 4: Run the test to confirm it passes**
+- [x] **Step 4: Run the test to confirm it passes**
 
 Run:
 
@@ -2382,7 +2382,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add extensions/pets/widget/pet-component.ts extensions/pets/widget/pet-component.test.ts
@@ -2397,7 +2397,7 @@ git commit -m "feat(pets): component drives animation tick and frame cache"
 - Create: `extensions/pets/widget/pet-widget.ts`
 - Create: `extensions/pets/widget/pet-widget.test.ts`
 
-- [ ] **Step 1: Write the failing widget-glue test**
+- [x] **Step 1: Write the failing widget-glue test**
 
 Create `extensions/pets/widget/pet-widget.test.ts`:
 
@@ -2430,7 +2430,7 @@ describe("installPetWidget", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run:
 
@@ -2440,7 +2440,7 @@ npx vitest run extensions/pets/widget/pet-widget.test.ts
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement the widget glue**
+- [x] **Step 3: Implement the widget glue**
 
 Create `extensions/pets/widget/pet-widget.ts`:
 
@@ -2473,7 +2473,7 @@ export function installPetWidget(options: InstallPetWidgetOptions): InstalledWid
 }
 ```
 
-- [ ] **Step 4: Run the test to confirm it passes**
+- [x] **Step 4: Run the test to confirm it passes**
 
 Run:
 
@@ -2484,7 +2484,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add extensions/pets/widget/pet-widget.ts extensions/pets/widget/pet-widget.test.ts
@@ -2503,7 +2503,7 @@ This task wires up `/pets list`, `/pets set <id>`, `/pets on`, `/pets off`,
 `/pets diagnose`, `/pets tmux-passthrough on|off`. The interactive `SelectList`
 picker is added in Task 16 to keep this task focused.
 
-- [ ] **Step 1: Write the failing command tests**
+- [x] **Step 1: Write the failing command tests**
 
 Create `extensions/pets/commands/pets-command.test.ts`:
 
@@ -2592,7 +2592,7 @@ describe("handlePetsCommand", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run:
 
@@ -2602,7 +2602,7 @@ npx vitest run extensions/pets/commands/pets-command.test.ts
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement the commands**
+- [x] **Step 3: Implement the commands**
 
 Create `extensions/pets/commands/pets-command.ts`:
 
@@ -2750,7 +2750,7 @@ async function handleDiagnose(
 export const __test = { defaultSettings };
 ```
 
-- [ ] **Step 4: Run the test to confirm it passes**
+- [x] **Step 4: Run the test to confirm it passes**
 
 Run:
 
@@ -2761,7 +2761,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add extensions/pets/commands/pets-command.ts extensions/pets/commands/pets-command.test.ts
@@ -2776,7 +2776,7 @@ git commit -m "feat(pets): /pets subcommands for list/set/on/off/diagnose/tmux"
 - Modify: `extensions/pets/commands/pets-command.ts:1-end`
 - Modify: `extensions/pets/commands/pets-command.test.ts:1-end`
 
-- [ ] **Step 1: Add a failing test for the interactive picker**
+- [x] **Step 1: Add a failing test for the interactive picker**
 
 Append this test to `extensions/pets/commands/pets-command.test.ts`:
 
@@ -2820,7 +2820,7 @@ describe("handlePetsCommand interactive picker", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run:
 
@@ -2831,7 +2831,7 @@ npx vitest run extensions/pets/commands/pets-command.test.ts
 Expected: FAIL — the current router calls `handleList` for `""`, and never
 invokes `ctx.ui.custom`.
 
-- [ ] **Step 3: Modify the router to open the picker when `hasUI` is true**
+- [x] **Step 3: Modify the router to open the picker when `hasUI` is true**
 
 In `extensions/pets/commands/pets-command.ts`, replace the `case "":` /
 `case "list":` branch with:
@@ -2916,7 +2916,7 @@ async function handlePicker(
 }
 ```
 
-- [ ] **Step 4: Run all tests in the file**
+- [x] **Step 4: Run all tests in the file**
 
 Run:
 
@@ -2927,7 +2927,7 @@ npm run typecheck
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add extensions/pets/commands/pets-command.ts extensions/pets/commands/pets-command.test.ts
@@ -2942,7 +2942,7 @@ git commit -m "feat(pets): /pets interactive picker via SelectList"
 - Modify: `extensions/pets/index.ts:1-end`
 - Modify: `extensions/pets/index.test.ts:1-end`
 
-- [ ] **Step 1: Replace the entry test with an end-to-end install/uninstall test**
+- [x] **Step 1: Replace the entry test with an end-to-end install/uninstall test**
 
 Replace `extensions/pets/index.test.ts` entirely:
 
@@ -3036,7 +3036,7 @@ describe("pets extension lifecycle", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run:
 
@@ -3046,7 +3046,7 @@ npx vitest run extensions/pets/index.test.ts
 
 Expected: FAIL — current `index.ts` stub does nothing on `session_start`.
 
-- [ ] **Step 3: Implement the entry point**
+- [x] **Step 3: Implement the entry point**
 
 Replace `extensions/pets/index.ts` with:
 
@@ -3221,7 +3221,7 @@ async function installFromSettings(
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run:
 
@@ -3233,7 +3233,7 @@ npm run typecheck
 
 Expected: PASS on all tests; whole suite green.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add extensions/pets/index.ts extensions/pets/index.test.ts
@@ -3248,7 +3248,7 @@ git commit -m "feat(pets): wire state, renderer, widget, and lifecycle events"
 - Create: `extensions/pets/README.md`
 - Modify: `README.md` (root)
 
-- [ ] **Step 1: Create the extension README**
+- [x] **Step 1: Create the extension README**
 
 Create `extensions/pets/README.md`:
 
@@ -3332,7 +3332,7 @@ extension.
 (See spec `docs/superpowers/specs/2026-05-26-codex-pets-extension-design.md`.)
 ```
 
-- [ ] **Step 2: Update root README**
+- [x] **Step 2: Update root README**
 
 Append to `README.md` at root, under the section that lists extensions, a
 single bullet:
@@ -3342,7 +3342,7 @@ single bullet:
   block-art fallback; tmux opt-in via DCS passthrough).
 ```
 
-- [ ] **Step 3: Verify the suite still passes and types still check**
+- [x] **Step 3: Verify the suite still passes and types still check**
 
 Run:
 
@@ -3353,7 +3353,7 @@ npm run typecheck
 
 Expected: PASS, no errors.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add extensions/pets/README.md README.md
@@ -3369,7 +3369,7 @@ plan done.
 
 **Files:** none.
 
-- [ ] **Step 1: Run the full suite one more time**
+- [x] **Step 1: Run the full suite one more time**
 
 Run:
 
@@ -3380,7 +3380,7 @@ npm run typecheck
 
 Expected: all tests green, zero type errors.
 
-- [ ] **Step 2: Manually verify in at least one terminal**
+- [x] **Step 2: Manually verify in at least one terminal**
 
 In an interactive Pi session inside the current terminal:
 
@@ -3410,7 +3410,7 @@ If any step fails, file a follow-up issue and link it in the README's
 "Known issues" section. Do not patch over the issue in the same task — leave
 the failing observation in the issue tracker for the next plan to address.
 
-- [ ] **Step 3: Tag the work as ready for review**
+- [x] **Step 3: Tag the work as ready for review**
 
 Run:
 
@@ -3425,17 +3425,17 @@ This plan is done.
 
 ## Self-review checklist (run before declaring done)
 
-- [ ] All tasks have explicit file paths, full code, and exact commands.
-- [ ] No `TODO`, `TBD`, "similar to above", or "add appropriate error handling"
+- [x] All tasks have explicit file paths, full code, and exact commands.
+- [x] No `TODO`, `TBD`, "similar to above", or "add appropriate error handling"
   appears anywhere in the file (only the document's own intentional reference
   to `imagegen` future work in README, which is concrete).
-- [ ] Type names and method signatures used in later tasks (`PetState`,
+- [x] Type names and method signatures used in later tasks (`PetState`,
   `loadPet`, `extractFrames`, `selectRenderer`, `createPetComponent`,
   `installPetWidget`, `handlePetsCommand`, `loadSettings`/`saveSettings`)
   match their declarations in earlier tasks.
-- [ ] Spec coverage: `default` pet bundling, manifest format with `blockArt`,
+- [x] Spec coverage: `default` pet bundling, manifest format with `blockArt`,
   `getAgentDir()`-rooted settings, capability detection, renderer selection
   matrix, Kitty graphics via pi-tui `Image`, tmux DCS passthrough wrapper,
   block-art renderer, state machine with linger + failed-from-active
   transitions, `/pets` subcommands, README with manual matrix.
-- [ ] Each task ends with a green-suite check and a commit.
+- [x] Each task ends with a green-suite check and a commit.
