@@ -1,8 +1,15 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { ExtensionCommandRunner } from "../shared/git.js";
 import { computeGitDiff } from "./git-diff.js";
+import { renderDiffMessage } from "./render.js";
 
 export default function diffExtension(pi: ExtensionAPI) {
+  pi.registerMessageRenderer("codex-diff", (message, options, theme) => {
+    const content = typeof message.content === "string" ? message.content : "";
+    if (!content.trim()) return undefined;
+    return renderDiffMessage(content, options, theme);
+  });
+
   pi.registerCommand("diff", {
     description: "Show git diff, including untracked files",
     handler: async (_args, ctx) => {
