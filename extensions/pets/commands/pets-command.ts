@@ -2,6 +2,8 @@ import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder } from "@earendil-works/pi-coding-agent";
+import { Container, SelectList, Text } from "@earendil-works/pi-tui";
 import { builtinPet, builtinPets } from "../catalog/catalog.js";
 import { detectPetCapability, type ExecResult } from "../render/capability.js";
 import { selectRenderer } from "../render/select-renderer.js";
@@ -23,6 +25,12 @@ export async function handlePetsCommand(
 
   switch (subcommand) {
     case "":
+      if (typeof (ctx as any).ui?.custom === "function" && ctx.hasUI) {
+        await handlePicker(ctx, options);
+      } else {
+        await handleList(ctx, options);
+      }
+      return;
     case "list":
       await handleList(ctx, options);
       return;
@@ -147,3 +155,70 @@ async function handleDiagnose(
 }
 
 export const __test = { defaultSettings };
+
+async function handlePicker(
+  ctx: ExtensionCommandContext | ExtensionContext,
+  options: HandlePetsOptions,
+): Promise<void> {
+  const settings = await loadSettings(options.agentDir);
+  const builtins = builtinPets().map((pet) => ({
+    value: pet.id,
+    label: pet.displayName,
+    description: pet.description,
+  }));
+  const customDir = join(options.agentDir, "pets");
+  let custom: { value: string; label: string; description: string }[] = [];
+  if (existsSync(customDir)) {
+    const entries = await readdir(customDir, { withFileTypes: true });
+    custom = entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => ({ value: entry.name, label: entry.name, description: "custom pet" }));
+  }
+  const items = [
+    { value: "disabled", label: "Disable terminal pets", description: "Hide the pet widget." },
+    ...builtins,
+    ...custom,
+  ];
+
+  if (typeof (ctx as any).ui?.custom !== "function") {
+    await handleList(ctx, options);
+    return;
+  }
+
+  const pick = await (ctx as any).ui.custom((tui: any, theme: any, _kb: any, done: (value: string | null) => void) => {
+    const container = new Container();
+    container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+    container.addChild(new Text(theme.fg("accent", theme.bold("Select Pet")), 1, 0));
+    const select = new SelectList(items, Math.min(items.length, 10), {
+      selectedPrefix: (t: string) => theme.fg("accent", t),
+      selectedText: (t: string) => theme.fg("accent", t),
+      description: (t: string) => theme.fg("muted", t),
+      scrollInfo: (t: string) => theme.fg("dim", t),
+      noMatch: (t: string) => theme.fg("warning", t),
+    });
+    (select as any).onSelect = (item: any) => done(item.value);
+    (select as any).onCancel = () => done(null);
+    container.addChild(select);
+    container.addChild(new Text(theme.fg("dim", "↑↓ navigate · enter select · esc cancel"), 1, 0));
+    container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+    const component: any = {
+      render: (w: number) => container.render(w),
+      invalidate: () => container.invalidate(),
+      handleInput: (data: string) => {
+        (select as any).handleInput?.(data);
+        tui.requestRender();
+      },
+      __items: items, // for tests
+    };
+    return component;
+  });
+
+  if (!pick) return;
+  if (pick === "disabled") {
+    await saveSettings(options.agentDir, { ...settings, enabled: false });
+    ctx.ui.notify("Pet disabled.");
+    return;
+  }
+  await saveSettings(options.agentDir, { ...settings, selectedPet: pick, enabled: true });
+  ctx.ui.notify(`Pet set to ${pick}.`);
+}

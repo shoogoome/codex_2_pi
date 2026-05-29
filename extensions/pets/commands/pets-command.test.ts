@@ -75,7 +75,35 @@ describe("handlePetsCommand", () => {
     const ctx = makeCtx(agentDir);
     await handlePetsCommand("set bogus", ctx, { agentDir });
     expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringMatching(/unknown pet/), "error");
-    // No file should have been written.
     expect(() => readFileSync(join(agentDir, "pets.json"), "utf8")).toThrow();
+  });
+});
+
+describe("handlePetsCommand interactive picker", () => {
+  it("`/pets` opens a SelectList overlay listing built-ins and disable entry", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "pets-cmd-"));
+    const customCall = vi.fn(async (factory: any) => {
+      const fakeTui = { requestRender: vi.fn() } as any;
+      const fakeTheme = {
+        fg: (_color: string, t: string) => t,
+        bg: (_color: string, t: string) => t,
+        bold: (t: string) => t,
+      };
+      const done = (_value: string | null) => {};
+      const component = factory(fakeTui, fakeTheme, undefined, done);
+      const items = (component as any).__items as Array<{ value: string }>;
+      expect(items.map((item) => item.value)).toEqual(["disabled", "default"]);
+      return "default";
+    });
+
+    const ctx: any = {
+      hasUI: true,
+      ui: { notify: vi.fn(), custom: customCall, setWidget: vi.fn() },
+      sessionManager: {},
+    };
+    await handlePetsCommand("", ctx, { agentDir });
+    expect(customCall).toHaveBeenCalled();
+    const json = JSON.parse(readFileSync(join(agentDir, "pets.json"), "utf8"));
+    expect(json.selectedPet).toBe("default");
   });
 });
