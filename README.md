@@ -15,6 +15,7 @@
 | `extensions/imagegen` | 添加 `generate_image` 生图工具和 `/images` 图片路径展示器。 |
 | `extensions/todo` | 添加 Codex 风格 `update_plan` 工具、计划更新渲染和常驻 plan overlay。 |
 | `extensions/compact-ui` | 添加 Codex 风格紧凑 UI：用户/模型消息前缀化，并让常见内置工具使用更短的调用与结果渲染。 |
+| `extensions/pets` | 添加 Codex 风格终端宠物 widget：依据 agent 状态切换动画，Kitty graphics + tmux DCS passthrough 可选，其余环境自动回退到 block-art 字符画。 |
 
 ## 命令
 
