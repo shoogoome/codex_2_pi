@@ -1,0 +1,21 @@
+{
+  "id": "default",
+  "displayName": "Default",
+  "description": "A small CC0 pet bundled with the pets extension.",
+  "spritesheetPath": "spritesheet.png",
+  "frame": { "width": 16, "height": 16, "columns": 4, "rows": 4 },
+  "animations": {
+    "idle":    { "frames": [0, 1, 2, 1], "fps": 4, "loop": true,  "fallback": "idle" },
+    "running": { "frames": [4, 5, 6, 7], "fps": 8, "loop": true,  "fallback": "idle" },
+    "waiting": { "frames": [8, 9], "fps": 2, "loop": true,  "fallback": "idle" },
+    "review":  { "frames": [12, 13], "fps": 6, "loop": false, "fallback": "idle" },
+    "failed":  { "frames": [14, 15], "fps": 4, "loop": true,  "fallback": "idle" }
+  },
+  "blockArt": {
+    "idle":    ["  ▟█▙  ", "  ███  ", "  ▝▀▘  "],
+    "running": ["  ▟█▙  ", "  ███  ", "  ↻↻↻  "],
+    "waiting": ["  ▟█▙  ", "  ███  ", "  ???  "],
+    "review":  ["  ▟█▙  ", "  ███  ", "  ✓✓✓  "],
+    "failed":  ["  ▟█▙  ", "  ███  ", "  ✗✗✗  "]
+  }
+}

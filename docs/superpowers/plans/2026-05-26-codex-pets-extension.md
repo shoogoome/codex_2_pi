@@ -43,7 +43,8 @@ spritesheet decoding (pure JS, no native bindings), Vitest globals
 - Create `extensions/pets/catalog/catalog.test.ts` — built-in id lookup.
 - Create `extensions/pets/catalog/default/pet.json` — frame geometry and
   animations for the bundled pet.
-- Create `extensions/pets/catalog/default/spritesheet.webp` — CC0 placeholder.
+- Create `extensions/pets/catalog/default/spritesheet.png` — CC0 placeholder
+  (PNG; jimp 1.x's bundled codecs do not write WebP).
 - Create `extensions/pets/catalog/default/LICENSE` — CC0 dedication.
 - Create `extensions/pets/catalog/default/fallback.ts` — tiny hard-coded ASCII
   art used when both spritesheet decode and block-art derivation fail.
@@ -544,7 +545,7 @@ git commit -m "feat(pets): parse pet manifest with state-keyed animations"
 - Create: `extensions/pets/catalog/catalog.test.ts`
 - Create: `extensions/pets/catalog/default/pet.json`
 - Create: `extensions/pets/catalog/default/LICENSE`
-- Create: `extensions/pets/catalog/default/spritesheet.webp` (placeholder file
+- Create: `extensions/pets/catalog/default/spritesheet.png` (placeholder file
   generated programmatically — see step 4 below)
 - Create: `extensions/pets/catalog/default/fallback.ts`
 
@@ -624,7 +625,7 @@ Create `extensions/pets/catalog/default/pet.json`:
   "id": "default",
   "displayName": "Default",
   "description": "A small CC0 pet bundled with the pets extension.",
-  "spritesheetPath": "spritesheet.webp",
+  "spritesheetPath": "spritesheet.png",
   "frame": { "width": 16, "height": 16, "columns": 4, "rows": 4 },
   "animations": {
     "idle":    { "frames": [0, 1, 2, 1], "fps": 4, "loop": true,  "fallback": "idle" },
@@ -686,12 +687,12 @@ for (let r = 0; r < rows; r++) {
 }
 
 mkdirSync('extensions/pets/catalog/default', { recursive: true });
-writeFileSync('extensions/pets/catalog/default/spritesheet.webp', await image.getBuffer('image/webp'));
-console.log('wrote extensions/pets/catalog/default/spritesheet.webp');
+writeFileSync('extensions/pets/catalog/default/spritesheet.png', await image.getBuffer('image/png'));
+console.log('wrote extensions/pets/catalog/default/spritesheet.png');
 "
 ```
 
-Expected: prints `wrote extensions/pets/catalog/default/spritesheet.webp` and
+Expected: prints `wrote extensions/pets/catalog/default/spritesheet.png` and
 the file exists with non-zero size.
 
 Create `extensions/pets/catalog/default/fallback.ts`:
