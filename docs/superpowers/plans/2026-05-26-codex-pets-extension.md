@@ -128,11 +128,13 @@ test and every implementation is shown verbatim.
 Run:
 
 ```bash
-npm install jimp@^0.22.12
+npm install jimp@^1.6.1
 ```
 
-Expected: `package.json` now contains `"jimp": "^0.22.12"` under
-`dependencies`, and `package-lock.json` is updated.
+Expected: `package.json` now contains `"jimp": "^1.6.1"` under
+`dependencies` (jimp 1.x exposes the named `Jimp` constructor used elsewhere
+in this plan; older 0.x has a different default-export API), and
+`package-lock.json` is updated.
 
 - [ ] **Step 2: Verify the install did not break anything**
 

@@ -4,8 +4,17 @@
   "description": "Codex-style commands and tools for Pi coding agent.",
   "type": "module",
   "license": "MIT",
-  "keywords": ["pi-package", "codex", "pi-extension"],
-  "files": ["extensions", "themes", "README.md", "package.json"],
+  "keywords": [
+    "pi-package",
+    "codex",
+    "pi-extension"
+  ],
+  "files": [
+    "extensions",
+    "themes",
+    "README.md",
+    "package.json"
+  ],
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit"
@@ -30,5 +39,8 @@
     "tsx": "^4.21.0",
     "typescript": "^5.0.0",
     "vitest": "^3.0.0"
+  },
+  "dependencies": {
+    "jimp": "^1.6.1"
   }
 }
