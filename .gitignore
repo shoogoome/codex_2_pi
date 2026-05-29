@@ -2,5 +2,5 @@ node_modules/
 coverage/
 dist/
 *.tsbuildinfo
-codex/ 
-**/.pi-len
+codex/
+**/.pi-lens/
