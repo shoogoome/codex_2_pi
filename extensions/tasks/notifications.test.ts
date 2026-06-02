@@ -162,7 +162,7 @@ describe("notifyTaskTerminal", () => {
     };
   }
 
-  it("calls pi.sendMessage exactly once with correct schema on first call", () => {
+  it("default options produce immediate-render: no triggerTurn, no deliverAs", () => {
     const pi = createFakePi();
     const store = createTaskStore();
     registerTask(sample("babcdefgh"), store);
@@ -177,7 +177,7 @@ describe("notifyTaskTerminal", () => {
     expect(details.taskId).toBe("babcdefgh");
     expect(details.status).toBe("completed");
     expect(details.timestamp).toBeGreaterThan(0);
-    expect(opts).toEqual({ triggerTurn: false, deliverAs: "nextTurn" });
+    expect(opts).toEqual({});  // deliverAs 和 triggerTurn 都是 undefined — 立即渲染
   });
 
   it("second call is a silent no-op (CAS guard)", () => {

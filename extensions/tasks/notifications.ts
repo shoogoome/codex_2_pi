@@ -74,12 +74,15 @@ export interface NotifyTaskTerminalOptions {
   summary?: string;
   /**
    * 是否触发主 agent 立即跑下一轮 turn。
-   * 默认 false — 把消息塞进会话流但不抢 turn(适合后台任务异步完成场景)。
+   * 不传(undefined) — 把消息立即渲染到会话流但不抢 turn(适合 LLM mid-turn 等待工具结果的场景)。
+   * 后台 task 完成时传 `true` — 主动唤醒 LLM。
    */
   triggerTurn?: boolean;
   /**
-   * 投递语义 — 不传时走 Pi 默认("nextTurn"-ish)。
-   * 后续 LocalShell / LocalAgent 期可能针对不同语义调整。
+   * 投递语义 — **通常不要传**。
+   * 不传(undefined)时立即渲染(推荐)。
+   * ⚠️ 传 `"nextTurn"` 会让 Pi agent-session 把消息放进 pending 队列等用户输入,
+   *    即使同时传了 triggerTurn:true 也无效 — 这是 deliverAs 优先于 triggerTurn 的陷阱。
    */
   deliverAs?: "steer" | "followUp" | "nextTurn";
   /** 给 details.extra 塞自定义结构。 */
@@ -161,10 +164,35 @@ export function buildTaskNotificationXml(opts: NotifyTaskTerminalOptions): strin
 }
 
 /**
+ * Pi sendMessage 选项构建器。
+ *
+ * **关键约束**:Pi agent-session.js:967 先检查 deliverAs === "nextTurn",
+ * 如果成立就把消息放进 pending 队列等用户下次输入 — triggerTurn 被完全忽略。
+ * 因此:
+ *   - 只要调用方没有**显式**传入 deliverAs,就不设置该字段(留 undefined)。
+ *   - undefined deliverAs 时:triggerTurn=false → 立即渲染但不开 turn;
+ *                            triggerTurn=true  → agent.prompt(...) 唤醒 LLM。
+ */
+function buildSendMessageOptions(opts: NotifyTaskTerminalOptions): {
+  triggerTurn?: boolean;
+  deliverAs?: "steer" | "followUp" | "nextTurn";
+} {
+  const out: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" } = {};
+  if (opts.triggerTurn !== undefined) out.triggerTurn = opts.triggerTurn;
+  if (opts.deliverAs !== undefined) out.deliverAs = opts.deliverAs;
+  return out;
+}
+
+/**
  * 把 task 终态广播出去 — CAS + sendMessage。
  *
  * **重复调用静默跳过**(CAS)— 这是为什么 LocalShell 的 result handler 与
  * TaskStopTool 同时调用它都不会双发。
+ *
+ * 默认行为(opts.triggerTurn / opts.deliverAs 都不传):立即渲染、不主动开 turn。
+ * 后台 task 完成时调用方应传 `triggerTurn: true` 主动唤醒 LLM。**不要传**
+ * `deliverAs: "nextTurn"` — Pi agent-session 会把它放进 pending 队列等用户输入,
+ * triggerTurn 失效。
  */
 export function notifyTaskTerminal(
   pi: ExtensionAPI,
@@ -195,10 +223,7 @@ export function notifyTaskTerminal(
       display: true,
       details,
     },
-    {
-      triggerTurn: opts.triggerTurn ?? false,
-      deliverAs: opts.deliverAs ?? "nextTurn",
-    },
+    buildSendMessageOptions(opts),
   );
 }
 
