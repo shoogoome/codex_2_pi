@@ -34,6 +34,10 @@ let pi: {
   sendMessage: ReturnType<typeof vi.fn>;
   handlers: Map<string, Array<(e: unknown, c: unknown) => unknown>>;
   events: Record<string, unknown>;
+  registerFlag: ReturnType<typeof vi.fn>;
+  getFlag: ReturnType<typeof vi.fn>;
+  setActiveTools: ReturnType<typeof vi.fn>;
+  getActiveTools: ReturnType<typeof vi.fn>;
 };
 
 function fireEvent(event: string, e: unknown, c: unknown): unknown[] {
@@ -56,6 +60,10 @@ beforeEach(() => {
     registerTool: vi.fn(),
     sendMessage: vi.fn(),
     events: {},
+    registerFlag: vi.fn(),
+    getFlag: vi.fn().mockReturnValue(undefined),
+    setActiveTools: vi.fn(),
+    getActiveTools: vi.fn().mockReturnValue(["bash", "read", "write", "task_bash"]),
   };
   // Pi loader gives all extensions the same `events` object — emulate that:
   const handle = {
@@ -119,5 +127,33 @@ describe("localshellExtension", () => {
     const { LocalShellTask } = await import("./localShellTask.js");
     // task 不存在 → kill 早返回,不抛
     await LocalShellTask.kill("nope", store);
+  });
+
+  it("registers --keep-builtin-bash flag at extension load", () => {
+    localshellExtension(pi as never);
+    expect(pi.registerFlag).toHaveBeenCalledTimes(1);
+    const [name, options] = pi.registerFlag.mock.calls[0]!;
+    expect(name).toBe("keep-builtin-bash");
+    expect((options as { type: string; default: boolean }).type).toBe("boolean");
+    expect((options as { type: string; default: boolean }).default).toBe(false);
+  });
+
+  it("shadows built-in bash by default (filter sets active tools without 'bash')", () => {
+    pi.getFlag.mockReturnValue(undefined);
+    localshellExtension(pi as never);
+    fireEvent("session_start", {}, { sessionManager: { getSessionId: () => "shadow-1" } });
+    expect(pi.setActiveTools).toHaveBeenCalledTimes(1);
+    const arg = pi.setActiveTools.mock.calls[0]![0] as string[];
+    expect(arg).not.toContain("bash");
+    expect(arg).toContain("task_bash");
+    expect(arg).toContain("read");
+    expect(arg).toContain("write");
+  });
+
+  it("--keep-builtin-bash leaves built-in bash active (no setActiveTools call)", () => {
+    pi.getFlag.mockReturnValue(true);
+    localshellExtension(pi as never);
+    fireEvent("session_start", {}, { sessionManager: { getSessionId: () => "shadow-2" } });
+    expect(pi.setActiveTools).not.toHaveBeenCalled();
   });
 });

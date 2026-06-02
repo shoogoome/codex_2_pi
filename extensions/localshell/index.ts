@@ -20,6 +20,13 @@ const TaskBashParams = Type.Object({
 });
 
 export default function localshellExtension(pi: ExtensionAPI): void {
+  pi.registerFlag("keep-builtin-bash", {
+    type: "boolean",
+    default: false,
+    description:
+      "Keep Pi's built-in `bash` tool active alongside `task_bash`. Default: shadow built-in bash.",
+  });
+
   pi.on("session_start", () => {
     const handle = getTasksHandle(pi);
     _bindPi(pi);
@@ -52,6 +59,12 @@ export default function localshellExtension(pi: ExtensionAPI): void {
         };
       },
     });
+
+    const keepBash = pi.getFlag("keep-builtin-bash") === true;
+    if (!keepBash) {
+      const active = pi.getActiveTools();
+      pi.setActiveTools(active.filter((name) => name !== "bash"));
+    }
   });
 
   pi.on("session_shutdown", async () => {
