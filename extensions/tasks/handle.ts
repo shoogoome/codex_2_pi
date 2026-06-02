@@ -12,7 +12,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Task, TaskType } from "./Task.js";
-import type { TaskStore } from "./taskStore.js";
+import { setDefaultTaskStore, type TaskStore } from "./taskStore.js";
 
 /** Symbol-keyed property to avoid name collisions on the EventBus object. */
 const HANDLE_KEY = "__pi_tasks_handle__";
@@ -37,5 +37,13 @@ export function getTasksHandle(pi: ExtensionAPI): TasksHandle {
       "pi-tasks-extension handle not found on pi.events. Ensure pi-tasks-extension is installed and loaded.",
     );
   }
+  // Mirror the store into THIS module realm's default-store slot. This is
+  // safe because setDefaultTaskStore writes a single ref; multiple realms
+  // each write their own _defaultStore variable but they all point to the
+  // SAME store object, so reads stay consistent.
+  // Without this mirroring, internal helpers in tasks/ that call
+  // getDefaultTaskStore() (e.g. outputPath.getTaskOutputDir, diskOutput helpers)
+  // throw because the consumer extension's realm never had its _defaultStore set.
+  setDefaultTaskStore(handle.store);
   return handle;
 }
