@@ -245,7 +245,10 @@ describe("end-to-end task lifecycle", () => {
     });
     expect(pi.sendMessage).toHaveBeenCalledTimes(1);
 
-    // pollTasks 应 evict(terminal + notified)
+    // pollTasks 应 evict(terminal + notified + grace expired)
+    // notifyTaskTerminal 写入了 retain=true + evictAfter=now+30s，宽限期内不会 evict。
+    // 手动将 evictAfter 设为 0 模拟宽限期已过，验证 eviction 逻辑仍正常工作。
+    store.set((prev) => ({ ...prev, [taskId]: { ...prev[taskId]!, evictAfter: 0 } as never }));
     await pollTasks(store);
     expect(store.getTask(taskId)).toBeUndefined();
   });
