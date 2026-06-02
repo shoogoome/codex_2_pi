@@ -7,7 +7,7 @@
 // Use this for in-flight progress (sub-agent tool calls, sub-shell milestones). For terminal
 // status, use `notifyTaskTerminal` in `notifications.ts` (it has CAS guard + LLM context routing).
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { Box, Text, type Component } from "@earendil-works/pi-tui";
 import { logError } from "./logging.js";
 import type { TaskType } from "./Task.js";
@@ -99,33 +99,124 @@ export function installProgressContextFilter(
 }
 
 // ---------- TUI Renderer ----------
+//
+// Visual style inspired by `pi-subagents` (npm:pi-subagents@0.27.0) — kind-glyph + bold
+// title + statJoin separator (`{dim "·"}`) + nested `⎿` indent for tool call previews.
+// We do NOT reuse pi-subagents' data structures or business logic; only the formatting
+// idioms.
 
-const KIND_PREFIX: Record<TaskProgressKind, string> = {
-  task_start: "▶",
-  tool_start: "  ↳",
-  tool_end: "  ✓",
-  stream: "  ·",
-  task_end: "■",
-  kill: "✗",
+const SAFE_TASK_TYPE_LABEL: Record<TaskType, string> = {
+  local_bash: "bash",
+  local_agent: "agent",
+  in_process_teammate: "teammate",
+  dream: "dream",
+  remote_agent: "remote",
+  local_workflow: "workflow",
+  monitor_mcp: "mcp",
 };
 
-function renderHeadline(d: TaskProgressDetails): string {
-  const tag = d.taskType === "local_agent" ? "agent" : d.taskType === "local_bash" ? "bash" : d.taskType;
-  const kindMark = KIND_PREFIX[d.kind] ?? "·";
-  return `[${tag} ${d.taskId}] ${kindMark} ${d.summary}`;
+function shortTypeLabel(t: TaskType): string {
+  return SAFE_TASK_TYPE_LABEL[t] ?? t;
+}
+
+/** Glyph + theme-color key for each progress kind. */
+function kindStyle(d: TaskProgressDetails): { glyph: string; color: ThemeColor } {
+  switch (d.kind) {
+    case "task_start":
+      return { glyph: "▶", color: "accent" };
+    case "tool_start":
+      return { glyph: "●", color: "accent" };
+    case "tool_end":
+      return d.isError ? { glyph: "✗", color: "error" } : { glyph: "✓", color: "success" };
+    case "task_end":
+      // Distinguish failed exit codes for local_bash.
+      if (d.exitCode !== undefined && d.exitCode !== 0) {
+        return { glyph: "✗", color: "error" };
+      }
+      return { glyph: "✓", color: "success" };
+    case "kill":
+      return { glyph: "■", color: "warning" };
+    case "stream":
+      return { glyph: "·", color: "dim" };
+    default:
+      return { glyph: "·", color: "dim" };
+  }
+}
+
+/** Join short stat parts with `dim "·"` separators, mirroring pi-subagents `statJoin`. */
+function statJoin(theme: Theme, parts: string[]): string {
+  return parts
+    .filter((s) => s && s.length > 0)
+    .map((part) => theme.fg("dim", part))
+    .join(` ${theme.fg("dim", "·")} `);
+}
+
+function formatTaskEndStats(d: TaskProgressDetails): string[] {
+  const parts: string[] = [];
+  if (d.toolCallCount !== undefined && d.toolCallCount > 0) {
+    parts.push(`${d.toolCallCount} tool use${d.toolCallCount === 1 ? "" : "s"}`);
+  }
+  if (d.tokenCount !== undefined && d.tokenCount > 0) {
+    const tk = d.tokenCount;
+    parts.push(tk >= 1000 ? `${(tk / 1000).toFixed(1)}k token` : `${tk} token`);
+  }
+  if (d.durationMs !== undefined && d.durationMs > 0) {
+    const ms = d.durationMs;
+    parts.push(ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`);
+  }
+  return parts;
+}
+
+function themeBold(theme: Theme, text: string): string {
+  return ((theme as { bold?: (value: string) => string }).bold?.(text)) ?? text;
+}
+
+/**
+ * Build the headline ANSI-colored string for a single progress entry.
+ *
+ * Visual layouts:
+ *   task_start →  ▶ {bold(agent-type or description)}  ·  {dim taskId}
+ *   tool_start →    ⎿  {bold(tool)}  {dim "(args)"}    (indented under task_start)
+ *   tool_end   →    ⎿  {ok-glyph} {dim ("[ok]" or err)}  {dim(short result)}
+ *   task_end   →  ✓ {bold(label)}  ·  {dim "N tool uses"}  ·  {dim "X token"}
+ *   kill       →  ■ {bold(label)}  ·  {dim "killed"}
+ */
+function renderHeadline(d: TaskProgressDetails, theme: Theme): string {
+  const { glyph, color } = kindStyle(d);
+  const typeLabel = shortTypeLabel(d.taskType);
+  const taskIdPill = theme.fg("muted", `[${typeLabel} ${d.taskId}]`);
+  const coloredGlyph = theme.fg(color, glyph);
+
+  if (d.kind === "tool_start" || d.kind === "tool_end") {
+    // Indent under the parent task — pi-subagents idiom: `  ⎿  {content}`.
+    return `  ${theme.fg("dim", "⎿")}  ${coloredGlyph} ${theme.fg("dim", d.summary)}`;
+  }
+
+  if (d.kind === "task_end") {
+    const statsParts = formatTaskEndStats(d);
+    const stats = statsParts.length > 0 ? `  ${theme.fg("dim", "·")}  ${statJoin(theme, statsParts)}` : "";
+    const label = d.description ?? d.summary;
+    return `${coloredGlyph} ${themeBold(theme, theme.fg(color, label))}${stats}`;
+  }
+
+  if (d.kind === "kill") {
+    const label = d.description ?? d.summary;
+    return `${coloredGlyph} ${themeBold(theme, theme.fg(color, label))}  ${theme.fg("dim", "·")}  ${theme.fg("dim", "killed")}`;
+  }
+
+  // task_start (and any other top-level kind)
+  const title = d.agentType ?? d.description ?? d.summary;
+  const subtitle = d.description && d.agentType ? d.description : "";
+  const head = `${coloredGlyph} ${themeBold(theme, theme.fg(color, title))} ${taskIdPill}`;
+  return subtitle ? `${head}  ${theme.fg("dim", "·")}  ${theme.fg("dim", subtitle)}` : head;
 }
 
 /**
  * Register the TUI renderer for tasks/progress customType.
  *
- * Style: single-line `[type taskId] {kind-icon} {summary}`. Color follows kind:
- *   - tool_end with isError → "error"
- *   - kill → "error"
- *   - task_end → "success"
- *   - others → "dim" (informational, low contrast)
- *
- * Expanded view shows a Box with the headline + extra details (agentType / toolName / etc.).
- * Behavior aligned with `registerTaskNotificationRenderer` in `notifications.ts`.
+ * Each progress message renders as ONE Text component (single-line collapsed; multi-line
+ * when expanded shows additional metadata). Aligned with `registerTaskNotificationRenderer`
+ * in `notifications.ts` — uses pi-tui Box + Text directly.
  */
 export function registerTaskProgressRenderer(
   pi: Pick<ExtensionAPI, "registerMessageRenderer">,
@@ -138,29 +229,24 @@ export function registerTaskProgressRenderer(
         const text = typeof message.content === "string" ? message.content : "";
         return new Text(theme.fg("toolOutput", text), 0, 0);
       }
-      const colorKey: "success" | "error" | "dim" =
-        d.kind === "kill" || (d.kind === "tool_end" && d.isError)
-          ? "error"
-          : d.kind === "task_end"
-            ? "success"
-            : "dim";
-      const headline = renderHeadline(d);
+      const headline = renderHeadline(d, theme);
 
       if (!expanded) {
-        return new Text(theme.fg(colorKey, headline), 0, 0);
+        return new Text(headline, 0, 0);
       }
 
       const box = new Box(1, 1, (value: string) => theme.bg("customMessageBg", value));
-      box.addChild(new Text(theme.fg(colorKey, theme.bold(headline)), 0, 0));
-      const meta: string[] = [];
-      if (d.agentType) meta.push(`agentType=${d.agentType}`);
-      if (d.toolName) meta.push(`tool=${d.toolName}`);
-      if (d.exitCode !== undefined) meta.push(`exit=${d.exitCode}`);
-      if (d.toolCallCount !== undefined) meta.push(`tools=${d.toolCallCount}`);
-      if (d.tokenCount !== undefined && d.tokenCount > 0) meta.push(`tokens=${d.tokenCount}`);
-      if (d.durationMs !== undefined) meta.push(`durationMs=${d.durationMs}`);
-      if (meta.length > 0) {
-        box.addChild(new Text(theme.fg("dim", meta.join("  ")), 0, 0));
+      box.addChild(new Text(headline, 0, 0));
+
+      // Expanded extra lines — use the same `⎿` indent idiom for sub-detail rows.
+      const extra: string[] = [];
+      if (d.agentType && d.kind !== "task_start") extra.push(`agent: ${d.agentType}`);
+      if (d.toolName && d.kind !== "tool_start" && d.kind !== "tool_end") {
+        extra.push(`tool: ${d.toolName}`);
+      }
+      if (d.exitCode !== undefined && d.kind !== "task_end") extra.push(`exit: ${d.exitCode}`);
+      for (const line of extra) {
+        box.addChild(new Text(theme.fg("dim", `  ⎿  ${line}`), 0, 0));
       }
       return box;
     },
