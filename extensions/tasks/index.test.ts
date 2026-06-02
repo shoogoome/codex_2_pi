@@ -122,6 +122,8 @@ describe("tasksExtension entrypoint", () => {
     expect(pi.on).toHaveBeenCalled();
     expect(pi.handlers.has("session_start")).toBe(true);
     expect(pi.handlers.has("session_shutdown")).toBe(true);
+    // installProgressContextFilter wires a "context" event handler.
+    expect(pi.handlers.has("context")).toBe(true);
 
     expect(pi.registerMessageRenderer).toHaveBeenCalledTimes(2);
     const customTypes = pi.registerMessageRenderer.mock.calls.map((c: unknown[]) => c[0]);

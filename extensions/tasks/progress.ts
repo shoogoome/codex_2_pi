@@ -40,11 +40,19 @@ export interface TaskProgressDetails {
 }
 
 /**
- * Emit a progress message to TUI/RPC without disturbing the parent LLM context.
+ * Emit a progress message to TUI/RPC.
  *
- * Uses `deliverAs:"nextTurn", triggerTurn:false` — Pi's agent-session.js puts the message
- * in a pending queue (NOT in messages[]) until the user types something, at which point
- * it's silently discarded. Net effect: TUI renders it, RPC stdout sees it, LLM never does.
+ * Mechanism (validated by spike `extensions/spike-progress-channels/`):
+ *   - `display:true, triggerTurn:false` (no `deliverAs`) → message renders to TUI/RPC
+ *     immediately AND is appended to the session jsonl as `{role:"custom", customType, ...}`.
+ *   - That `role:"custom"` entry IS visible to the next provider request — it would enter
+ *     the parent LLM's context.
+ *   - `installProgressContextFilter(pi)` MUST be called once at extension load to register
+ *     a `pi.on("context")` handler that strips these entries before LLM sees them.
+ *
+ * Why not `deliverAs:"nextTurn"`? Empirically the message gets queued silently — no TUI
+ * render, no jsonl entry, no provider request entry — until the user types something and
+ * then it's discarded. Useless for our purpose.
  *
  * Defensive try/catch — sendMessage failure must NOT propagate up to the producer (the
  * spawn function is mid-LLM-loop and we don't want a renderer crash to kill the agent).
@@ -62,11 +70,32 @@ export function emitTaskProgress(
         display: true,
         details,
       } as never,
-      { triggerTurn: false, deliverAs: "nextTurn" },
+      { triggerTurn: false },
     );
   } catch (e) {
     logError(e, "emitTaskProgress");
   }
+}
+
+/**
+ * Install the `context` event filter that strips progress messages from the LLM's
+ * provider request payload. Pair with `emitTaskProgress` — if you emit but don't
+ * install the filter, the LLM will see the progress entries.
+ *
+ * AgentMessage shape for custom messages: `{role:"custom", customType, content, ...}`.
+ * This filter drops any message with `role==="custom"` and our customType.
+ */
+export function installProgressContextFilter(
+  pi: Pick<ExtensionAPI, "on">,
+): void {
+  pi.on("context", (event) => {
+    const e = event as { messages: unknown[] };
+    const filtered = e.messages.filter((m: unknown) => {
+      const msg = m as { role?: string; customType?: string };
+      return !(msg.role === "custom" && msg.customType === TASK_PROGRESS_CUSTOM_TYPE);
+    });
+    return { messages: filtered as never };
+  });
 }
 
 // ---------- TUI Renderer ----------

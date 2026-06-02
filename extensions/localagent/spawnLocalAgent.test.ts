@@ -255,9 +255,9 @@ describe("spawnLocalAgent — tasks/progress emission", () => {
     expect(kinds).toContain("tool_end");
     expect(kinds).toContain("task_end");
 
-    // Every progress message uses deliverAs:nextTurn + triggerTurn:false.
+    // Every progress message uses triggerTurn:false (no deliverAs).
     for (const call of progressCalls) {
-      expect(call[1]).toEqual({ triggerTurn: false, deliverAs: "nextTurn" });
+      expect(call[1]).toEqual({ triggerTurn: false });
     }
   });
 

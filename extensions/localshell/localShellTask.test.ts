@@ -149,9 +149,9 @@ describe("spawnLocalShell — sync finish path", () => {
     );
     expect(kinds).toContain("task_start");
     expect(kinds).toContain("task_end");
-    // Each progress message uses deliverAs:nextTurn + triggerTurn:false.
+    // Each progress message uses triggerTurn:false (no deliverAs).
     for (const call of progressCalls) {
-      expect(call[1]).toEqual({ triggerTurn: false, deliverAs: "nextTurn" });
+      expect(call[1]).toEqual({ triggerTurn: false });
     }
   });
 

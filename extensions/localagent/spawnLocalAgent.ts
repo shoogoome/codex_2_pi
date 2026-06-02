@@ -195,17 +195,8 @@ export async function spawnLocalAgent(
   };
   registerTask(initial, store);
 
-  // Emit task_start progress to TUI/RPC (NOT into LLM context — verified via spike).
-  emitTaskProgress(pi, {
-    taskId,
-    taskType: "local_agent",
-    kind: "task_start",
-    summary: `${opts.agentDef.agentType} → ${opts.prompt.slice(0, 60)}`,
-    description: opts.description,
-    agentType: opts.agentDef.agentType,
-  });
-
-  // Emit task_start progress to TUI/RPC (NOT into LLM context — verified via spike).
+  // Emit task_start progress to TUI/RPC. Filtered out of LLM context by
+  // installProgressContextFilter registered in tasks ext entrypoint.
   emitTaskProgress(pi, {
     taskId,
     taskType: "local_agent",

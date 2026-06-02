@@ -23,7 +23,10 @@ import { _resetTaskOutputDirForTest } from "./outputPath.js";
 import { startTaskFrameworkPolling, stopTaskFrameworkPolling } from "./framework.js";
 import { _clearOutputsForTest } from "./diskOutput.js";
 import { registerTaskNotificationRenderer } from "./notifications.js";
-import { registerTaskProgressRenderer } from "./progress.js";
+import {
+  installProgressContextFilter,
+  registerTaskProgressRenderer,
+} from "./progress.js";
 import { buildTaskKillTool } from "./tools/taskKill.js";
 import { buildTaskStatusTool } from "./tools/taskStatus.js";
 import { buildTaskListTool } from "./tools/taskList.js";
@@ -63,6 +66,8 @@ export default function tasksExtension(
 
   registerTaskNotificationRenderer(pi);
   registerTaskProgressRenderer(pi);
+  installProgressContextFilter(pi);
+  installProgressContextFilter(pi);
 
   pi.on("session_start", (_event, ctx) => {
     // sessionManager 是 ReadonlySessionManager —— 取 sessionId 即可,不要 mutate。
@@ -155,6 +160,7 @@ export type {
 } from "./progress.js";
 export {
   emitTaskProgress,
+  installProgressContextFilter,
   registerTaskProgressRenderer,
   TASK_PROGRESS_CUSTOM_TYPE,
 } from "./progress.js";

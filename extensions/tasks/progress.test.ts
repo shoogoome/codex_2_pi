@@ -1,13 +1,14 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   emitTaskProgress,
+  installProgressContextFilter,
   registerTaskProgressRenderer,
   TASK_PROGRESS_CUSTOM_TYPE,
   type TaskProgressDetails,
 } from "./progress.js";
 
 describe("emitTaskProgress", () => {
-  it("calls pi.sendMessage with triggerTurn:false + deliverAs:nextTurn", () => {
+  it("calls pi.sendMessage with triggerTurn:false (no deliverAs)", () => {
     const sendMessage = vi.fn();
     const pi = { sendMessage } as never;
     emitTaskProgress(pi, {
@@ -26,7 +27,8 @@ describe("emitTaskProgress", () => {
     expect(msg.details.kind).toBe("tool_start");
     expect(msg.details.toolName).toBe("grep");
     expect(typeof msg.details.ts).toBe("number");
-    expect(opts).toEqual({ triggerTurn: false, deliverAs: "nextTurn" });
+    expect(opts).toEqual({ triggerTurn: false });
+    expect(opts).not.toHaveProperty("deliverAs");
   });
 
   it("ignores throwing sendMessage (defensive try/catch)", () => {
@@ -140,5 +142,57 @@ describe("registerTaskProgressRenderer", () => {
       buildFakeTheme(),
     );
     expect(out).toBeDefined();
+  });
+});
+
+describe("installProgressContextFilter", () => {
+  it("registers a context handler", () => {
+    const on = vi.fn();
+    const pi = { on } as never;
+    installProgressContextFilter(pi);
+    expect(on).toHaveBeenCalledTimes(1);
+    expect(on.mock.calls[0]![0]).toBe("context");
+    expect(typeof on.mock.calls[0]![1]).toBe("function");
+  });
+
+  it("filters out role=custom messages with our customType", () => {
+    let capturedHandler: ((event: unknown, ctx?: unknown) => unknown) | undefined;
+    const pi = {
+      on: (_event: string, handler: (e: unknown, ctx?: unknown) => unknown) => {
+        capturedHandler = handler;
+      },
+    } as never;
+    installProgressContextFilter(pi);
+
+    const messages = [
+      { role: "user", content: "hi" },
+      { role: "custom", customType: TASK_PROGRESS_CUSTOM_TYPE, content: "[bash bx12] ▶ echo hi" },
+      { role: "assistant", content: "ok" },
+      { role: "custom", customType: "tasks/notification", content: "should pass through" },
+    ];
+    const result = capturedHandler!({ type: "context", messages });
+    expect(result).toBeDefined();
+    const filtered = (result as { messages: typeof messages }).messages;
+    expect(filtered).toHaveLength(3);
+    expect(filtered.map((m) => m.role)).toEqual(["user", "assistant", "custom"]);
+    // tasks/notification (different customType) survives
+    expect(filtered[2]).toEqual(messages[3]);
+  });
+
+  it("returns unchanged messages when no progress entries present", () => {
+    let capturedHandler: ((event: unknown, ctx?: unknown) => unknown) | undefined;
+    const pi = {
+      on: (_event: string, handler: (e: unknown, ctx?: unknown) => unknown) => {
+        capturedHandler = handler;
+      },
+    } as never;
+    installProgressContextFilter(pi);
+    const messages = [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "ok" },
+    ];
+    const result = capturedHandler!({ type: "context", messages });
+    const filtered = (result as { messages: typeof messages }).messages;
+    expect(filtered).toEqual(messages);
   });
 });
