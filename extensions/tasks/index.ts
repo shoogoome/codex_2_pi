@@ -32,6 +32,7 @@ import {
   registerTaskType,
   unregisterTaskType,
 } from "./taskTypeRegistry.js";
+import { attachTasksHandle, type TasksHandle } from "./handle.js";
 
 export interface TasksExtensionDeps {
   /** 测试可注入自定义 store。生产环境留空。 */
@@ -46,6 +47,18 @@ export default function tasksExtension(
 ): void {
   const store = deps.storeFactory?.() ?? createTaskStore();
   setDefaultTaskStore(store);
+
+  // Attach handle on pi.events so cross-extension consumers (localshell,
+  // localagent, teammate, dream extensions) can find this store + registry
+  // even though their import of `taskStore.js` resolves to a different
+  // module instance under Pi's per-extension jiti loader.
+  const handle: TasksHandle = {
+    store,
+    registerTaskType,
+    getTaskType,
+    unregisterTaskType,
+  };
+  attachTasksHandle(pi, handle);
 
   registerTaskNotificationRenderer(pi);
 
@@ -163,3 +176,9 @@ export {
 export { buildTaskKillTool } from "./tools/taskKill.js";
 export { buildTaskStatusTool } from "./tools/taskStatus.js";
 export { buildTaskListTool } from "./tools/taskList.js";
+
+export {
+  attachTasksHandle,
+  getTasksHandle,
+  type TasksHandle,
+} from "./handle.js";

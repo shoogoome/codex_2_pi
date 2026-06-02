@@ -57,6 +57,7 @@ interface FakePi {
   sendMessage: ReturnType<typeof vi.fn>;
   registerTool: ReturnType<typeof vi.fn>;
   registerCommand: ReturnType<typeof vi.fn>;
+  events: Record<string, unknown>;
 }
 
 function createFakePi(): FakePi {
@@ -72,6 +73,7 @@ function createFakePi(): FakePi {
     sendMessage: vi.fn(),
     registerTool: vi.fn(),
     registerCommand: vi.fn(),
+    events: {},
   };
 }
 

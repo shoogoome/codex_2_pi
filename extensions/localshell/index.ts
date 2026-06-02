@@ -7,12 +7,8 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { getDefaultTaskStore } from "../tasks/taskStore.js";
+import { getTasksHandle } from "../tasks/handle.js";
 import { getRunningTasks } from "../tasks/framework.js";
-import {
-  registerTaskType,
-  unregisterTaskType,
-} from "../tasks/taskTypeRegistry.js";
 import { _bindPi, _unbindPi, LocalShellTask, spawnLocalShell } from "./localShellTask.js";
 
 const TaskBashParams = Type.Object({
@@ -25,9 +21,9 @@ const TaskBashParams = Type.Object({
 
 export default function localshellExtension(pi: ExtensionAPI): void {
   pi.on("session_start", () => {
-    const store = getDefaultTaskStore();
+    const handle = getTasksHandle(pi);
     _bindPi(pi);
-    registerTaskType("local_bash", LocalShellTask);
+    handle.registerTaskType("local_bash", LocalShellTask);
 
     pi.registerTool({
       name: "task_bash",
@@ -42,7 +38,7 @@ export default function localshellExtension(pi: ExtensionAPI): void {
           description: string;
           timeout_ms?: number;
         };
-        const result = await spawnLocalShell(pi, store, {
+        const result = await spawnLocalShell(pi, handle.store, {
           command,
           description,
           timeoutMs: timeout_ms,
@@ -59,10 +55,10 @@ export default function localshellExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", async () => {
-    const store = getDefaultTaskStore();
-    const running = getRunningTasks(store.get()).filter((t) => t.type === "local_bash");
-    await Promise.all(running.map((t) => LocalShellTask.kill(t.id, store)));
-    unregisterTaskType("local_bash");
+    const handle = getTasksHandle(pi);
+    const running = getRunningTasks(handle.store.get()).filter((t) => t.type === "local_bash");
+    await Promise.all(running.map((t) => LocalShellTask.kill(t.id, handle.store)));
+    handle.unregisterTaskType("local_bash");
     _unbindPi();
   });
 }

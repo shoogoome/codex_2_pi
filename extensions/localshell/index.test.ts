@@ -19,7 +19,10 @@ import {
 import {
   _resetTaskTypeRegistryForTest,
   getTaskType,
+  registerTaskType,
+  unregisterTaskType,
 } from "../tasks/taskTypeRegistry.js";
+import { attachTasksHandle } from "../tasks/handle.js";
 import { _resetLocalShellPiBindingForTest } from "./localShellTask.js";
 
 let tmpRoot: string;
@@ -30,6 +33,7 @@ let pi: {
   registerTool: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
   handlers: Map<string, Array<(e: unknown, c: unknown) => unknown>>;
+  events: Record<string, unknown>;
 };
 
 function fireEvent(event: string, e: unknown, c: unknown): unknown[] {
@@ -51,7 +55,16 @@ beforeEach(() => {
     }),
     registerTool: vi.fn(),
     sendMessage: vi.fn(),
+    events: {},
   };
+  // Pi loader gives all extensions the same `events` object — emulate that:
+  const handle = {
+    store,
+    registerTaskType,
+    getTaskType,
+    unregisterTaskType,
+  };
+  attachTasksHandle(pi as never, handle);
 });
 
 afterEach(async () => {
