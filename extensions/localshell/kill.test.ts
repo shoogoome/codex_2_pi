@@ -94,9 +94,24 @@ describe("killLocalShellTask", () => {
     const store = createTaskStore();
     registerTask(sample("babcdef04"), store);
     await killLocalShellTask(pi as never, store, "babcdef04");
-    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
-    const msg = pi.sendMessage.mock.calls[0]![0] as { content: string };
+    const notifications = pi.sendMessage.mock.calls.filter(
+      ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/notification",
+    );
+    expect(notifications).toHaveLength(1);
+    const msg = notifications[0]![0] as { content: string };
     expect(msg.content).toContain("<status>killed</status>");
+  });
+
+  it("running task → emits tasks/progress kind=kill", async () => {
+    const pi = fakePi();
+    const store = createTaskStore();
+    registerTask(sample("babcdef0k"), store);
+    await killLocalShellTask(pi as never, store, "babcdef0k");
+    const progresses = pi.sendMessage.mock.calls.filter(
+      ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/progress",
+    );
+    expect(progresses).toHaveLength(1);
+    expect((progresses[0]![0] as { details: { kind: string } }).details.kind).toBe("kill");
   });
 
   it("repeat kill → second is no-op (no double notify)", async () => {
@@ -105,6 +120,9 @@ describe("killLocalShellTask", () => {
     registerTask(sample("babcdef05"), store);
     await killLocalShellTask(pi as never, store, "babcdef05");
     await killLocalShellTask(pi as never, store, "babcdef05");
-    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    const notifications = pi.sendMessage.mock.calls.filter(
+      ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/notification",
+    );
+    expect(notifications).toHaveLength(1);
   });
 });

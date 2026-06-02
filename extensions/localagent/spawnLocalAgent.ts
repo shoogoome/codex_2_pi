@@ -41,6 +41,7 @@ import {
   generateTaskId,
 } from "../tasks/Task.js";
 import { notifyTaskTerminal } from "../tasks/notifications.js";
+import { emitTaskProgress } from "../tasks/progress.js";
 import { logError } from "../tasks/logging.js";
 
 import type { AgentDefinition, LocalAgentTaskState } from "./types.js";
@@ -49,6 +50,7 @@ import { buildChildDirective } from "./boilerplate.js";
 import { isInForkChild } from "./recursionGuard.js";
 import { resolveSubAgentTools } from "./toolPool.js";
 import { translateAgentEvent } from "./outputTranslator.js";
+import { previewToolEnd, previewToolStart } from "./formatPreview.js";
 import {
   getProgress,
   initProgress,
@@ -193,6 +195,26 @@ export async function spawnLocalAgent(
   };
   registerTask(initial, store);
 
+  // Emit task_start progress to TUI/RPC (NOT into LLM context — verified via spike).
+  emitTaskProgress(pi, {
+    taskId,
+    taskType: "local_agent",
+    kind: "task_start",
+    summary: `${opts.agentDef.agentType} → ${opts.prompt.slice(0, 60)}`,
+    description: opts.description,
+    agentType: opts.agentDef.agentType,
+  });
+
+  // Emit task_start progress to TUI/RPC (NOT into LLM context — verified via spike).
+  emitTaskProgress(pi, {
+    taskId,
+    taskType: "local_agent",
+    kind: "task_start",
+    summary: `${opts.agentDef.agentType} → ${opts.prompt.slice(0, 60)}`,
+    description: opts.description,
+    agentType: opts.agentDef.agentType,
+  });
+
   void initTaskOutput(taskId).catch((e) => {
     if (typeof e === "object" && e && "code" in e && (e as { code: unknown }).code === "EEXIST") {
       return;
@@ -214,6 +236,9 @@ export async function spawnLocalAgent(
     const e = event as {
       type: string;
       toolName?: string;
+      args?: unknown;
+      result?: unknown;
+      isError?: boolean;
       message?: {
         role?: string;
         usage?: { totalTokens?: number };
@@ -222,7 +247,28 @@ export async function spawnLocalAgent(
     };
     if (e.type === "tool_execution_start") {
       toolCount += 1;
-      if (e.toolName) recordToolStart(taskId, e.toolName);
+      if (e.toolName) {
+        recordToolStart(taskId, e.toolName);
+        emitTaskProgress(pi, {
+          taskId,
+          taskType: "local_agent",
+          kind: "tool_start",
+          toolName: e.toolName,
+          summary: previewToolStart(e.toolName, e.args),
+          agentType: opts.agentDef.agentType,
+        });
+      }
+    }
+    if (e.type === "tool_execution_end" && e.toolName) {
+      emitTaskProgress(pi, {
+        taskId,
+        taskType: "local_agent",
+        kind: "tool_end",
+        toolName: e.toolName,
+        isError: !!e.isError,
+        summary: previewToolEnd(e.toolName, e.result, !!e.isError),
+        agentType: opts.agentDef.agentType,
+      });
     }
     if (e.type === "turn_start") {
       turnCount += 1;
@@ -254,6 +300,15 @@ export async function spawnLocalAgent(
     }
     if (e.type === "agent_end") {
       agentEnded = true;
+      emitTaskProgress(pi, {
+        taskId,
+        taskType: "local_agent",
+        kind: "task_end",
+        summary: `done (turns=${turnCount}, tools=${toolCount})`,
+        agentType: opts.agentDef.agentType,
+        toolCallCount: toolCount,
+        tokenCount: getProgress(taskId)?.tokenCount ?? 0,
+      });
       agentEndedResolve();
     }
   });

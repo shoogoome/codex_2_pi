@@ -14,6 +14,7 @@ import tasksExtension, {
   registerTask,
   stopTaskFrameworkPolling,
   TASK_NOTIFICATION_CUSTOM_TYPE,
+  TASK_PROGRESS_CUSTOM_TYPE,
   type Task,
   type TaskStateBase,
   type TaskStore,
@@ -122,8 +123,10 @@ describe("tasksExtension entrypoint", () => {
     expect(pi.handlers.has("session_start")).toBe(true);
     expect(pi.handlers.has("session_shutdown")).toBe(true);
 
-    expect(pi.registerMessageRenderer).toHaveBeenCalledTimes(1);
-    expect(pi.registerMessageRenderer.mock.calls[0]![0]).toBe(TASK_NOTIFICATION_CUSTOM_TYPE);
+    expect(pi.registerMessageRenderer).toHaveBeenCalledTimes(2);
+    const customTypes = pi.registerMessageRenderer.mock.calls.map((c: unknown[]) => c[0]);
+    expect(customTypes).toContain(TASK_NOTIFICATION_CUSTOM_TYPE);
+    expect(customTypes).toContain(TASK_PROGRESS_CUSTOM_TYPE);
   });
 
   it("default TaskStore becomes available after extension load", () => {

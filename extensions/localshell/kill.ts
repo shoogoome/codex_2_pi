@@ -13,6 +13,7 @@ import {
   flushTaskOutput,
 } from "../tasks/diskOutput.js";
 import { notifyTaskTerminal } from "../tasks/notifications.js";
+import { emitTaskProgress } from "../tasks/progress.js";
 import { logError } from "../tasks/logging.js";
 import type { LocalShellTaskState } from "./localShellTask.js";
 
@@ -50,6 +51,13 @@ export async function killLocalShellTask(
     description: task.description,
     outputFile: task.outputFile,
     toolUseId: task.toolUseId,
+  });
+  emitTaskProgress(pi, {
+    taskId,
+    taskType: "local_bash",
+    kind: "kill",
+    summary: "killed by user request",
+    description: task.description,
   });
 
   void evictTaskOutput(taskId);

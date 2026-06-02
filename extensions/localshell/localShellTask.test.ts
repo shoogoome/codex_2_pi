@@ -124,7 +124,35 @@ describe("spawnLocalShell — sync finish path", () => {
     await Promise.resolve();
     fake.finish(0);
     await promise;
-    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    // Filter to terminal notification only — progress messages (task_start/task_end) also go through sendMessage.
+    const notifications = pi.sendMessage.mock.calls.filter(
+      ([msg]: unknown[]) =>
+        (msg as { customType?: string }).customType === "tasks/notification",
+    );
+    expect(notifications).toHaveLength(1);
+  });
+
+  it("emits tasks/progress task_start + task_end on sync finish", async () => {
+    const fake = createFakeBashOps();
+    const promise = spawnLocalShell(pi as never, store, {
+      command: "echo hi", description: "say hi", operations: fake.ops,
+    });
+    await Promise.resolve();
+    fake.finish(0);
+    await promise;
+    const progressCalls = pi.sendMessage.mock.calls.filter(
+      ([msg]: unknown[]) =>
+        (msg as { customType?: string }).customType === "tasks/progress",
+    );
+    const kinds = progressCalls.map(
+      ([msg]: unknown[]) => (msg as { details: { kind: string } }).details.kind,
+    );
+    expect(kinds).toContain("task_start");
+    expect(kinds).toContain("task_end");
+    // Each progress message uses deliverAs:nextTurn + triggerTurn:false.
+    for (const call of progressCalls) {
+      expect(call[1]).toEqual({ triggerTurn: false, deliverAs: "nextTurn" });
+    }
   });
 
   it("output is truncated to 30000 bytes (head + truncated marker + tail)", async () => {
@@ -167,11 +195,18 @@ describe("spawnLocalShell — timeout path", () => {
     });
     await vi.advanceTimersByTimeAsync(150);
     await promise;
-    expect(pi.sendMessage).not.toHaveBeenCalled();  // 转后台后还没真完成,不发终态
+    // 转后台后还没真完成,不发终态(progress task_start 已发,过滤掉只看 notification)
+    const notificationsBeforeFinish = pi.sendMessage.mock.calls.filter(
+      ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/notification",
+    );
+    expect(notificationsBeforeFinish).toHaveLength(0);
     vi.useRealTimers();
     fake.finish(0);
     await new Promise((r) => setTimeout(r, 50));
-    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    const notificationsAfterFinish = pi.sendMessage.mock.calls.filter(
+      ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/notification",
+    );
+    expect(notificationsAfterFinish).toHaveLength(1);
   });
 
   it("backgrounded then killed → status='killed', no double notify", async () => {
@@ -186,8 +221,11 @@ describe("spawnLocalShell — timeout path", () => {
     await LocalShellTask.kill(r.taskId, store);
     fake.finish(0);
     await new Promise((res) => setTimeout(res, 50));
-    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
-    const msg = pi.sendMessage.mock.calls[0]![0] as { content: string };
+    const notifications = pi.sendMessage.mock.calls.filter(
+      ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/notification",
+    );
+    expect(notifications).toHaveLength(1);
+    const msg = notifications[0]![0] as { content: string };
     expect(msg.content).toContain("<status>killed</status>");
   });
 });
@@ -273,8 +311,12 @@ describe("spawnLocalShell — triggerTurn behaviour", () => {
     await Promise.resolve();
     fake.finish(0);
     await promise;
-    // pi.sendMessage 第二个参数包含 triggerTurn
-    const opts = pi.sendMessage.mock.calls[0]![1] as { triggerTurn?: boolean } | undefined;
+    // 找到 notification 那条调用(progress 调用也用 sendMessage)
+    const notifyCall = pi.sendMessage.mock.calls.find(
+      ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/notification",
+    );
+    expect(notifyCall).toBeDefined();
+    const opts = notifyCall![1] as { triggerTurn?: boolean } | undefined;
     expect(opts?.triggerTurn).toBeFalsy(); // false 或 undefined
   });
 
@@ -289,8 +331,11 @@ describe("spawnLocalShell — triggerTurn behaviour", () => {
     vi.useRealTimers();
     fake.finish(0);
     await new Promise((r) => setTimeout(r, 50));
-    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
-    const opts = pi.sendMessage.mock.calls[0]![1] as { triggerTurn?: boolean } | undefined;
+    const notifyCall = pi.sendMessage.mock.calls.find(
+      ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/notification",
+    );
+    expect(notifyCall).toBeDefined();
+    const opts = notifyCall![1] as { triggerTurn?: boolean } | undefined;
     expect(opts?.triggerTurn).toBe(true);
   });
 });

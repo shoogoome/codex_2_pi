@@ -218,6 +218,86 @@ describe("spawnLocalAgent — recursion guard", () => {
   });
 });
 
+describe("spawnLocalAgent — tasks/progress emission", () => {
+  it("emits task_start / tool_start / tool_end / task_end progress messages", async () => {
+    const fake = makeFakeSession();
+    _setSdkForTest({
+      createAgentSessionServices: vi.fn().mockResolvedValue({}),
+      SessionManagerInMemory: vi.fn(() => ({ getEntries: () => [], appendMessage: vi.fn() })),
+      SessionManagerForkFrom: vi.fn(),
+      createAgentSessionFromServices: vi.fn(async () => ({ session: fake })),
+    });
+    const store = createTaskStore();
+    fakePi.sendMessage.mockClear();
+    const promise = spawnLocalAgent(fakePi, store, {
+      prompt: "do work",
+      agentDef: GENERAL_PURPOSE_AGENT,
+      ctxMessages: [],
+      cwd: "/tmp",
+      timeoutMs: 60_000,
+    });
+    while (Object.keys(store.get()).length === 0) {
+      await new Promise((r) => setImmediate(r));
+    }
+    fake.emit({ type: "tool_execution_start", toolName: "grep", args: { pattern: "foo" } });
+    fake.emit({ type: "tool_execution_end", toolName: "grep", result: { hits: 3 }, isError: false });
+    fake.emit({ type: "agent_end", messages: [] });
+    await promise;
+
+    const progressCalls = fakePi.sendMessage.mock.calls.filter(
+      ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/progress",
+    );
+    const kinds = progressCalls.map(
+      ([msg]: unknown[]) => (msg as { details: { kind: string } }).details.kind,
+    );
+    expect(kinds).toContain("task_start");
+    expect(kinds).toContain("tool_start");
+    expect(kinds).toContain("tool_end");
+    expect(kinds).toContain("task_end");
+
+    // Every progress message uses deliverAs:nextTurn + triggerTurn:false.
+    for (const call of progressCalls) {
+      expect(call[1]).toEqual({ triggerTurn: false, deliverAs: "nextTurn" });
+    }
+  });
+
+  it("tool_start summary contains tool name + args preview", async () => {
+    const fake = makeFakeSession();
+    _setSdkForTest({
+      createAgentSessionServices: vi.fn().mockResolvedValue({}),
+      SessionManagerInMemory: vi.fn(() => ({ getEntries: () => [], appendMessage: vi.fn() })),
+      SessionManagerForkFrom: vi.fn(),
+      createAgentSessionFromServices: vi.fn(async () => ({ session: fake })),
+    });
+    const store = createTaskStore();
+    fakePi.sendMessage.mockClear();
+    const promise = spawnLocalAgent(fakePi, store, {
+      prompt: "do work",
+      agentDef: GENERAL_PURPOSE_AGENT,
+      ctxMessages: [],
+      cwd: "/tmp",
+      timeoutMs: 60_000,
+    });
+    while (Object.keys(store.get()).length === 0) {
+      await new Promise((r) => setImmediate(r));
+    }
+    fake.emit({ type: "tool_execution_start", toolName: "grep", args: { pattern: "foo" } });
+    fake.emit({ type: "agent_end", messages: [] });
+    await promise;
+    const toolStarts = fakePi.sendMessage.mock.calls.filter(
+      ([msg]: unknown[]) =>
+        (msg as { details?: { kind?: string } }).details?.kind === "tool_start",
+    );
+    expect(toolStarts.length).toBe(1);
+    expect((toolStarts[0]![0] as { details: { summary: string } }).details.summary).toContain(
+      "grep",
+    );
+    expect((toolStarts[0]![0] as { details: { summary: string } }).details.summary).toContain(
+      "foo",
+    );
+  });
+});
+
 describe("spawnLocalAgent — registerTask state shape", () => {
   it("registerTask 写入 LocalAgentTaskState,type=local_agent,status=running", async () => {
     const fake = makeFakeSession();

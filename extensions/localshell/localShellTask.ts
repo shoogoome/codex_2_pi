@@ -32,6 +32,7 @@ import {
 import { getTaskOutputPath } from "../tasks/outputPath.js";
 import { generateTaskId } from "../tasks/Task.js";
 import { notifyTaskTerminal } from "../tasks/notifications.js";
+import { emitTaskProgress } from "../tasks/progress.js";
 import { logError } from "../tasks/logging.js";
 import { startStallWatchdog } from "./stallWatchdog.js";
 import { killLocalShellTask } from "./kill.js";
@@ -105,6 +106,15 @@ export function spawnLocalShell(
     isBackgrounded: false,
   };
   registerTask(initial, store);
+
+  // Emit task_start progress to TUI/RPC (NOT into LLM context).
+  emitTaskProgress(pi, {
+    taskId,
+    taskType: "local_bash",
+    kind: "task_start",
+    summary: opts.description,
+    description: opts.description,
+  });
 
   // initTaskOutput fire-and-forget — appendTaskOutput 内部 O_CREAT 兜底。
   // 竞争中 appendTaskOutput 可能先建文件,此时 O_EXCL 会 EEXIST,属预期,静默忽略。
@@ -200,6 +210,14 @@ export function spawnLocalShell(
       toolUseId: opts.toolUseId,
       exitCode: r.exitCode ?? undefined,
     });
+    emitTaskProgress(pi, {
+      taskId,
+      taskType: "local_bash",
+      kind: "task_end",
+      summary: `${finalStatus}${r.exitCode != null ? ` (exit ${r.exitCode})` : ""}`,
+      description: opts.description,
+      exitCode: r.exitCode ?? undefined,
+    });
     const out = await safeRead();
     resolve({
       taskId,
@@ -256,6 +274,14 @@ export function spawnLocalShell(
       toolUseId: opts.toolUseId,
       exitCode: r.exitCode ?? undefined,
       triggerTurn: true, // LLM 已在 "Backgrounded(taskId)" 后走开，需要唤醒
+    });
+    emitTaskProgress(pi, {
+      taskId,
+      taskType: "local_bash",
+      kind: "task_end",
+      summary: `${finalStatus}${r.exitCode != null ? ` (exit ${r.exitCode})` : ""}`,
+      description: opts.description,
+      exitCode: r.exitCode ?? undefined,
     });
     void evictTaskOutput(taskId);
   }

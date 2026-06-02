@@ -16,6 +16,7 @@ import { isTerminalTaskStatus } from "../tasks/Task.js";
 import { updateTaskState } from "../tasks/framework.js";
 import { evictTaskOutput, flushTaskOutput } from "../tasks/diskOutput.js";
 import { notifyTaskTerminal } from "../tasks/notifications.js";
+import { emitTaskProgress } from "../tasks/progress.js";
 import { logError } from "../tasks/logging.js";
 import type { LocalAgentTaskState } from "./types.js";
 import { getProgress, removeProgress } from "./progress.js";
@@ -66,6 +67,14 @@ export async function killLocalAgentTask(
     toolUseId: t.toolUseId,
     triggerTurn: true,
     extra: { agentType: t.agentType, ...getProgress(taskId) },
+  });
+  emitTaskProgress(pi, {
+    taskId,
+    taskType: "local_agent",
+    kind: "kill",
+    summary: "killed by user request",
+    description: t.description,
+    agentType: t.agentType,
   });
   removeProgress(taskId);
   void evictTaskOutput(taskId);
