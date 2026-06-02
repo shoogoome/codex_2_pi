@@ -263,3 +263,34 @@ describe("spawnLocalShell — error path", () => {
     expect(store.getTask(result.taskId)).toBeDefined();
   });
 });
+
+describe("spawnLocalShell — triggerTurn behaviour", () => {
+  it("sync finish notification has triggerTurn=false (LLM already mid-turn)", async () => {
+    const fake = createFakeBashOps();
+    const promise = spawnLocalShell(pi as never, store, {
+      command: "echo hi", description: "say hi", operations: fake.ops,
+    });
+    await Promise.resolve();
+    fake.finish(0);
+    await promise;
+    // pi.sendMessage 第二个参数包含 triggerTurn
+    const opts = pi.sendMessage.mock.calls[0]![1] as { triggerTurn?: boolean } | undefined;
+    expect(opts?.triggerTurn).toBeFalsy(); // false 或 undefined
+  });
+
+  it("backgrounded terminal notification has triggerTurn=true (LLM has walked away)", async () => {
+    const fake = createFakeBashOps();
+    vi.useFakeTimers();
+    const promise = spawnLocalShell(pi as never, store, {
+      command: "sleep 999", description: "long", timeoutMs: 100, operations: fake.ops,
+    });
+    await vi.advanceTimersByTimeAsync(150);
+    await promise;
+    vi.useRealTimers();
+    fake.finish(0);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    const opts = pi.sendMessage.mock.calls[0]![1] as { triggerTurn?: boolean } | undefined;
+    expect(opts?.triggerTurn).toBe(true);
+  });
+});

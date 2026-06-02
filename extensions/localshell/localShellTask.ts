@@ -255,6 +255,7 @@ export function spawnLocalShell(
       outputFile,
       toolUseId: opts.toolUseId,
       exitCode: r.exitCode ?? undefined,
+      triggerTurn: true, // LLM 已在 "Backgrounded(taskId)" 后走开，需要唤醒
     });
     void evictTaskOutput(taskId);
   }
