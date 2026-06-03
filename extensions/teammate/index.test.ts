@@ -209,6 +209,101 @@ describe("teammateExtension entrypoint", () => {
     _setHydrateSdkForTest({});
   });
 
+  it("session_start with hasUI=true sets up widget refresh that responds to team changes", async () => {
+    const handlers = new Map<
+      string,
+      (event: unknown, ctx: unknown) => unknown
+    >();
+    const fakeTasksHandle = {
+      store: createTaskStore(),
+      registerTaskType: vi.fn(),
+      getTaskType: () => undefined,
+      unregisterTaskType: vi.fn(),
+    };
+    const setWidgetMock = vi.fn();
+    const pi: ExtensionAPI = {
+      on: vi.fn((evt: string, h: (e: unknown, c: unknown) => unknown) => {
+        handlers.set(evt, h);
+      }),
+      events: { __pi_tasks_handle__: fakeTasksHandle },
+      registerTool: vi.fn(),
+      sendMessage: vi.fn(),
+      getActiveTools: vi.fn().mockReturnValue([]),
+    } as never;
+    teammateExtension(pi);
+
+    const fakeCtx = {
+      cwd: "/tmp",
+      hasUI: true,
+      ui: { setWidget: setWidgetMock },
+      sessionManager: {
+        getSessionId: () => "s1",
+        getEntries: () => [],
+      },
+    };
+    await handlers.get("session_start")!({}, fakeCtx);
+
+    // Initial refresh: empty teams → setWidget called with undefined
+    expect(setWidgetMock).toHaveBeenCalledWith("teammate-team", undefined);
+
+    // Now create a team via the handle — should trigger refresh
+    const handle = getTeammateHandle(pi);
+    setWidgetMock.mockClear();
+    handle.teamStore.createTeam("research", undefined, 1);
+    expect(setWidgetMock).toHaveBeenCalled();
+    const lastCall =
+      setWidgetMock.mock.calls[setWidgetMock.mock.calls.length - 1]!;
+    expect(lastCall[0]).toBe("teammate-team");
+    expect(Array.isArray(lastCall[1])).toBe(true);
+    expect(lastCall[2]).toEqual({ placement: "belowEditor" });
+
+    // Cleanup so next tests are not affected by lingering listeners
+    await handlers.get("session_shutdown")!({}, fakeCtx);
+  });
+
+  it("session_start with hasUI=false skips widget setup", async () => {
+    const handlers = new Map<
+      string,
+      (event: unknown, ctx: unknown) => unknown
+    >();
+    const fakeTasksHandle = {
+      store: createTaskStore(),
+      registerTaskType: vi.fn(),
+      getTaskType: () => undefined,
+      unregisterTaskType: vi.fn(),
+    };
+    const setWidgetMock = vi.fn();
+    const pi: ExtensionAPI = {
+      on: vi.fn((evt: string, h: (e: unknown, c: unknown) => unknown) => {
+        handlers.set(evt, h);
+      }),
+      events: { __pi_tasks_handle__: fakeTasksHandle },
+      registerTool: vi.fn(),
+      sendMessage: vi.fn(),
+      getActiveTools: vi.fn().mockReturnValue([]),
+    } as never;
+    teammateExtension(pi);
+
+    const fakeCtx = {
+      cwd: "/tmp",
+      hasUI: false,
+      ui: { setWidget: setWidgetMock },
+      sessionManager: {
+        getSessionId: () => "s1",
+        getEntries: () => [],
+      },
+    };
+    await handlers.get("session_start")!({}, fakeCtx);
+    expect(setWidgetMock).not.toHaveBeenCalled();
+
+    // Mutating the store should also not trigger setWidget (no subscription)
+    const handle = getTeammateHandle(pi);
+    handle.teamStore.createTeam("research", undefined, 1);
+    expect(setWidgetMock).not.toHaveBeenCalled();
+
+    await handlers.get("session_shutdown")!({}, fakeCtx);
+  });
+
   it("session_start hydration failure does not break extension load", async () => {
     // Make getEntries throw to simulate corrupt session
     const handlers = new Map<
