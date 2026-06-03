@@ -330,3 +330,63 @@ export async function respawnTeammates(
 
   return { respawned, skipped };
 }
+
+// ---------- Task A.8: hydrate team_task slice into TeamTaskStore ----------
+
+/**
+ * Replay the team_task slice into the in-memory TeamTaskStore.
+ *
+ * Called from session_start after `hydrateTeammateState`. The reducer has
+ * already produced the final state of every team_task surviving create →
+ * update → delete; we just have to copy it into the store so subsequent
+ * tool calls (team_task_list etc.) see the historical state immediately.
+ *
+ * Idempotent: tasks already present in the store are skipped, so repeated
+ * session_start cycles don't double-insert.
+ *
+ * Reverse `blocks` invariant: store.createTask re-derives the reverse
+ * reference from each new task's `blockedBy` against upstreams already in
+ * the store. Object.values() preserves insertion order (= the reducer's
+ * processing order, typically createdAt order), so upstreams are usually
+ * hydrated before their downstreams and reverse refs accumulate
+ * naturally. Edge case: if a downstream is hydrated first, its upstream's
+ * `blocks` will be missing that downstream id — known trade-off, see
+ * spec §2.5.
+ */
+export function hydrateTeamTaskStore(
+  state: ReplayedState,
+  handle: TeammateHandle,
+): { hydrated: number; skipped: number } {
+  let hydrated = 0;
+  let skipped = 0;
+  for (const task of Object.values(state.teamTasks)) {
+    if (handle.teamTaskStore.getTask(task.id)) {
+      skipped++;
+      continue;
+    }
+    const created = handle.teamTaskStore.createTask({
+      id: task.id,
+      teamName: task.teamName,
+      subject: task.subject,
+      description: task.description,
+      owner: task.owner,
+      blockedBy: task.blockedBy,
+      metadata: task.metadata,
+      createdAt: task.createdAt,
+    });
+    if (!created) {
+      skipped++;
+      continue;
+    }
+    // createTask sets status:"pending" and updatedAt:createdAt — apply
+    // overrides via updateTask only when needed.
+    if (task.status !== "pending" || task.updatedAt !== task.createdAt) {
+      handle.teamTaskStore.updateTask(task.id, {
+        status: task.status,
+        updatedAt: task.updatedAt,
+      });
+    }
+    hydrated++;
+  }
+  return { hydrated, skipped };
+}

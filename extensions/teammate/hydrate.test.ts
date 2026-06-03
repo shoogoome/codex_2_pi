@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   hydrateTeammateState,
+  hydrateTeamTaskStore,
   respawnTeammates,
   _setHydrateSdkForTest,
   type SessionEntryLike,
@@ -18,6 +19,7 @@ import { createMailbox } from "./mailbox.js";
 import { createTeamTaskStore } from "./teamTasks/teamTaskStore.js";
 import type { TeammateHandle } from "./handle.js";
 import type { ReplayedState } from "./jsonlEvents.js";
+import type { TeamTask } from "./teamTasks/types.js";
 
 const t1id = {
   agentId: "r@t1",
@@ -554,5 +556,124 @@ describe("respawnTeammates", () => {
     expect(msg.details.kind).toBe("idle");
     expect(msg.details.agentId).toBe("alice@t1");
     expect(opts).toEqual({ triggerTurn: false });
+  });
+});
+
+function buildHandle(): TeammateHandle {
+  return {
+    teamStore: createTeamStore(),
+    mailbox: createMailbox(),
+    teamTaskStore: createTeamTaskStore(),
+  };
+}
+
+function buildTask(overrides: Partial<TeamTask>): TeamTask {
+  return {
+    id: "tt-1",
+    teamName: "research",
+    subject: "investigate X",
+    status: "pending",
+    blockedBy: [],
+    blocks: [],
+    createdAt: 100,
+    updatedAt: 100,
+    ...overrides,
+  };
+}
+
+describe("hydrateTeamTaskStore", () => {
+  it("copies state.teamTasks into the store (basic case: 2 tasks)", () => {
+    const t1 = buildTask({ id: "tt-1", subject: "first" });
+    const t2 = buildTask({ id: "tt-2", subject: "second", createdAt: 200, updatedAt: 200 });
+    const state: ReplayedState = {
+      teams: {},
+      teammates: {},
+      teamTasks: { "tt-1": t1, "tt-2": t2 },
+    };
+    const handle = buildHandle();
+    const result = hydrateTeamTaskStore(state, handle);
+    expect(result).toEqual({ hydrated: 2, skipped: 0 });
+    expect(handle.teamTaskStore.list()).toHaveLength(2);
+    expect(handle.teamTaskStore.getTask("tt-1")?.subject).toBe("first");
+    expect(handle.teamTaskStore.getTask("tt-2")?.subject).toBe("second");
+  });
+
+  it("idempotent: skips tasks already present in the store", () => {
+    const t1 = buildTask({ id: "tt-1" });
+    const state: ReplayedState = {
+      teams: {},
+      teammates: {},
+      teamTasks: { "tt-1": t1 },
+    };
+    const handle = buildHandle();
+    // First call hydrates; second call should be a no-op (skipped:1).
+    const r1 = hydrateTeamTaskStore(state, handle);
+    expect(r1).toEqual({ hydrated: 1, skipped: 0 });
+    const r2 = hydrateTeamTaskStore(state, handle);
+    expect(r2).toEqual({ hydrated: 0, skipped: 1 });
+    expect(handle.teamTaskStore.list()).toHaveLength(1);
+  });
+
+  it("applies non-default status via updateTask", () => {
+    const t1 = buildTask({ id: "tt-1", status: "in_progress" });
+    const state: ReplayedState = {
+      teams: {},
+      teammates: {},
+      teamTasks: { "tt-1": t1 },
+    };
+    const handle = buildHandle();
+    hydrateTeamTaskStore(state, handle);
+    expect(handle.teamTaskStore.getTask("tt-1")?.status).toBe("in_progress");
+  });
+
+  it("applies updatedAt > createdAt via updateTask", () => {
+    const t1 = buildTask({ id: "tt-1", createdAt: 100, updatedAt: 250 });
+    const state: ReplayedState = {
+      teams: {},
+      teammates: {},
+      teamTasks: { "tt-1": t1 },
+    };
+    const handle = buildHandle();
+    hydrateTeamTaskStore(state, handle);
+    expect(handle.teamTaskStore.getTask("tt-1")?.updatedAt).toBe(250);
+    expect(handle.teamTaskStore.getTask("tt-1")?.createdAt).toBe(100);
+  });
+
+  it("reverse blocks re-accumulate when upstream is hydrated before downstream", () => {
+    const upstream = buildTask({
+      id: "tt-up",
+      subject: "upstream",
+      createdAt: 100,
+      updatedAt: 100,
+      blockedBy: [],
+      blocks: ["tt-down"],
+    });
+    const downstream = buildTask({
+      id: "tt-down",
+      subject: "downstream",
+      createdAt: 200,
+      updatedAt: 200,
+      blockedBy: ["tt-up"],
+      blocks: [],
+    });
+    // Object.values preserves insertion order — upstream first, downstream second.
+    const state: ReplayedState = {
+      teams: {},
+      teammates: {},
+      teamTasks: { "tt-up": upstream, "tt-down": downstream },
+    };
+    const handle = buildHandle();
+    const result = hydrateTeamTaskStore(state, handle);
+    expect(result.hydrated).toBe(2);
+    expect(handle.teamTaskStore.getTask("tt-up")?.blocks).toEqual(["tt-down"]);
+    expect(handle.teamTaskStore.getTask("tt-down")?.blockedBy).toEqual(["tt-up"]);
+  });
+
+  it("empty state.teamTasks → 0 hydrated, 0 skipped", () => {
+    const state: ReplayedState = { teams: {}, teammates: {}, teamTasks: {} };
+    const handle = buildHandle();
+    const result = hydrateTeamTaskStore(state, handle);
+    expect(result).toEqual({ hydrated: 0, skipped: 0 });
+    expect(handle.teamTaskStore.list()).toEqual([]);
   });
 });

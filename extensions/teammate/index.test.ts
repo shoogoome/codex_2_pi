@@ -309,6 +309,77 @@ describe("teammateExtension entrypoint", () => {
     _setHydrateSdkForTest({});
   });
 
+  it("session_start hydrates team_task_* events into the teamTaskStore", async () => {
+    const handlers = new Map<
+      string,
+      (event: unknown, ctx: unknown) => unknown
+    >();
+    const fakeTasksHandle = {
+      store: createTaskStore(),
+      registerTaskType: vi.fn(),
+      getTaskType: () => undefined,
+      unregisterTaskType: vi.fn(),
+    };
+    const pi: ExtensionAPI = {
+      on: vi.fn((evt: string, handler: (e: unknown, c: unknown) => unknown) => {
+        handlers.set(evt, handler);
+      }),
+      events: { __pi_tasks_handle__: fakeTasksHandle },
+      registerTool: vi.fn(),
+      sendMessage: vi.fn(),
+      getActiveTools: vi.fn().mockReturnValue([]),
+    } as never;
+
+    teammateExtension(pi);
+
+    const fakeCtx = {
+      cwd: "/tmp",
+      sessionManager: {
+        getSessionId: () => "s1",
+        getEntries: () => [
+          {
+            type: "custom_message",
+            customType: TEAMMATE_EVENT_CUSTOM_TYPE,
+            details: {
+              kind: "team_task_create",
+              task: {
+                id: "tt-1",
+                teamName: "research",
+                subject: "investigate X",
+                status: "pending",
+                blockedBy: [],
+                blocks: [],
+                createdAt: 100,
+                updatedAt: 100,
+              },
+            },
+          },
+          {
+            type: "custom_message",
+            customType: TEAMMATE_EVENT_CUSTOM_TYPE,
+            details: {
+              kind: "team_task_update",
+              taskId: "tt-1",
+              teamName: "research",
+              patch: { status: "in_progress" },
+              updatedAt: 200,
+            },
+          },
+        ],
+      },
+    };
+
+    const sessionStart = handlers.get("session_start")!;
+    await sessionStart({}, fakeCtx);
+
+    const handle = getTeammateHandle(pi);
+    const task = handle.teamTaskStore.getTask("tt-1");
+    expect(task).toBeDefined();
+    expect(task?.subject).toBe("investigate X");
+    expect(task?.status).toBe("in_progress");
+    expect(task?.updatedAt).toBe(200);
+  });
+
   it("session_start with hasUI=true sets up widget refresh that responds to team changes", async () => {
     const handlers = new Map<
       string,

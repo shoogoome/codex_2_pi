@@ -18,7 +18,7 @@ import { buildTeamTaskCreateTool } from "./teamTasks/tools/teamTaskCreate.js";
 import { buildTeamTaskUpdateTool } from "./teamTasks/tools/teamTaskUpdate.js";
 import { buildTeamTaskListTool } from "./teamTasks/tools/teamTaskList.js";
 import { buildTeamTaskGetTool } from "./teamTasks/tools/teamTaskGet.js";
-import { hydrateTeammateState, respawnTeammates } from "./hydrate.js";
+import { hydrateTeammateState, hydrateTeamTaskStore, respawnTeammates } from "./hydrate.js";
 import { logError } from "../tasks/logging.js";
 import { renderTeamWidget } from "./ui/teamWidget.js";
 import { isInProcessTeammateTask } from "./types.js";
@@ -113,6 +113,7 @@ export default function teammateExtension(pi: ExtensionAPI): void {
     try {
       const entries = ctx.sessionManager.getEntries();
       const state = hydrateTeammateState(entries as never);
+      hydrateTeamTaskStore(state, handle);
       await respawnTeammates(state, {
         pi,
         taskStore: tasksHandle.store,
