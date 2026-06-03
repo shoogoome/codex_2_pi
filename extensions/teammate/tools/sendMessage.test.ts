@@ -4,7 +4,7 @@ import { attachTeammateHandle } from "../handle.js";
 import { createTeamStore } from "../teamStore.js";
 import { createMailbox } from "../mailbox.js";
 import { runAsTeammate } from "../als.js";
-import { buildShutdownRequest } from "../shutdownHandshake.js";
+import { buildShutdownRequest, buildShutdownResponse } from "../shutdownHandshake.js";
 import type { TeammateIdentity, MailboxMessage } from "../types.js";
 
 function buildPi(): {
@@ -158,5 +158,100 @@ describe("send_message tool — basics", () => {
     const tool = buildSendMessageTool(pi as never);
     const result = await tool.execute("c8", { to: "alpha", message: "" } as never, undefined as never, undefined, {} as never);
     expect((result as { isError?: boolean }).isError).toBe(true);
+  });
+});
+
+describe("send_message — protocol event emission", () => {
+  it("when body is shutdown_request → emits both message_sent and shutdown_request events", async () => {
+    const pi = buildPi();
+    const mailbox = createMailbox();
+    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox });
+    mailbox.registerReceiver("alpha", vi.fn());
+
+    const tool = buildSendMessageTool(pi as never);
+    const reqBody = buildShutdownRequest("req-99");
+    await tool.execute(
+      "c",
+      { to: "alpha", message: reqBody } as never,
+      undefined as never,
+      undefined,
+      {} as never,
+    );
+
+    const events = pi.sendMessage.mock.calls
+      .filter(
+        ([m]: unknown[]) => (m as { customType?: string }).customType === "teammate/event",
+      )
+      .map(([m]: unknown[]) => (m as { details: Record<string, unknown> }).details);
+
+    const messageSent = events.find(
+      (e: Record<string, unknown>) => e.kind === "message_sent",
+    );
+    const shutdownReq = events.find(
+      (e: Record<string, unknown>) => e.kind === "shutdown_request",
+    );
+    expect(messageSent).toBeDefined();
+    expect(shutdownReq).toBeDefined();
+    expect((shutdownReq as { agentId: string }).agentId).toBe("alpha");
+    expect((shutdownReq as { requestId: string }).requestId).toBe("req-99");
+  });
+
+  it("when body is shutdown_response → emits both message_sent and shutdown_response events", async () => {
+    const pi = buildPi();
+    const mailbox = createMailbox();
+    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox });
+    mailbox.registerReceiver("alpha", vi.fn());
+
+    const tool = buildSendMessageTool(pi as never);
+    const respBody = buildShutdownResponse("req-99", true, "ack");
+    await tool.execute(
+      "c",
+      { to: "alpha", message: respBody } as never,
+      undefined as never,
+      undefined,
+      {} as never,
+    );
+
+    const events = pi.sendMessage.mock.calls
+      .filter(
+        ([m]: unknown[]) => (m as { customType?: string }).customType === "teammate/event",
+      )
+      .map(([m]: unknown[]) => (m as { details: Record<string, unknown> }).details);
+
+    const shutdownResp = events.find(
+      (e: Record<string, unknown>) => e.kind === "shutdown_response",
+    );
+    expect(shutdownResp).toBeDefined();
+    expect((shutdownResp as { agentId: string }).agentId).toBe("alpha");
+    expect((shutdownResp as { requestId: string }).requestId).toBe("req-99");
+    expect((shutdownResp as { approve: boolean }).approve).toBe(true);
+  });
+
+  it("plain text body emits only message_sent (no shutdown_* events)", async () => {
+    const pi = buildPi();
+    const mailbox = createMailbox();
+    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox });
+    mailbox.registerReceiver("alpha", vi.fn());
+
+    const tool = buildSendMessageTool(pi as never);
+    await tool.execute(
+      "c",
+      { to: "alpha", message: "plain text" } as never,
+      undefined as never,
+      undefined,
+      {} as never,
+    );
+
+    const kinds = pi.sendMessage.mock.calls
+      .filter(
+        ([m]: unknown[]) => (m as { customType?: string }).customType === "teammate/event",
+      )
+      .map(
+        ([m]: unknown[]) =>
+          (m as { details: { kind: string } }).details.kind,
+      );
+    expect(kinds).toContain("message_sent");
+    expect(kinds).not.toContain("shutdown_request");
+    expect(kinds).not.toContain("shutdown_response");
   });
 });

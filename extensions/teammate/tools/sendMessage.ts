@@ -4,7 +4,7 @@ import { Type } from "typebox";
 import { getTeammateHandle } from "../handle.js";
 import { getCurrentTeammate } from "../als.js";
 import { emitTeammateEvent } from "../eventEmit.js";
-import { detectShutdownProtocol } from "../shutdownHandshake.js";
+import { detectShutdownProtocol, parseShutdownRequest, parseShutdownResponse } from "../shutdownHandshake.js";
 import type { MailboxMessage } from "../types.js";
 
 const SendMessageParams = Type.Object({
@@ -76,6 +76,29 @@ export function buildSendMessageTool(
 
       handle.mailbox.send(msg);
       emitTeammateEvent(pi, { kind: "message_sent", msg });
+
+      const protocol = detectShutdownProtocol(body);
+      if (protocol === "request") {
+        const req = parseShutdownRequest(body);
+        if (req) {
+          emitTeammateEvent(pi, {
+            kind: "shutdown_request",
+            agentId: to,
+            requestId: req.request_id,
+          });
+        }
+      } else if (protocol === "response") {
+        const resp = parseShutdownResponse(body);
+        if (resp) {
+          emitTeammateEvent(pi, {
+            kind: "shutdown_response",
+            agentId: to,
+            requestId: resp.request_id,
+            approve: resp.approve,
+            ...(resp.feedback !== undefined ? { feedback: resp.feedback } : {}),
+          });
+        }
+      }
 
       return {
         content: [{ type: "text" as const, text: `Message sent to ${to}` }],
