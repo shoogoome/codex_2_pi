@@ -34,6 +34,7 @@ import {
 } from "./jsonlEvents.js";
 import type { TeammateHandle } from "./handle.js";
 import { startTeammateLoop } from "./teammateLoop.js";
+import { filterTeammateTools } from "./teammateToolPool.js";
 import {
   isInProcessTeammateTask,
   type InProcessTeammateTaskState,
@@ -98,12 +99,6 @@ export function _setHydrateSdkForTest(
   _hydrateSdk = { ..._hydrateSdkDefaults, ...bindings };
 }
 
-const TEAMMATE_TOOLS_BLOCKLIST = new Set([
-  "task_agent",
-  "team_create",
-  "team_delete",
-]);
-
 export interface RespawnContext {
   pi: ExtensionAPI;
   taskStore: TaskStore;
@@ -117,11 +112,13 @@ export interface RespawnContext {
  * For each teammate whose `lastStatus === "running"`:
  *   1. Open the persisted SessionManager from `sessionFile`.
  *   2. Build services + AgentSession with the same tool blocklist as
- *      `spawnTeammate` (no `task_agent` / `team_create` / `team_delete`).
+ *      `spawnTeammate` (recursion guards + write-class tools — see
+ *      teammateToolPool.ts).
  *   3. Register the task in TaskStore with the replayed identity.
  *   4. Ensure the team exists in teamStore and add the agentId as a member.
  *   5. Start `teammateLoop` in resume mode (`initialPrompt: undefined`) so
- *      the loop goes straight to idle waiting on the mailbox.
+ *      the loop goes straight to idle waiting on the mailbox. No prompt
+ *      boilerplate is prepended on resume — there's no prompt to prepend to.
  *
  * Processes serially (`for ... await`) to avoid races during rebuild.
  * Idempotent: if a running teammate task with the same `agentId` already
@@ -168,9 +165,7 @@ export async function respawnTeammates(
     const sm = _hydrateSdk.SessionManagerOpen(replayed.sessionFile);
     const services = await _hydrateSdk.createAgentSessionServices({ cwd: ctx.cwd });
     const allTools = ctx.pi.getActiveTools();
-    const tools = allTools.filter(
-      (name) => !TEAMMATE_TOOLS_BLOCKLIST.has(name),
-    );
+    const tools = filterTeammateTools(allTools);
     const { session: sessionUnknown } =
       await _hydrateSdk.createAgentSessionFromServices({
         services,

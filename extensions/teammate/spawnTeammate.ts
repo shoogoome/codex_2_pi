@@ -39,6 +39,8 @@ import { emitTeammateEvent } from "./eventEmit.js";
 import { getLeaderChannel } from "./leaderBridge.js";
 import { postLeaderNotification } from "./leaderNotification.js";
 import { startTeammateLoop } from "./teammateLoop.js";
+import { filterTeammateTools } from "./teammateToolPool.js";
+import { prependBoilerplate } from "./teammatePromptBoilerplate.js";
 import { buildTeammateSendMessageTool } from "./tools/teammateSendMessage.js";
 import {
   buildRequestPlanApprovalTool,
@@ -103,12 +105,6 @@ function sanitize(s: string): string {
   return s.replace(SAFE_PATH_RE, "-");
 }
 
-const TEAMMATE_TOOLS_BLOCKLIST = new Set([
-  "task_agent",
-  "team_create",
-  "team_delete",
-]);
-
 function findRunningTeammateByAgentId(
   taskStore: TaskStore,
   agentId: string,
@@ -161,10 +157,12 @@ export async function spawnTeammate(
     throw new Error("SessionManager.create did not produce a session file");
   }
 
-  // 3. Tool pool — all active tools minus self-spawning ones (recursion guard).
+  // 3. Tool pool — all active tools minus self-spawning ones (recursion
+  //    guard, D1) and write-class tools (D2 Module C / Path B). See
+  //    teammateToolPool.ts for the full blocklist.
   const services = await _sdk.createAgentSessionServices({ cwd: opts.cwd });
   const allTools = pi.getActiveTools();
-  const tools = allTools.filter((name) => !TEAMMATE_TOOLS_BLOCKLIST.has(name));
+  const tools = filterTeammateTools(allTools);
 
   // Identity is needed BEFORE session creation so we can inject an
   // identity-bound send_message as a customTool. The generic extension-
@@ -273,10 +271,14 @@ export async function spawnTeammate(
     abortController,
   }));
 
-  // 7. start the teammateLoop
+  // 7. start the teammateLoop. Prepend the D2/Path-B boilerplate so the
+  //    teammate LLM understands why bash/write/edit are absent and uses
+  //    send_message{to:"leader"} to request them. See spec §4.2.
+  const augmentedPrompt = prependBoilerplate(opts.prompt, identity);
+
   startTeammateLoop({
     identity,
-    initialPrompt: opts.prompt,
+    initialPrompt: augmentedPrompt,
     session,
     mailbox: handle.mailbox,
     pendingApprovals,

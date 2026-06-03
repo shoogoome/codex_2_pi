@@ -123,7 +123,16 @@ describe("spawnTeammate — happy path", () => {
     // Wait microtasks for loop to fire prompt
     await new Promise((r) => setImmediate(r));
     await new Promise((r) => setImmediate(r));
-    expect(promptFn).toHaveBeenCalledWith("go");
+    // The teammate's initial prompt is the user-supplied prompt prepended
+    // with the D2/Path-B boilerplate (explains missing bash/write/edit and
+    // points to send_message{to:"leader"} as the cooperative escape).
+    expect(promptFn).toHaveBeenCalledTimes(1);
+    const sentPrompt = promptFn.mock.calls[0]![0] as string;
+    expect(sentPrompt.endsWith("go")).toBe(true);
+    expect(sentPrompt).toContain("没有 bash / write / edit");
+    expect(sentPrompt).toContain("send_message");
+    expect(sentPrompt).toContain("alice");
+    expect(sentPrompt).toContain("research");
   });
 
   it("filters out task_agent / team_create / team_delete from teammate's tool pool", async () => {
@@ -144,6 +153,12 @@ describe("spawnTeammate — happy path", () => {
       "team_create",
       "team_delete",
       "send_message",
+      // D2 Module C / Path B — write-class tools must also be filtered.
+      "bash",
+      "write",
+      "edit",
+      "task_bash",
+      "task_kill",
     ]);
     _setSdkForTest({
       createAgentSessionFromServices: createSessionMock,
@@ -167,6 +182,12 @@ describe("spawnTeammate — happy path", () => {
     expect(args.tools).not.toContain("task_agent");
     expect(args.tools).not.toContain("team_create");
     expect(args.tools).not.toContain("team_delete");
+    // D2 Path B: write-class tools must be absent from teammate pool.
+    expect(args.tools).not.toContain("bash");
+    expect(args.tools).not.toContain("write");
+    expect(args.tools).not.toContain("edit");
+    expect(args.tools).not.toContain("task_bash");
+    expect(args.tools).not.toContain("task_kill");
 
     // An identity-bound send_message must be injected as a customTool so the
     // teammate sub-session can resolve its sender without cross-realm ALS.
