@@ -116,6 +116,31 @@ describe("teammateExtension entrypoint", () => {
     expect(handlers.has("session_start")).toBe(true);
   });
 
+  it("registers all four team_task_* tools at the factory top-level (same rationale as send_message)", () => {
+    // Teammate sub-sessions never fire session_start, so anything they need
+    // must register synchronously at extension-load. Per spec §2.4 the team
+    // task list is for leader↔teammate collaboration: all four tools must be
+    // visible to teammates as well as the leader.
+    const { pi, handlers } = buildFakePi();
+    teammateExtension(pi as never);
+    const namesAtLoad = pi.registerTool.mock.calls.map(
+      (c: unknown[]) => (c[0] as { name: string }).name,
+    );
+    expect(namesAtLoad).toEqual(
+      expect.arrayContaining([
+        "team_task_create",
+        "team_task_update",
+        "team_task_list",
+        "team_task_get",
+      ]),
+    );
+    // Leader-only tools still gated behind session_start.
+    expect(namesAtLoad).not.toContain("team_create");
+    expect(namesAtLoad).not.toContain("team_delete");
+    // session_start has not been fired — proving these registered at top-level.
+    expect(handlers.has("session_start")).toBe(true);
+  });
+
   it("session_start registers the leader-only tools (team_create + team_delete)", async () => {
     const { pi, handlers } = buildFakePi();
     teammateExtension(pi as never);

@@ -14,6 +14,10 @@ import {
 import { buildTeamCreateTool } from "./tools/teamCreate.js";
 import { buildSendMessageTool } from "./tools/sendMessage.js";
 import { buildTeamDeleteTool } from "./tools/teamDelete.js";
+import { buildTeamTaskCreateTool } from "./teamTasks/tools/teamTaskCreate.js";
+import { buildTeamTaskUpdateTool } from "./teamTasks/tools/teamTaskUpdate.js";
+import { buildTeamTaskListTool } from "./teamTasks/tools/teamTaskList.js";
+import { buildTeamTaskGetTool } from "./teamTasks/tools/teamTaskGet.js";
 import { hydrateTeammateState, respawnTeammates } from "./hydrate.js";
 import { logError } from "../tasks/logging.js";
 import { renderTeamWidget } from "./ui/teamWidget.js";
@@ -50,6 +54,17 @@ export default function teammateExtension(pi: ExtensionAPI): void {
   // getTeammateHandle(pi) inside execute(), at call time — not at registration
   // time — so it does not depend on session_start having attached the handle.
   pi.registerTool(buildSendMessageTool(pi));
+
+  // The four team_task_* tools register at the factory top-level for the same
+  // reason as send_message: teammate sub-sessions need them and never fire
+  // session_start. Per spec §2.4, the team task list is meant for leader↔
+  // teammate collaboration, so all sides need access. (leader-only
+  // team_create / team_delete remain in session_start; the spawnTeammate
+  // blocklist strips those from teammates anyway.)
+  pi.registerTool(buildTeamTaskCreateTool(pi));
+  pi.registerTool(buildTeamTaskUpdateTool(pi));
+  pi.registerTool(buildTeamTaskListTool(pi));
+  pi.registerTool(buildTeamTaskGetTool(pi));
 
   // Module-scoped (per extension instance) — survives across session_start /
   // session_shutdown reload cycles so we can clean up subscribers from a
