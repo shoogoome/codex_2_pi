@@ -103,4 +103,13 @@ describe("team_create tool", () => {
     expect((result as { isError?: boolean }).isError).toBe(true);
     expect((result.content[0] as { text: string }).text).toMatch(/non-empty/i);
   });
+
+  it("description guides the LLM to trust auto-delivery and avoid polling", () => {
+    const tool = buildTeamCreateTool(pi as never);
+    // Auto-delivery guidance must be present so LLMs stop polling task_status.
+    expect(tool.description).toMatch(/Automatic Message Delivery/);
+    expect(tool.description).toMatch(/AUTOMATICALLY DELIVERED/);
+    expect(tool.description).toMatch(/Teammate Idle State/);
+    expect(tool.description).toMatch(/Don't poll status/);
+  });
 });
