@@ -1,6 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { installTeammateEventContextFilter } from "./eventEmit.js";
 
 export default function teammateExtension(pi: ExtensionAPI): void {
+  installTeammateEventContextFilter(pi);
+
   pi.on("session_start", () => {
     // wired in later tasks
   });
