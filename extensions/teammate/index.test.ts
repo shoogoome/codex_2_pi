@@ -141,9 +141,17 @@ describe("teammateExtension entrypoint", () => {
     expect(handlers.has("session_start")).toBe(true);
   });
 
-  it("session_start registers the leader-only tools (team_create + team_delete)", async () => {
+  it("session_start registers the leader-only tools (team_create + team_delete + team_plan_approve)", async () => {
     const { pi, handlers } = buildFakePi();
     teammateExtension(pi as never);
+    // Snapshot top-level registrations: team_plan_approve must NOT be there
+    // — it is leader-only and gated behind session_start, just like
+    // team_create / team_delete.
+    const namesAtLoad = pi.registerTool.mock.calls.map(
+      (c: unknown[]) => (c[0] as { name: string }).name,
+    );
+    expect(namesAtLoad).not.toContain("team_plan_approve");
+
     pi.registerTool.mockClear();
     const start = handlers.get("session_start")!;
     await start(
@@ -158,6 +166,7 @@ describe("teammateExtension entrypoint", () => {
     );
     expect(names).toContain("team_create");
     expect(names).toContain("team_delete");
+    expect(names).toContain("team_plan_approve");
     // send_message is registered at top-level, not in session_start.
     expect(names).not.toContain("send_message");
   });

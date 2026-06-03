@@ -14,6 +14,7 @@ import {
 import { buildTeamCreateTool } from "./tools/teamCreate.js";
 import { buildSendMessageTool } from "./tools/sendMessage.js";
 import { buildTeamDeleteTool } from "./tools/teamDelete.js";
+import { buildTeamPlanApproveTool } from "./tools/teamPlanApprove.js";
 import { buildTeamTaskCreateTool } from "./teamTasks/tools/teamTaskCreate.js";
 import { buildTeamTaskUpdateTool } from "./teamTasks/tools/teamTaskUpdate.js";
 import { buildTeamTaskListTool } from "./teamTasks/tools/teamTaskList.js";
@@ -106,6 +107,7 @@ export default function teammateExtension(pi: ExtensionAPI): void {
     // them here keeps them off teammates while still available to the leader.
     pi.registerTool(buildTeamCreateTool(pi));
     pi.registerTool(buildTeamDeleteTool(pi));
+    pi.registerTool(buildTeamPlanApproveTool(pi));
 
     // Hydrate teammates from the parent session's jsonl. Failures must not
     // break session_start — a corrupt or unreadable jsonl should still allow
