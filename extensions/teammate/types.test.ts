@@ -44,6 +44,7 @@ describe("isInProcessTeammateTask", () => {
       kind: "team_create",
       teamName: "t1",
       description: "test",
+      createdAt: 1,
     };
     const e2: import("./types.js").TeammateEvent = {
       kind: "teammate_spawn",

@@ -86,7 +86,12 @@ export interface TeamState {
  * `hydrate.ts` reduce 还原 teams + teammates 集合。
  */
 export type TeammateEvent =
-  | { kind: "team_create"; teamName: string; description?: string }
+  | {
+      kind: "team_create";
+      teamName: string;
+      description?: string;
+      createdAt: number;
+    }
   | { kind: "team_delete"; teamName: string }
   | {
       kind: "teammate_spawn";
