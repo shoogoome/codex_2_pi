@@ -3,6 +3,13 @@ import { installTeammateEventContextFilter } from "./eventEmit.js";
 import { attachTeammateHandle, type TeammateHandle } from "./handle.js";
 import { createTeamStore } from "./teamStore.js";
 import { createMailbox } from "./mailbox.js";
+import { getTasksHandle } from "../tasks/handle.js";
+import { getRunningTasks } from "../tasks/framework.js";
+import {
+  _bindPi,
+  _unbindPi,
+  InProcessTeammateTask,
+} from "./killTeammate.js";
 
 export default function teammateExtension(pi: ExtensionAPI): void {
   const teamStore = createTeamStore();
@@ -13,10 +20,23 @@ export default function teammateExtension(pi: ExtensionAPI): void {
   installTeammateEventContextFilter(pi);
 
   pi.on("session_start", () => {
-    // wired in later tasks
+    _bindPi(pi);
+    const tasksHandle = getTasksHandle(pi);
+    tasksHandle.registerTaskType("in_process_teammate", InProcessTeammateTask);
   });
 
   pi.on("session_shutdown", async () => {
+    const tasksHandle = getTasksHandle(pi);
+    const running = getRunningTasks(tasksHandle.store.get()).filter(
+      (t) => t.type === "in_process_teammate",
+    );
+    await Promise.all(
+      running.map((t) =>
+        InProcessTeammateTask.kill(t.id, tasksHandle.store),
+      ),
+    );
+    tasksHandle.unregisterTaskType("in_process_teammate");
+    _unbindPi();
     teamStore._resetForTest();
     mailbox._resetForTest();
   });

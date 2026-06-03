@@ -272,12 +272,22 @@ export async function spawnTeammate(
       }));
     },
     onTerminal: (reason) => {
+      // If killTeammate already handled this (notified=true), it has flipped
+      // status, emitted teammate_terminal, removed the member, disposed the
+      // session, and evicted output. Nothing left to do — skip to avoid
+      // double-emit / double-dispose races.
+      const cur = taskStore.getTask(taskId) as
+        | InProcessTeammateTaskState
+        | undefined;
+      if (cur?.notified) return;
+
       const terminalStatus: "completed" | "killed" =
         reason === "shutdown" ? "completed" : "killed";
       updateTaskState<InProcessTeammateTaskState>(taskId, taskStore, (t) => ({
         ...t,
         status: terminalStatus,
         endTime: Date.now(),
+        notified: true,
       }));
       emitTeammateEvent(pi, {
         kind: "teammate_terminal",
