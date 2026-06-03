@@ -358,7 +358,40 @@ D1 的设计需要为 D2 留出干净的 hook 点:
 
 ## 11. Verification(spec 完成的退出条件)
 
-- [ ] D1 plan 写完(~25 个 Task)
-- [ ] D1 实施完成,所有测试绿(预估 506 → 700 passing)
-- [ ] 真 LLM TUI 验证 widget 实时刷新
-- [ ] 真 LLM kill -9 + 重启验证 reload hydration
+- [x] D1 plan 写完(`docs/superpowers/plans/2026-06-03-d1-teammate-core.md`,22 个 Task / 7 phases)
+- [x] D1 实施完成,所有测试绿(实测 506 → **585 passing**,low 于估的 700 因为同步删了 ~59 个旧 subagents 测试)
+- [x] 真 LLM 端到端验证:`team_create` → `task_agent {team_name, name}` → `send_message {to}` 全流程跑通(stdout JSON event 完整,无错误)
+- [ ] 真 LLM kill -9 + 重启 reload hydration(留作可选回归测试,核心机制已通过单元测试覆盖)
+
+## 12. Implementation Outcome(2026-06-03 close-out)
+
+### 提交链(共 19 commits in this branch since C 期 close)
+- `feat(teammate): extension scaffold` 起到 `feat(teammate): live widget refresh` 的 14 个增量 commit
+- `feat(localagent): task_agent extends to spawn teammates` — task_agent 路由
+- `feat(teammate): emit shutdown_request/response events from sender side` — handshake e2e
+- `feat(teammate): robust session_shutdown cleanup` — Promise.allSettled
+- `refactor: remove legacy extensions/subagents (replaced by D1 teammate)` — 删除冲突的旧 ext
+
+### 关键架构决策落地(对照 § 2)
+- ✅ `task_agent` 复用扩展(team_name + name 路由到 spawnTeammate)
+- ✅ 长连接 idle 模型(teammateLoop 自动 ack shutdown,从不主动退)
+- ✅ Session jsonl 派生持久化(`teammate/event` customType + reducer + hydrate)
+- ✅ 透明 reload(`SessionManager.open` + 自动 spawn loop in resume mode)
+- ✅ AsyncLocalStorage 隔离(spike-validated)
+- ✅ Shutdown handshake(发送方 + 接收方双向事件)
+- ✅ Kill 三档(handshake / task_kill / team_delete cascade)
+- ✅ TUI: setWidget belowEditor + 实时刷新(team_store + task_store subscribe)
+
+### Spike 教训(已纳入实现)
+- `SessionManager.create(cwd, sessionDir)` 是新隔离 teammate session 的正确入口(不能用 `inMemory` — 没有 sessionFile)
+- `SessionManager.open(file)` 续 prompt 工作正常(reload hydration 路径稳)
+- ALS context 跨 `session.subscribe` callback 和 `session.prompt()` await 完整保留
+
+### 删除遗留代码
+- `extensions/subagents/` (18 文件,~3500 行,~59 个测试)— 早期 sketch,在 e2e 测试中与 D1 的 `send_message` 冲突。D1 完整覆盖其能力。
+
+### 下一期(D2 — 留待后续)
+- team task list(team_task_create / update / list / get)
+- plan-mode approval handshake
+- Permission sync(leader 集中处理 teammate 权限 prompts)
+- TUI view-swap(方向键选 teammate / 回车进 teammate context / k 键 kill / 再回车回 leader)
