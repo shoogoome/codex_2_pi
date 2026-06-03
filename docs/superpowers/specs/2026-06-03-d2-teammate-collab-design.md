@@ -392,3 +392,43 @@ extensions/teammate/
 - Plan-mode 自动检测(LLM 自己识别"我要写文件,请审")
 - Permission 持久化(每次都问)
 - TUI 的高级功能(光标移动跟踪 / 多 widget 协作)
+- teammate session 内容 overlay(D.4 简化版未做;teammate→leader 通信通过 leaderBridge 自动注入主流已经满足"看见 teammate 输出"的需求)
+- peer↔peer 直达(本期只打通 teammate→leader;若需要应在 leaderBridge 上扩展按 agentId 寻址)
+
+## 10. Implementation Outcome
+
+**Status: COMPLETED** (2026-06-04)
+
+D2 全部 4 个 module(A team_task list / B plan-mode approval / C permission sync / D TUI view-swap)按本 spec 落地,共 14 个 git commit、新增 ~3500 行 prod / ~3500 行测试。最终 854 测试全绿,typecheck 干净。
+
+### 各 Module 实施结果
+
+| Module | 路径决策 | Commit | 测试增量 | 备注 |
+|---|---|---|---|---|
+| **A** team_task list | 全做(types + store + 4 个 tool + hydrate) | `c03738a` 起 8 commit | +151 (594 → 730) | reducer 扩 3 个 kind + 反向 blocks 自维护;jsonl 派生持久化 reload 自洽;4 个 tool 顶层注册供 leader 与 teammate 共用 |
+| **B** plan-mode | 全做(协议 + customTool + leader wrapper + loop 路由) | `0b95c62 / 15138ce / b5842c6 / 249d5c1` | +30 (730 → 770) | protocol.ts 重构成多协议 ProtocolBody union;pendingApprovals 在 leader-realm Map(D1.5 范式)+ customTool 注入;loop 收到 plan_approval_response resolve 不下传 LLM |
+| **C** permission | **Path B 降级** | `22dcbb5` | +14 (770 → 784) | 两个 spike 共同确认 SDK 无干净 sub-session permission hook,选择 tool 池剪裁 + 强 prompt 引导;teammate 拿不到 bash/write/edit/task_bash/task_kill,通过 send_message 请 leader 代办 |
+| **D** TUI view-swap | **Path A-lite**(setEditorComponent + 键盘 + 高亮,**不**做 session overlay) | `7676cb1 / 71eeab5 / 268575c / adff6ce` | +60 (784 → 848) | viewState store / widget 高亮 / 键盘分类器 + handler / TeammateInputEditor;不做 session overlay 因为 leaderBridge 已让 teammate 输出自动注入 leader 主流 |
+| **E** 集成 | 跨模块端到端 happy path | `edff37f` | +6 (848 → 854) | 4 个 describe block 覆盖 A/B/C/D,真实代码路径 + SDK 桩 |
+
+### Phase 0 spike 结论(verbatim 摘要)
+
+- **0.1 Permission API**:`createAgentSessionServices` / `createAgentSessionFromServices` 暴露的 services / options 都不含 permission hook;`AgentSession.agent.beforeToolCall` 是 SDK 内部已占用的字段,直接覆盖会破坏 extension event 路由;`pi.on("tool_call", handler)` 是官方拦截点但 sub-session 不调 `bindExtensions()` 没机会注册。**判定 Path B**(详见 §4)。
+- **0.2 UI view-swap APIs**:`ctx.ui.setEditorComponent(factory)` / `onTerminalInput(handler)` / `ui.custom({overlay:true})` / `ReadonlySessionManager.getEntries()` 全部存在;`setWidget` 仅 above/below 不支持 fullscreen。**判定 Path A**(详见 §5),但 D.4 实施时进一步简化为 Path A-lite,不做 session overlay。
+
+### D1.5 修复(本期前置补漏)
+
+D1.5 修复(spec §1.5)在 D2 spec 期间被识别为前置必修,实施过程中发现 D1.5 修复曾以 untracked 文件长期未 commit,导致 D2 早期几个 commit 在 git tracked 状态下不可编译。补救 commit `a739683` 把 leaderBridge / teammateSendMessage / sendMessage 重构 / spawnTeammate customTools 注入一并补 commit,从此 git 历史自洽。
+
+### 真实 LLM 验证(E.2)
+
+**已 deferred**。E.2 计划的真 LLM 端到端跑(leader 拆 task → teammate 接活完成 / teammate 调 request_plan_approval → leader approve / kill 测 / view-swap 手动操作)需要在 token quota 恢复时单独排时间做。当前 E.1 跨模块 happy-path 集成测试 + 854 vitest 单元测试已覆盖关键代码路径,本期实现可视为"代码完成可用,真 LLM 行为待验证"。
+
+### 已知遗留 / 后续工作
+
+1. `team_task_update` 协议 event 携带 null 哨兵的 reducer 还原:store 立即生效但 jsonl event payload 不 record null 字段。reload 后清空字段不被恢复 — 接受 trade-off,document 在工具 JSDoc。
+2. peer↔peer 通信路由仍走各自 sub-session mailbox(隔离),teammate 互发消息未真打通。leaderBridge 当前只单端 leader。
+3. teammate 的 LLM 思考 / 工具调用 trace 在 leader view 不显示(只显示 teammate 主动 send_message 的内容)。
+4. D.4 TeammateInputEditor 输入回显在 render 里手画(`> {buf}`),不走 base Editor 的光标 / 多行 / 中文输入支持。够用但不优雅。
+
+完。
