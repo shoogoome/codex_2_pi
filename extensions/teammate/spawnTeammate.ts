@@ -38,6 +38,7 @@ import { isInProcessTeammateTask } from "./types.js";
 import { emitTeammateEvent } from "./eventEmit.js";
 import { postLeaderNotification } from "./leaderNotification.js";
 import { startTeammateLoop } from "./teammateLoop.js";
+import { buildTeammateSendMessageTool } from "./tools/teammateSendMessage.js";
 
 // ---------- SDK injection ----------
 
@@ -48,6 +49,7 @@ export interface TeammateSdkBindings {
     services: unknown;
     sessionManager: unknown;
     tools: readonly string[];
+    customTools?: readonly unknown[];
   }) => Promise<{ session: unknown }>;
 }
 
@@ -61,6 +63,7 @@ let _sdk: TeammateSdkBindings = {
       services: opts.services as never,
       sessionManager: opts.sessionManager as never,
       tools: opts.tools as never,
+      customTools: opts.customTools as never,
     }) as unknown as Promise<{ session: unknown }>,
 };
 
@@ -156,22 +159,33 @@ export async function spawnTeammate(
   const services = await _sdk.createAgentSessionServices({ cwd: opts.cwd });
   const allTools = pi.getActiveTools();
   const tools = allTools.filter((name) => !TEAMMATE_TOOLS_BLOCKLIST.has(name));
-  const { session: sessionUnknown } = await _sdk.createAgentSessionFromServices({
-    services,
-    sessionManager: sm,
-    tools,
-  });
-  const session = sessionUnknown as AgentSession;
 
-  // 4. register task
-  const taskId = generateTaskId("in_process_teammate");
-  const outputFile = getTaskOutputPath(taskId);
+  // Identity is needed BEFORE session creation so we can inject an
+  // identity-bound send_message as a customTool. The generic extension-
+  // registered send_message cannot resolve the sender inside a sub-session
+  // (cross-realm AsyncLocalStorage returns undefined), so we override it with
+  // a closure that carries this teammate's identity and delivers via the
+  // process-global leaderBridge. The customTool only activates if its name is
+  // in the `tools` allowlist — `send_message` is, since the leader has it as
+  // an active tool.
   const identity: TeammateIdentity = {
     agentId,
     agentName: opts.agentName,
     teamName: opts.teamName,
     agentType: opts.agentType,
   };
+
+  const { session: sessionUnknown } = await _sdk.createAgentSessionFromServices({
+    services,
+    sessionManager: sm,
+    tools,
+    customTools: [buildTeammateSendMessageTool(identity)],
+  });
+  const session = sessionUnknown as AgentSession;
+
+  // 4. register task
+  const taskId = generateTaskId("in_process_teammate");
+  const outputFile = getTaskOutputPath(taskId);
 
   const initial: InProcessTeammateTaskState = {
     ...createTaskStateBase({

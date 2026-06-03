@@ -6,6 +6,7 @@ import { getCurrentTeammate } from "../als.js";
 import { emitTeammateEvent } from "../eventEmit.js";
 import { detectShutdownProtocol, parseShutdownRequest, parseShutdownResponse } from "../shutdownHandshake.js";
 import { postLeaderNotification } from "../leaderNotification.js";
+import { getLeaderChannel } from "../leaderBridge.js";
 import type { MailboxMessage } from "../types.js";
 
 const SendMessageParams = Type.Object({
@@ -116,17 +117,26 @@ export function buildSendMessageTool(
       // leader or broadcasts to "*", surface the message as a new turn in
       // the leader's main LLM context. Suppressed when the sender is the
       // leader itself (identity undefined) — would otherwise notify itself.
+      //
+      // Routing: a teammate runs in an ISOLATED sub-session whose `pi` cannot
+      // reach the real leader (different extension runtime / eventBus). So we
+      // deliver through the process-global leaderBridge, whose channel was
+      // registered by the leader's own session_start and closes over the
+      // leader's pi. Fall back to the local pi only when no leader channel is
+      // registered (e.g. standalone unit tests) — best-effort.
       if (identity && (isToLeader || to === "*")) {
-        postLeaderNotification(
-          pi,
-          {
-            kind: "message",
-            agentId: identity.agentId,
-            to,
-            body,
-          },
-          /* triggerTurn */ true,
-        );
+        const details = {
+          kind: "message" as const,
+          agentId: identity.agentId,
+          to,
+          body,
+        };
+        const channel = getLeaderChannel();
+        if (channel) {
+          channel.deliver(details, /* triggerTurn */ true);
+        } else {
+          postLeaderNotification(pi, details, /* triggerTurn */ true);
+        }
       }
 
       return {
