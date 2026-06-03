@@ -3,8 +3,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import teammateExtension from "./index.js";
 import { getTeammateHandle } from "./handle.js";
 import { createTaskStore } from "../tasks/taskStore.js";
+import { registerTask, updateTaskState } from "../tasks/framework.js";
+import { createTaskStateBase } from "../tasks/Task.js";
 import { TEAMMATE_EVENT_CUSTOM_TYPE } from "./eventEmit.js";
 import { _setHydrateSdkForTest } from "./hydrate.js";
+import { InProcessTeammateTask } from "./killTeammate.js";
+import type { InProcessTeammateTaskState } from "./types.js";
 
 function buildFakeTasksHandle(): {
   handle: {
@@ -342,5 +346,95 @@ describe("teammateExtension entrypoint", () => {
     const sessionStart = handlers.get("session_start")!;
     await expect(sessionStart({}, fakeCtx)).resolves.not.toThrow();
     errSpy.mockRestore();
+  });
+
+  it("session_shutdown attempts to kill ALL running teammates even if one throws", async () => {
+    const handlers = new Map<
+      string,
+      (event: unknown, ctx: unknown) => unknown
+    >();
+    const taskStore = createTaskStore();
+    const fakeTasksHandle = {
+      store: taskStore,
+      registerTaskType: vi.fn(),
+      getTaskType: () => undefined,
+      unregisterTaskType: vi.fn(),
+    };
+    const pi: ExtensionAPI = {
+      on: vi.fn((evt: string, h: (e: unknown, c: unknown) => unknown) => {
+        handlers.set(evt, h);
+      }),
+      events: { __pi_tasks_handle__: fakeTasksHandle },
+      registerTool: vi.fn(),
+      sendMessage: vi.fn(),
+      getActiveTools: vi.fn().mockReturnValue([]),
+    } as never;
+    teammateExtension(pi);
+
+    // Register two running teammate tasks. One will throw on kill, one won't.
+    const buildTeammate = (
+      taskId: string,
+      agentName: string,
+      teamName: string,
+    ): InProcessTeammateTaskState => ({
+      ...createTaskStateBase({
+        id: taskId,
+        type: "in_process_teammate",
+        description: `${agentName}@${teamName}`,
+        outputFile: `/tmp/${taskId}.out`,
+      }),
+      type: "in_process_teammate",
+      status: "running",
+      identity: {
+        agentId: `${agentName}@${teamName}`,
+        agentName,
+        teamName,
+        agentType: "general-purpose",
+      },
+      prompt: "go",
+      sessionFile: `/tmp/${agentName}.jsonl`,
+      isIdle: false,
+      pendingMessages: [],
+      shutdownRequested: false,
+      shutdownAcknowledged: false,
+      toolCallCount: 0,
+      tokenCount: 0,
+      turnCount: 0,
+    });
+    const aliceState = buildTeammate("alice-task", "alice", "team1");
+    const bobState = buildTeammate("bob-task", "bob", "team1");
+    registerTask(aliceState, taskStore);
+    registerTask(bobState, taskStore);
+
+    // Spy: replace InProcessTeammateTask.kill with a stub that throws for alice.
+    const origKill = InProcessTeammateTask.kill;
+    let bobKilled = false;
+    InProcessTeammateTask.kill = vi.fn(async (taskId: string) => {
+      if (taskId === aliceState.id) throw new Error("alice kill failed");
+      if (taskId === bobState.id) {
+        bobKilled = true;
+        updateTaskState<InProcessTeammateTaskState>(taskId, taskStore, (t) => ({
+          ...t,
+          status: "killed",
+        }));
+      }
+    }) as never;
+
+    const fakeCtx = {
+      cwd: "/tmp",
+      hasUI: false,
+      sessionManager: { getSessionId: () => "s1", getEntries: () => [] },
+    };
+    await handlers.get("session_start")!({}, fakeCtx);
+
+    // Now invoke shutdown — should not throw, and should kill bob.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      handlers.get("session_shutdown")!({}, fakeCtx),
+    ).resolves.not.toThrow();
+    expect(bobKilled).toBe(true);
+    errSpy.mockRestore();
+
+    InProcessTeammateTask.kill = origKill;
   });
 });

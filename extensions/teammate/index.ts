@@ -91,10 +91,17 @@ export default function teammateExtension(pi: ExtensionAPI): void {
     const running = getRunningTasks(tasksHandle.store.get()).filter(
       (t) => t.type === "in_process_teammate",
     );
-    await Promise.all(
-      running.map((t) =>
-        InProcessTeammateTask.kill(t.id, tasksHandle.store),
-      ),
+    // Promise.allSettled — a single kill failure must not abort the rest.
+    // Each kill is wrapped in try/catch so the surrounding allSettled never
+    // sees a reject; logError surfaces the failure for diagnostics.
+    await Promise.allSettled(
+      running.map(async (t) => {
+        try {
+          await InProcessTeammateTask.kill(t.id, tasksHandle.store);
+        } catch (e) {
+          logError(e, "teammate session_shutdown kill");
+        }
+      }),
     );
     tasksHandle.unregisterTaskType("in_process_teammate");
     _unbindPi();
