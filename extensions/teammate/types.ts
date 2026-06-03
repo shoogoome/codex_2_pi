@@ -82,6 +82,24 @@ export interface TeamState {
 }
 
 /**
+ * Leader-facing notification payload — surfaced to the leader's main LLM via
+ * `pi.sendMessage({customType:"teammate/notification", ...})` so that teammate
+ * activity (DMs, idle status) appears as a new conversation turn rather than
+ * sitting silently in the mailbox buffer.
+ */
+export type LeaderNotificationDetails =
+  | {
+      kind: "message";
+      agentId: string;
+      to: string;
+      body: string;
+    }
+  | {
+      kind: "idle";
+      agentId: string;
+    };
+
+/**
  * jsonl 派生持久化事件 — 每条 mutating action 写一条 customMessage。
  * `hydrate.ts` reduce 还原 teams + teammates 集合。
  */

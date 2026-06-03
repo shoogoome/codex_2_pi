@@ -163,6 +163,53 @@ describe("spawnTeammate — happy path", () => {
   });
 });
 
+describe("spawnTeammate — leader notification on idle", () => {
+  it("posts a teammate/notification with kind='idle' on each idle event (triggerTurn:false)", async () => {
+    const promptFn = vi.fn().mockResolvedValue(undefined);
+    _setSdkForTest({
+      createAgentSessionFromServices: vi.fn(async () => ({
+        session: {
+          prompt: promptFn,
+          abort: vi.fn().mockResolvedValue(undefined),
+          dispose: vi.fn(),
+          subscribe: vi.fn(() => () => {}),
+        },
+      })),
+    });
+    const taskStore = createTaskStore();
+    _setDefaultTaskStoreForTest(taskStore);
+    const handle = buildHandle();
+    handle.teamStore.createTeam("research", undefined, 100);
+    await spawnTeammate(fakePi as never, taskStore, handle, {
+      teamName: "research",
+      agentName: "alice",
+      agentType: "general-purpose",
+      prompt: "go",
+      cwd: "/tmp",
+    });
+    // Wait microtasks for the loop to fire prompt + idle.
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    const idleNotifications = fakePi.sendMessage.mock.calls.filter(
+      ([m]: unknown[]) =>
+        (m as { customType?: string }).customType === "teammate/notification" &&
+        (m as { details?: { kind?: string } }).details?.kind === "idle",
+    );
+    expect(idleNotifications.length).toBeGreaterThanOrEqual(1);
+    const first = idleNotifications[0]!;
+    const msg = first[0] as {
+      content: string;
+      details: { kind: string; agentId: string };
+    };
+    const opts = first[1] as { triggerTurn?: boolean } | undefined;
+    expect(msg.details.kind).toBe("idle");
+    expect(msg.details.agentId).toBe("alice@research");
+    expect(msg.content).toContain("alice@research");
+    expect(opts).toEqual({ triggerTurn: false });
+  });
+});
+
 describe("spawnTeammate — validation errors", () => {
   it("throws if team does not exist", async () => {
     const taskStore = createTaskStore();

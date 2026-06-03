@@ -36,6 +36,7 @@ import type { TeammateHandle } from "./handle.js";
 import type { InProcessTeammateTaskState, TeammateIdentity } from "./types.js";
 import { isInProcessTeammateTask } from "./types.js";
 import { emitTeammateEvent } from "./eventEmit.js";
+import { postLeaderNotification } from "./leaderNotification.js";
 import { startTeammateLoop } from "./teammateLoop.js";
 
 // ---------- SDK injection ----------
@@ -247,6 +248,15 @@ export async function spawnTeammate(
         ...t,
         isIdle: true,
       }));
+      // Surface idle status to the leader's main LLM as an informational
+      // notification. triggerTurn:false — leader sees the entry in context
+      // but is not woken (claudecode pattern: idle is normal, no reaction
+      // required unless the leader wants to assign new work).
+      postLeaderNotification(
+        pi,
+        { kind: "idle", agentId: identity.agentId },
+        /* triggerTurn */ false,
+      );
     },
     onShutdownRequestReceived: (requestId) => {
       emitTeammateEvent(pi, {

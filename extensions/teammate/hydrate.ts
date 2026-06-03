@@ -27,6 +27,7 @@ import { createTaskStateBase, generateTaskId } from "../tasks/Task.js";
 import { logError } from "../tasks/logging.js";
 
 import { TEAMMATE_EVENT_CUSTOM_TYPE, emitTeammateEvent } from "./eventEmit.js";
+import { postLeaderNotification } from "./leaderNotification.js";
 import {
   reduceTeammateEvents,
   type ReplayedState,
@@ -257,6 +258,13 @@ export async function respawnTeammates(
           taskId,
           taskStoreRef,
           (t) => ({ ...t, isIdle: true }),
+        );
+        // Mirror spawnTeammate.ts — surface idle to the leader's main LLM
+        // as an informational notification (triggerTurn:false).
+        postLeaderNotification(
+          piRef,
+          { kind: "idle", agentId },
+          /* triggerTurn */ false,
         );
       },
       onShutdownRequestReceived: (requestId) => {

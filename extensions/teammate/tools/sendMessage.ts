@@ -5,6 +5,7 @@ import { getTeammateHandle } from "../handle.js";
 import { getCurrentTeammate } from "../als.js";
 import { emitTeammateEvent } from "../eventEmit.js";
 import { detectShutdownProtocol, parseShutdownRequest, parseShutdownResponse } from "../shutdownHandshake.js";
+import { postLeaderNotification } from "../leaderNotification.js";
 import type { MailboxMessage } from "../types.js";
 
 const SendMessageParams = Type.Object({
@@ -31,6 +32,9 @@ const DESCRIPTION =
   "## Plain-text vs protocol messages\n" +
   "- Plain text: Sent verbatim. The recipient sees `[from <sender>] <message>` in their next turn.\n" +
   "- JSON-string protocol bodies (shutdown_request / shutdown_response): Detected automatically and marked isProtocol:true. The teammate's loop handles shutdown_request by replying with shutdown_response and exiting.\n\n" +
+  "## Sending to the leader\n" +
+  "- to=\"leader\" surfaces as a new conversation turn in the leader's main LLM context (it does NOT go through the mailbox; the leader is not a mailbox receiver).\n" +
+  "- to=\"*\" broadcasts to peer teammates AND surfaces a copy to the leader for visibility.\n\n" +
   "Returns immediately after delivery (or buffering if recipient is offline). The recipient processes the message in their next turn.";
 
 export function buildSendMessageTool(
@@ -74,7 +78,15 @@ export function buildSendMessageTool(
         isProtocol,
       };
 
-      handle.mailbox.send(msg);
+      // "leader" is not registered as a Mailbox receiver — sending there
+      // would just buffer the message indefinitely. Skip the mailbox in
+      // that case and rely solely on the leader-notification channel below.
+      // Broadcasts ("*") still go through the mailbox so peers receive them;
+      // the leader notification is layered on top.
+      const isToLeader = to === "leader";
+      if (!isToLeader) {
+        handle.mailbox.send(msg);
+      }
       emitTeammateEvent(pi, { kind: "message_sent", msg });
 
       const protocol = detectShutdownProtocol(body);
@@ -98,6 +110,23 @@ export function buildSendMessageTool(
             ...(resp.feedback !== undefined ? { feedback: resp.feedback } : {}),
           });
         }
+      }
+
+      // Leader notification: when a teammate (identity defined) DMs the
+      // leader or broadcasts to "*", surface the message as a new turn in
+      // the leader's main LLM context. Suppressed when the sender is the
+      // leader itself (identity undefined) — would otherwise notify itself.
+      if (identity && (isToLeader || to === "*")) {
+        postLeaderNotification(
+          pi,
+          {
+            kind: "message",
+            agentId: identity.agentId,
+            to,
+            body,
+          },
+          /* triggerTurn */ true,
+        );
       }
 
       return {

@@ -441,8 +441,9 @@ describe("respawnTeammates", () => {
       teamStore: createTeamStore(),
       mailbox: createMailbox(),
     };
+    const pi = buildPi();
     await respawnTeammates(state, {
-      pi: buildPi() as never,
+      pi: pi as never,
       taskStore,
       handle,
       cwd: "/tmp",
@@ -460,5 +461,87 @@ describe("respawnTeammates", () => {
     await new Promise((r) => setImmediate(r));
     // Loop should have triggered fakeSession.prompt with the formatted incoming msg
     expect(fakeSession.prompt).toHaveBeenCalled();
+  });
+
+  it("respawned teammate posts leader idle notification (kind='idle', triggerTurn:false) when its turn ends", async () => {
+    const fakeSession = {
+      prompt: vi.fn().mockResolvedValue(undefined),
+      abort: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn(),
+      subscribe: vi.fn(() => () => {}),
+    };
+    _setHydrateSdkForTest({
+      createAgentSessionServices: vi.fn().mockResolvedValue({}),
+      SessionManagerOpen: vi.fn(() => ({
+        getSessionFile: () => "/tmp/x.jsonl",
+        getSessionId: () => "s",
+        getEntries: () => [],
+        appendMessage: vi.fn(),
+      })),
+      createAgentSessionFromServices: vi.fn(async () => ({ session: fakeSession })),
+    });
+    const state: ReplayedState = {
+      teams: {
+        t1: {
+          teamName: "t1",
+          createdAt: 1,
+          memberAgentIds: ["alice@t1"],
+          description: undefined,
+        },
+      },
+      teammates: {
+        "alice@t1": {
+          identity: {
+            agentId: "alice@t1",
+            agentName: "alice",
+            teamName: "t1",
+            agentType: "general-purpose",
+          },
+          sessionFile: "/tmp/alice.jsonl",
+          initialPrompt: "go",
+          lastStatus: "running",
+        },
+      },
+    };
+    const taskStore = createTaskStore();
+    const handle: TeammateHandle = {
+      teamStore: createTeamStore(),
+      mailbox: createMailbox(),
+    };
+    const pi = buildPi();
+    await respawnTeammates(state, {
+      pi: pi as never,
+      taskStore,
+      handle,
+      cwd: "/tmp",
+    });
+    // Trigger a message → turn → idle.
+    handle.mailbox.send({
+      id: "m1",
+      from: "leader",
+      to: "alice",
+      body: "hi",
+      timestamp: 1,
+      isProtocol: false,
+    });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    const idleNotifications = pi.sendMessage.mock.calls.filter(
+      ([m]: unknown[]) =>
+        (m as { customType?: string }).customType === "teammate/notification" &&
+        (m as { details?: { kind?: string } }).details?.kind === "idle",
+    );
+    expect(idleNotifications.length).toBeGreaterThanOrEqual(1);
+    const first = idleNotifications[0]!;
+    const msg = first[0] as {
+      content: string;
+      details: { kind: string; agentId: string };
+    };
+    const opts = first[1] as { triggerTurn?: boolean } | undefined;
+    expect(msg.details.kind).toBe("idle");
+    expect(msg.details.agentId).toBe("alice@t1");
+    expect(opts).toEqual({ triggerTurn: false });
   });
 });
