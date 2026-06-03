@@ -21,6 +21,10 @@ import { isTerminalTaskStatus } from "../../tasks/Task.js";
 export interface RenderTeamWidgetOptions {
   /** Max line width (default 80). Lines longer than this are truncated with `…`. */
   width?: number;
+  /** Highlight the row whose teammate.identity.agentId matches by replacing
+   *  the leading two-space indent with "▶ ". When undefined or no match,
+   *  rendering is identical to the un-selected state. */
+  selectedAgentId?: string;
 }
 
 const DEFAULT_WIDTH = 80;
@@ -74,13 +78,15 @@ export function renderTeamWidget(
       const agentName =
         task?.identity.agentName ?? agentId.split("@")[0] ?? agentId;
 
+      const indent = options.selectedAgentId === agentId ? "▶ " : "  ";
+
       if (!task) {
-        lines.push(truncate(`  ✗ ${agentName}    missing`, width));
+        lines.push(truncate(`${indent}✗ ${agentName}    missing`, width));
         continue;
       }
 
       if (isTerminalTaskStatus(task.status)) {
-        lines.push(truncate(`  ✗ ${agentName}    ${task.status}`, width));
+        lines.push(truncate(`${indent}✗ ${agentName}    ${task.status}`, width));
         continue;
       }
 
@@ -95,7 +101,7 @@ export function renderTeamWidget(
       }
       const stats = `[${formatTurns(task.turnCount)}, ${formatTokens(task.tokenCount)}]`;
       lines.push(
-        truncate(`  ${glyph} ${agentName}    ${state}    ${stats}`, width),
+        truncate(`${indent}${glyph} ${agentName}    ${state}    ${stats}`, width),
       );
     }
   });

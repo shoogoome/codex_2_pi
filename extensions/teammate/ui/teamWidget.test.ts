@@ -146,6 +146,82 @@ describe("renderTeamWidget", () => {
     expect(lines[3]).toContain("b");
   });
 
+  it("selectedAgentId matches a normal teammate → row prefix is '▶ '", () => {
+    const team: TeamState = {
+      teamName: "research",
+      createdAt: 1,
+      memberAgentIds: ["alice@research", "bob@research"],
+    };
+    const tasks = [
+      buildTask("alice", "research", { isIdle: true, turnCount: 2, tokenCount: 850 }),
+      buildTask("bob", "research", { isIdle: true, turnCount: 1, tokenCount: 320 }),
+    ];
+    const lines = renderTeamWidget([team], tasks, {
+      selectedAgentId: "bob@research",
+    });
+    // alice is unselected → leading two-space indent.
+    expect(lines[1]?.startsWith("  ◌ alice")).toBe(true);
+    // bob is selected → leading "▶ ".
+    expect(lines[2]?.startsWith("▶ ◌ bob")).toBe(true);
+  });
+
+  it("selectedAgentId matches a missing/terminal teammate → '▶ ' prefix", () => {
+    const team: TeamState = {
+      teamName: "broken",
+      createdAt: 1,
+      memberAgentIds: ["ghost@broken", "dead@broken"],
+    };
+    const tasks = [buildTask("dead", "broken", { status: "killed" })];
+    const missingLines = renderTeamWidget([team], tasks, {
+      selectedAgentId: "ghost@broken",
+    });
+    expect(missingLines[1]?.startsWith("▶ ✗ ghost")).toBe(true);
+    expect(missingLines[2]?.startsWith("  ✗ dead")).toBe(true);
+
+    const terminalLines = renderTeamWidget([team], tasks, {
+      selectedAgentId: "dead@broken",
+    });
+    expect(terminalLines[1]?.startsWith("  ✗ ghost")).toBe(true);
+    expect(terminalLines[2]?.startsWith("▶ ✗ dead")).toBe(true);
+  });
+
+  it("selectedAgentId does not match any teammate → all rows still '  '", () => {
+    const team: TeamState = {
+      teamName: "research",
+      createdAt: 1,
+      memberAgentIds: ["alice@research", "bob@research"],
+    };
+    const tasks = [
+      buildTask("alice", "research"),
+      buildTask("bob", "research"),
+    ];
+    const lines = renderTeamWidget([team], tasks, {
+      selectedAgentId: "nobody@elsewhere",
+    });
+    expect(lines[1]?.startsWith("  ◌ alice")).toBe(true);
+    expect(lines[2]?.startsWith("  ◌ bob")).toBe(true);
+    expect(lines.some((l) => l.startsWith("▶ ◌"))).toBe(false);
+  });
+
+  it("selectedAgentId undefined (default) → identical to old API output", () => {
+    const team: TeamState = {
+      teamName: "research",
+      createdAt: 1,
+      memberAgentIds: ["alice@research"],
+    };
+    const tasks = [
+      buildTask("alice", "research", { isIdle: true, turnCount: 2, tokenCount: 850 }),
+    ];
+    const baseline = renderTeamWidget([team], tasks);
+    const explicitDefault = renderTeamWidget([team], tasks, {});
+    const undefSelected = renderTeamWidget([team], tasks, {
+      selectedAgentId: undefined,
+    });
+    expect(explicitDefault).toEqual(baseline);
+    expect(undefSelected).toEqual(baseline);
+    expect(baseline[1]?.startsWith("  ◌ alice")).toBe(true);
+  });
+
   it("truncates long lines to width with ellipsis", () => {
     const team: TeamState = {
       teamName: "wide",
