@@ -247,7 +247,7 @@ const STATUS_COLOR: Record<NotifyTaskTerminalOptions["status"], ThemeColor> = {
  * - 折叠:单行 `{icon} {description} {statusText}{exitCode?}` 带状态色。
  * - 展开:多行 — description / task_id+type+status / output / 完整 XML。
  *
- * 风格对齐 `extensions/subagents/render.ts`(Text + Box + theme.fg/bg)。
+ * 风格对齐 pi-tui Text + Box + theme.fg/bg pattern。
  */
 export function registerTaskNotificationRenderer(pi: ExtensionAPI): void {
   pi.registerMessageRenderer<TaskNotificationDetails>(
