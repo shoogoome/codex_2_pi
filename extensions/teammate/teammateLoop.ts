@@ -17,8 +17,10 @@ import { runAsTeammate } from "./als.js";
 import type { Mailbox } from "./mailbox.js";
 import {
   buildShutdownResponse,
+  parsePlanApprovalResponse,
   parseShutdownRequest,
-} from "./shutdownHandshake.js";
+} from "./protocol.js";
+import type { PendingApprovals } from "./tools/requestPlanApproval.js";
 import type { MailboxMessage, TeammateIdentity } from "./types.js";
 
 export interface TeammateLoopOptions {
@@ -39,6 +41,13 @@ export interface TeammateLoopOptions {
   onShutdownRequestReceived?: (requestId: string) => void;
   /** Called when teammate emits the shutdown_response (so caller can persist event). */
   onShutdownAcked?: (requestId: string, approve: boolean) => void;
+  /**
+   * Leader-realm map of in-flight plan_approval_request entries (allocated by
+   * spawnTeammate). When a plan_approval_response mailbox message arrives, the
+   * loop looks up the entry by request_id and resolves it — never feeds the
+   * protocol body to the LLM (would pollute sub-session context).
+   */
+  pendingApprovals?: PendingApprovals;
   /** AbortSignal to terminate the loop early. */
   abortSignal: AbortSignal;
 }
@@ -109,6 +118,25 @@ export function startTeammateLoop(
           }
 
           const msg = queue.shift()!;
+          // Detect plan_approval_response first — purely internal protocol
+          // routing, must NEVER reach session.prompt (would leak protocol
+          // JSON into sub-session context).
+          const planResp = parsePlanApprovalResponse(msg.body);
+          if (planResp) {
+            const entry = opts.pendingApprovals?.get(planResp.request_id);
+            if (entry) {
+              const decision: { approve: boolean; feedback?: string } = {
+                approve: planResp.approve,
+              };
+              if (planResp.feedback !== undefined) {
+                decision.feedback = planResp.feedback;
+              }
+              entry.resolve(decision);
+              opts.pendingApprovals?.delete(planResp.request_id);
+            }
+            continue;
+          }
+
           // Detect shutdown request before dispatching as user prompt.
           const req = parseShutdownRequest(msg.body);
           if (req) {

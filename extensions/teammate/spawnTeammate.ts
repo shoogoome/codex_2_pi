@@ -36,9 +36,15 @@ import type { TeammateHandle } from "./handle.js";
 import type { InProcessTeammateTaskState, TeammateIdentity } from "./types.js";
 import { isInProcessTeammateTask } from "./types.js";
 import { emitTeammateEvent } from "./eventEmit.js";
+import { getLeaderChannel } from "./leaderBridge.js";
 import { postLeaderNotification } from "./leaderNotification.js";
 import { startTeammateLoop } from "./teammateLoop.js";
 import { buildTeammateSendMessageTool } from "./tools/teammateSendMessage.js";
+import {
+  buildRequestPlanApprovalTool,
+  type PendingApprovals,
+  type PlanApprovalDecision,
+} from "./tools/requestPlanApproval.js";
 
 // ---------- SDK injection ----------
 
@@ -175,11 +181,36 @@ export async function spawnTeammate(
     agentType: opts.agentType,
   };
 
+  // Leader-realm map of in-flight plan_approval_request entries. Allocated
+  // here (not in the teammate sub-session realm) so the request_plan_approval
+  // tool's resolve() and teammateLoop's response routing share the same Map.
+  // See requestPlanApproval.ts for the rationale.
+  const pendingApprovalsMap = new Map<
+    string,
+    { resolve: (d: PlanApprovalDecision) => void; reject: (e: Error) => void }
+  >();
+  const pendingApprovals: PendingApprovals = {
+    set: (id, entry) => {
+      pendingApprovalsMap.set(id, entry);
+    },
+    get: (id) => pendingApprovalsMap.get(id),
+    delete: (id) => {
+      pendingApprovalsMap.delete(id);
+    },
+  };
+
   const { session: sessionUnknown } = await _sdk.createAgentSessionFromServices({
     services,
     sessionManager: sm,
     tools,
-    customTools: [buildTeammateSendMessageTool(identity)],
+    customTools: [
+      buildTeammateSendMessageTool(identity),
+      buildRequestPlanApprovalTool({
+        identity,
+        pendingApprovals,
+        getLeaderChannel,
+      }),
+    ],
   });
   const session = sessionUnknown as AgentSession;
 
@@ -248,6 +279,7 @@ export async function spawnTeammate(
     initialPrompt: opts.prompt,
     session,
     mailbox: handle.mailbox,
+    pendingApprovals,
     abortSignal: abortController.signal,
     onTurnStart: (cause) => {
       updateTaskState<InProcessTeammateTaskState>(taskId, taskStore, (t) => ({

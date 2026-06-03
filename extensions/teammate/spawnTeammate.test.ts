@@ -173,6 +173,38 @@ describe("spawnTeammate — happy path", () => {
     const customTools = (args.customTools ?? []) as Array<{ name?: string }>;
     expect(customTools.some((t) => t?.name === "send_message")).toBe(true);
   });
+
+  it("injects identity-bound request_plan_approval as customTool", async () => {
+    const createSessionMock = vi.fn(
+      async (_opts: { tools: readonly string[]; customTools?: readonly unknown[] }) => ({
+        session: {
+          prompt: vi.fn().mockResolvedValue(undefined),
+          abort: vi.fn().mockResolvedValue(undefined),
+          dispose: vi.fn(),
+          subscribe: vi.fn(() => () => {}),
+        },
+      }),
+    );
+    fakePi.getActiveTools.mockReturnValue(["read", "send_message"]);
+    _setSdkForTest({
+      createAgentSessionFromServices: createSessionMock,
+    });
+    const taskStore = createTaskStore();
+    _setDefaultTaskStoreForTest(taskStore);
+    const handle = buildHandle();
+    handle.teamStore.createTeam("research", undefined, 100);
+    await spawnTeammate(fakePi as never, taskStore, handle, {
+      teamName: "research",
+      agentName: "alice",
+      agentType: "general-purpose",
+      prompt: "go",
+      cwd: "/tmp",
+    });
+
+    const args = createSessionMock.mock.calls[0]![0];
+    const customTools = (args.customTools ?? []) as Array<{ name?: string }>;
+    expect(customTools.some((t) => t?.name === "request_plan_approval")).toBe(true);
+  });
 });
 
 describe("spawnTeammate — leader notification on idle", () => {

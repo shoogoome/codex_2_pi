@@ -2,9 +2,11 @@ import { describe, it, expect, vi } from "vitest";
 import { startTeammateLoop } from "./teammateLoop.js";
 import { createMailbox } from "./mailbox.js";
 import {
+  buildPlanApprovalResponse,
   buildShutdownRequest,
   parseShutdownResponse,
-} from "./shutdownHandshake.js";
+} from "./protocol.js";
+import type { PendingApprovals, PlanApprovalDecision } from "./tools/requestPlanApproval.js";
 import type { TeammateIdentity, MailboxMessage } from "./types.js";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
@@ -269,5 +271,145 @@ describe("teammateLoop — abort", () => {
     await handle.done;
     // No mailbox messages dispatched
     expect(session.prompt).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("teammateLoop — plan_approval_response routing", () => {
+  function makePendingApprovals(): {
+    pa: PendingApprovals;
+    map: Map<string, { resolve: (d: PlanApprovalDecision) => void; reject: (e: Error) => void }>;
+  } {
+    const map = new Map<
+      string,
+      { resolve: (d: PlanApprovalDecision) => void; reject: (e: Error) => void }
+    >();
+    const pa: PendingApprovals = {
+      set: (id, entry) => {
+        map.set(id, entry);
+      },
+      get: (id) => map.get(id),
+      delete: (id) => {
+        map.delete(id);
+      },
+    };
+    return { pa, map };
+  }
+
+  it("on plan_approval_response, resolves the matching entry and does NOT prompt", async () => {
+    const session = makeFakeSession();
+    const mailbox = createMailbox();
+    const { pa, map } = makePendingApprovals();
+    const resolveSpy = vi.fn();
+    map.set("pa-1", { resolve: resolveSpy, reject: () => {} });
+
+    const ac = new AbortController();
+    const handle = startTeammateLoop({
+      identity: id,
+      initialPrompt: undefined,
+      session,
+      mailbox,
+      pendingApprovals: pa,
+      abortSignal: ac.signal,
+    });
+    await new Promise((r) => setImmediate(r));
+
+    const respBody = buildPlanApprovalResponse("pa-1", true, "ok go");
+    mailbox.send({
+      id: "m1",
+      from: "leader",
+      to: "alpha",
+      body: respBody,
+      timestamp: 100,
+      isProtocol: true,
+    });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    expect(resolveSpy).toHaveBeenCalledWith({ approve: true, feedback: "ok go" });
+    // protocol body must not be fed to LLM
+    expect(session.prompt).not.toHaveBeenCalled();
+    // entry was deleted after resolve
+    expect(map.has("pa-1")).toBe(false);
+
+    ac.abort();
+    await handle.done;
+  });
+
+  it("after a plan_approval_response, subsequent regular message still triggers prompt (loop not stuck)", async () => {
+    const session = makeFakeSession();
+    const mailbox = createMailbox();
+    const { pa, map } = makePendingApprovals();
+    map.set("pa-2", { resolve: vi.fn(), reject: () => {} });
+
+    const ac = new AbortController();
+    const handle = startTeammateLoop({
+      identity: id,
+      initialPrompt: undefined,
+      session,
+      mailbox,
+      pendingApprovals: pa,
+      abortSignal: ac.signal,
+    });
+    await new Promise((r) => setImmediate(r));
+
+    mailbox.send({
+      id: "m1",
+      from: "leader",
+      to: "alpha",
+      body: buildPlanApprovalResponse("pa-2", false, "nope"),
+      timestamp: 1,
+      isProtocol: true,
+    });
+    mailbox.send({
+      id: "m2",
+      from: "leader",
+      to: "alpha",
+      body: "regular work",
+      timestamp: 2,
+      isProtocol: false,
+    });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    expect(session.prompt).toHaveBeenCalledTimes(1);
+    const promptArg = session.prompt.mock.calls[0]![0] as string;
+    expect(promptArg).toContain("regular work");
+
+    ac.abort();
+    await handle.done;
+  });
+
+  it("plan_approval_response with unknown request_id is dropped silently (no prompt, no throw)", async () => {
+    const session = makeFakeSession();
+    const mailbox = createMailbox();
+    const { pa } = makePendingApprovals();
+
+    const ac = new AbortController();
+    const handle = startTeammateLoop({
+      identity: id,
+      initialPrompt: undefined,
+      session,
+      mailbox,
+      pendingApprovals: pa,
+      abortSignal: ac.signal,
+    });
+    await new Promise((r) => setImmediate(r));
+
+    mailbox.send({
+      id: "m1",
+      from: "leader",
+      to: "alpha",
+      body: buildPlanApprovalResponse("pa-unknown", true),
+      timestamp: 100,
+      isProtocol: true,
+    });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    expect(session.prompt).not.toHaveBeenCalled();
+
+    ac.abort();
+    await handle.done;
   });
 });
