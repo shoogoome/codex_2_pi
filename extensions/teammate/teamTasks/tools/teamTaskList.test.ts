@@ -282,4 +282,14 @@ describe("team_task_list tool", () => {
     expect(tool.description).toMatch(/empty string/);
     expect(tool.description).toMatch(/AND/);
   });
+
+  it("does NOT emit any teammate/event (read-only)", async () => {
+    const tool = buildTeamTaskListTool(pi as never);
+    await runList(tool, {});
+    const eventCalls = pi.sendMessage.mock.calls.filter(
+      ([m]: unknown[]) =>
+        (m as { customType?: string }).customType === "teammate/event",
+    );
+    expect(eventCalls).toHaveLength(0);
+  });
 });
