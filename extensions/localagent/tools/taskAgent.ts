@@ -12,6 +12,12 @@ import { mergeAgentDefinitions, getAgentDefinition } from "../agentDefinitions/r
 import { loadAgentsFromDir } from "../agentDefinitions/loadFromDisk.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { getTeammateHandle, type TeammateHandle } from "../../teammate/handle.js";
+import {
+  spawnTeammate as _realSpawnTeammate,
+  type SpawnTeammateOptions,
+  type SpawnTeammateResult,
+} from "../../teammate/spawnTeammate.js";
 
 type Spawner = (
   pi: ExtensionAPI,
@@ -21,6 +27,17 @@ type Spawner = (
 let _spawner: Spawner = _spawn;
 export function _setSpawnerForTest(s: Spawner | undefined): void {
   _spawner = s ?? _spawn;
+}
+
+type TeammateSpawner = (
+  pi: ExtensionAPI,
+  taskStore: TaskStore,
+  handle: TeammateHandle,
+  opts: SpawnTeammateOptions,
+) => Promise<SpawnTeammateResult>;
+let _teammateSpawner: TeammateSpawner = _realSpawnTeammate;
+export function _setTeammateSpawnerForTest(s: TeammateSpawner | undefined): void {
+  _teammateSpawner = s ?? _realSpawnTeammate;
 }
 
 const TaskAgentParams = Type.Object({
@@ -39,10 +56,24 @@ const TaskAgentParams = Type.Object({
   run_in_background: Type.Optional(Type.Boolean({ description: "Run as background task; main agent gets a notification on completion." })),
   cwd: Type.Optional(Type.String({ description: "Override working directory for the sub-agent." })),
   isolation: Type.Optional(Type.Literal("worktree", { description: "Reserved; not implemented." })),
+  team_name: Type.Optional(
+    Type.String({
+      description:
+        "If provided together with `name`, spawn a long-lived teammate joining this team (call team_create first). Otherwise (omit) run a one-shot sub-agent.",
+    }),
+  ),
+  name: Type.Optional(
+    Type.String({
+      description:
+        "Required when team_name is provided. Human-readable agent name (used as identity for send_message and TUI display). Must be unique within the team.",
+    }),
+  ),
 });
 
 interface TaskAgentDetails {
   action: "task_agent";
+  /** Distinguishes the one-shot LocalAgent path from the long-lived teammate path. */
+  mode?: "one_shot" | "teammate";
   taskId?: string;
   agentType?: string;
   status?: string;
@@ -56,6 +87,10 @@ interface TaskAgentDetails {
    */
   timeline?: SpawnLocalAgentProgressSnapshot["timeline"];
   description?: string;
+  /** teammate-mode only: stable agent identity (`<name>@<team>`). */
+  agentId?: string;
+  /** teammate-mode only: persisted JSONL session file for the teammate. */
+  sessionFile?: string;
 }
 
 /**
@@ -108,7 +143,19 @@ export function buildTaskAgentTool(
     "type currently available.\n" +
     "\n" +
     "Long-running tasks auto-background after 120s. Pass run_in_background:true to send " +
-    "to background immediately.";
+    "to background immediately.\n" +
+    "\n" +
+    "## Two modes\n" +
+    "\n" +
+    "1. **One-shot sub-agent (default)**: Omit `team_name` and `name`. The agent runs the " +
+    "prompt to completion and the tool returns the final text. (See subagent_type list above.)\n" +
+    "\n" +
+    "2. **Long-lived teammate**: Pass BOTH `team_name` AND `name`. The agent joins the team " +
+    "as an in-process teammate, runs the initial prompt, then enters idle waiting for " +
+    "messages via send_message. The tool returns immediately with the teammate's identity. " +
+    "To message it: `send_message {to: \"<name>\", message: \"...\"}`. To shut it down: " +
+    "`send_message` with a shutdown_request body, or call `team_delete` to cascade-kill the " +
+    "whole team. Requires `team_create` first.";
 
   return {
     name: "task_agent",
@@ -125,9 +172,59 @@ export function buildTaskAgentTool(
         run_in_background?: boolean;
         cwd?: string;
         isolation?: "worktree";
+        team_name?: string;
+        name?: string;
       };
       if (params.isolation === "worktree") {
         return errResult("isolation 'worktree' not yet supported in this phase");
+      }
+
+      // Route to long-lived teammate path early when team_name / name are present.
+      // Both must be set (the cross-pair invariant); we treat any presence of
+      // either as opting into the teammate route so a missing partner becomes a
+      // clear error rather than silently falling through to the LocalAgent path.
+      const teamName = params.team_name?.trim();
+      const agentName = params.name?.trim();
+      if (params.team_name !== undefined || params.name !== undefined) {
+        if (!teamName || !agentName) {
+          return errResult("team_name and name must both be provided to spawn a teammate");
+        }
+        let teammateHandle: TeammateHandle;
+        try {
+          teammateHandle = getTeammateHandle(pi);
+        } catch {
+          return errResult("teammate extension not loaded");
+        }
+        const teammateCwd = params.cwd ?? ctx.cwd;
+        try {
+          const result = await _teammateSpawner(pi, store, teammateHandle, {
+            teamName,
+            agentName,
+            agentType: params.subagent_type ?? "general-purpose",
+            prompt: params.prompt,
+            model: params.model,
+            cwd: teammateCwd,
+          });
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  `Teammate ${result.agentId} spawned (taskId=${result.taskId}). ` +
+                  `Use send_message to communicate.`,
+              },
+            ],
+            details: {
+              action: "task_agent" as const,
+              mode: "teammate" as const,
+              taskId: result.taskId,
+              agentId: result.agentId,
+              sessionFile: result.sessionFile,
+            },
+          };
+        } catch (e) {
+          return errResult(`task_agent failed: ${(e as Error).message ?? String(e)}`);
+        }
       }
 
       const cwd = params.cwd ?? ctx.cwd;

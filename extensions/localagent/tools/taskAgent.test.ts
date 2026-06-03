@@ -1,6 +1,9 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { buildTaskAgentTool, _setSpawnerForTest } from "./taskAgent.js";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { buildTaskAgentTool, _setSpawnerForTest, _setTeammateSpawnerForTest } from "./taskAgent.js";
 import { createTaskStore } from "../../tasks/taskStore.js";
+import { attachTeammateHandle } from "../../teammate/handle.js";
+import { createTeamStore } from "../../teammate/teamStore.js";
+import { createMailbox } from "../../teammate/mailbox.js";
 
 const fakePi: any = { events: {}, sendMessage: vi.fn(), getActiveTools: () => [] };
 const fakeCtx: any = {
@@ -114,5 +117,156 @@ describe("task_agent tool", () => {
     const r = await callTool(tool, { description: "x", prompt: "y", subagent_type: "general-purpose" });
     expect((r.details as any)!.action).toBe("task_agent");
     expect((r.details as any)!.taskId).toBe("a1");
+  });
+});
+
+function makeFakePiWithTeammateHandle(): any {
+  const teamStore = createTeamStore();
+  const mailbox = createMailbox();
+  // Pre-create the team so spawnTeammate's validation passes (when not stubbed).
+  teamStore.createTeam("research", undefined, 1);
+  const pi: any = { events: {}, sendMessage: vi.fn(), getActiveTools: () => [] };
+  attachTeammateHandle(pi as never, { teamStore, mailbox });
+  return pi;
+}
+
+function makeFakePiWithoutTeammateHandle(): any {
+  return { events: {}, sendMessage: vi.fn(), getActiveTools: () => [] };
+}
+
+describe("task_agent — teammate route", () => {
+  beforeEach(() => {
+    _setTeammateSpawnerForTest(undefined);
+    _setSpawnerForTest(undefined);
+  });
+
+  afterEach(() => {
+    _setTeammateSpawnerForTest(undefined);
+    _setSpawnerForTest(undefined);
+  });
+
+  it("team_name + name → calls spawnTeammate (mocked) and returns teammate-mode details", async () => {
+    const fakeSpawner = vi.fn().mockResolvedValue({
+      taskId: "t1",
+      agentId: "alice@research",
+      sessionFile: "/tmp/x.jsonl",
+    });
+    _setTeammateSpawnerForTest(fakeSpawner);
+
+    const pi = makeFakePiWithTeammateHandle();
+    const taskStore = createTaskStore();
+    const tool = buildTaskAgentTool(pi, taskStore);
+    const result = await callTool(
+      tool,
+      {
+        team_name: "research",
+        name: "alice",
+        subagent_type: "general-purpose",
+        prompt: "find auth bugs",
+        description: "auth audit",
+      },
+    );
+
+    expect(fakeSpawner).toHaveBeenCalledTimes(1);
+    const args = fakeSpawner.mock.calls[0]![3];
+    expect(args.teamName).toBe("research");
+    expect(args.agentName).toBe("alice");
+    expect(args.agentType).toBe("general-purpose");
+    expect(args.prompt).toBe("find auth bugs");
+    expect((result as { isError?: boolean }).isError).toBeFalsy();
+    expect((result.details as { mode?: string }).mode).toBe("teammate");
+    expect((result.details as { taskId?: string }).taskId).toBe("t1");
+    expect((result.details as { agentId?: string }).agentId).toBe("alice@research");
+    expect((result.content[0] as { text: string }).text).toMatch(/alice@research/);
+    expect((result.content[0] as { text: string }).text).toMatch(/send_message/);
+  });
+
+  it("team_name without name → isError", async () => {
+    const pi = makeFakePiWithTeammateHandle();
+    const taskStore = createTaskStore();
+    const tool = buildTaskAgentTool(pi, taskStore);
+    const result = await callTool(
+      tool,
+      { team_name: "research", prompt: "x", description: "x" },
+    );
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toMatch(/team_name and name must both/);
+  });
+
+  it("name without team_name → isError", async () => {
+    const pi = makeFakePiWithTeammateHandle();
+    const taskStore = createTaskStore();
+    const tool = buildTaskAgentTool(pi, taskStore);
+    const result = await callTool(
+      tool,
+      { name: "alice", prompt: "x", description: "x" },
+    );
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toMatch(/team_name and name must both/);
+  });
+
+  it("teammate handle missing → isError 'teammate extension not loaded'", async () => {
+    const pi = makeFakePiWithoutTeammateHandle();
+    const taskStore = createTaskStore();
+    const tool = buildTaskAgentTool(pi, taskStore);
+    const result = await callTool(
+      tool,
+      {
+        team_name: "research",
+        name: "alice",
+        prompt: "x",
+        description: "x",
+      },
+    );
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toMatch(/teammate extension/i);
+  });
+
+  it("spawnTeammate throws → isError with the message", async () => {
+    const fakeSpawner = vi.fn().mockRejectedValue(new Error("Team 'ghost' does not exist"));
+    _setTeammateSpawnerForTest(fakeSpawner);
+    const pi = makeFakePiWithTeammateHandle();
+    const taskStore = createTaskStore();
+    const tool = buildTaskAgentTool(pi, taskStore);
+    const result = await callTool(
+      tool,
+      {
+        team_name: "ghost",
+        name: "alice",
+        prompt: "x",
+        description: "x",
+      },
+    );
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toMatch(/does not exist/);
+  });
+
+  it("no team_name and no name → still routes to LocalAgent (existing C-phase path)", async () => {
+    const fakeTeammateSpawner = vi.fn();
+    _setTeammateSpawnerForTest(fakeTeammateSpawner);
+    const fakeLocalSpawner = vi.fn().mockResolvedValue({
+      taskId: "t-local-1",
+      status: "completed" as const,
+      backgrounded: false,
+      finalText: "done",
+      toolCallCount: 0,
+      tokenCount: 0,
+      agentType: "general-purpose",
+      outputFile: "/tmp/out",
+    });
+    _setSpawnerForTest(fakeLocalSpawner);
+    const pi = makeFakePiWithTeammateHandle();
+    const taskStore = createTaskStore();
+    const tool = buildTaskAgentTool(pi, taskStore);
+    await callTool(
+      tool,
+      {
+        subagent_type: "general-purpose",
+        prompt: "x",
+        description: "x",
+      },
+    );
+    expect(fakeTeammateSpawner).not.toHaveBeenCalled();
+    expect(fakeLocalSpawner).toHaveBeenCalled();
   });
 });
