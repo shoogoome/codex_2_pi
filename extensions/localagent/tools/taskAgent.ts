@@ -155,7 +155,12 @@ export function buildTaskAgentTool(
     "messages via send_message. The tool returns immediately with the teammate's identity. " +
     "To message it: `send_message {to: \"<name>\", message: \"...\"}`. To shut it down: " +
     "`send_message` with a shutdown_request body, or call `team_delete` to cascade-kill the " +
-    "whole team. Requires `team_create` first.";
+    "whole team. Requires `team_create` first." +
+    "\n\n## Long-lived teammate workflow\n\n" +
+    "When using the long-lived teammate mode (mode 2 above):\n\n" +
+    "- Messages from teammates arrive AUTOMATICALLY in your context as new conversation turns. You do not need to poll `task_status`.\n" +
+    "- After spawning a teammate or sending a message, continue with other work or wait. Do not immediately call `task_status` to check teammate progress.\n" +
+    "- A teammate going idle is the normal end-of-turn state, not a failure.";
 
   return {
     name: "task_agent",

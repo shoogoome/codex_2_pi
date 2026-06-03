@@ -24,7 +24,14 @@ interface TeamCreateDetails {
 const DESCRIPTION =
   "Create a new team. Each team is a long-lived collection of in-process teammates that can communicate via send_message and shutdown gracefully via the protocol handshake.\n\n" +
   "After creating a team, use task_agent with team_name AND name parameters to spawn a long-lived teammate into the team. (Without those parameters, task_agent runs a one-shot sub-agent — the C-phase LocalAgent path.)\n\n" +
-  "Returns the team configuration. Errors if team_name is empty or already exists.";
+  "Returns the team configuration. Errors if team_name is empty or already exists.\n\n" +
+  "## Automatic Message Delivery\n\n" +
+  "**IMPORTANT**: Messages from teammates are AUTOMATICALLY DELIVERED to you as new conversation turns. You do NOT need to manually check via `task_status` / `task_list`. When a teammate completes work, sends a question, or goes idle after their turn, you'll receive a notification injected into your context.\n\n" +
+  "## Teammate Idle State\n\n" +
+  "Teammates go idle after every turn — this is normal. A teammate going idle right after sending you a message does NOT mean they're done with their work; it means they're waiting for your next instruction.\n\n" +
+  "- **Idle teammates can receive messages.** `send_message` to an idle teammate wakes them up.\n" +
+  "- **Idle is not an error.** Don't remark on it unless it actually impacts your work.\n" +
+  "- **Don't poll status.** Trust the auto-delivery: send a message, then continue with other work or wait.";
 
 export function buildTeamCreateTool(
   pi: ExtensionAPI,
