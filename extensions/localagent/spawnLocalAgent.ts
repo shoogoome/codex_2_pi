@@ -77,6 +77,38 @@ export interface SpawnLocalAgentOptions {
   forceBackground?: boolean;
   parentSessionFile?: string;
   allRegisteredTools?: readonly string[];
+  /**
+   * Stream channel — invoked on each progress milestone (task_start / tool_start /
+   * tool_end / task_end). Pass through the tool's `onUpdate` callback so partial
+   * results stream live to TUI/RPC `tool_execution_update` events.
+   *
+   * Each call gets a snapshot of {timeline, lastEvent, agentType, taskId} so the
+   * tool result renderer can build a multi-line view of the sub-agent's work.
+   */
+  onProgress?: (snapshot: SpawnLocalAgentProgressSnapshot) => void;
+}
+
+export interface SpawnLocalAgentProgressSnapshot {
+  taskId: string;
+  agentType: string;
+  description: string;
+  /** Append-only ordered list of all events that have happened so far. */
+  timeline: SpawnLocalAgentTimelineEntry[];
+  /** Just the most recent entry (kind == "task_start" on first call). */
+  lastEvent: SpawnLocalAgentTimelineEntry;
+  /** Cumulative counts derived from timeline. */
+  toolCallCount: number;
+  turnCount: number;
+  tokenCount: number;
+  status: "running" | "completed" | "failed" | "killed";
+}
+
+export interface SpawnLocalAgentTimelineEntry {
+  kind: "task_start" | "tool_start" | "tool_end" | "task_end" | "kill";
+  ts: number;
+  toolName?: string;
+  isError?: boolean;
+  summary: string;
 }
 
 export interface SpawnLocalAgentResult {
@@ -195,15 +227,61 @@ export async function spawnLocalAgent(
   };
   registerTask(initial, store);
 
-  // Emit task_start progress to TUI/RPC. Filtered out of LLM context by
-  // installProgressContextFilter registered in tasks ext entrypoint.
-  emitTaskProgress(pi, {
-    taskId,
-    taskType: "local_agent",
+  // 4. counters + agent_end signal — declared early so pushProgress can read them.
+  let turnCount = 0;
+  let toolCount = 0;
+  let lastFinalText = "";
+  let agentEnded = false;
+  let agentEndedResolve: () => void = () => {};
+  const agentEndedPromise = new Promise<void>((resolve) => {
+    agentEndedResolve = resolve;
+  });
+
+  // Build progress timeline + emit helper. Each emit: (a) sendMessage(jsonl persistence),
+  // (b) onProgress callback (live stream to TUI/RPC via tool_execution_update).
+  const description = opts.description ?? opts.prompt.slice(0, 60);
+  const timeline: SpawnLocalAgentTimelineEntry[] = [];
+  const pushProgress = (entry: Omit<SpawnLocalAgentTimelineEntry, "ts">): void => {
+    const full: SpawnLocalAgentTimelineEntry = { ts: Date.now(), ...entry };
+    timeline.push(full);
+    // jsonl persistence (history) — not flushed live during streaming, but recorded.
+    emitTaskProgress(pi, {
+      taskId,
+      taskType: "local_agent",
+      kind: full.kind,
+      summary: full.summary,
+      description,
+      agentType: opts.agentDef.agentType,
+      toolName: full.toolName,
+      isError: full.isError,
+      toolCallCount:
+        full.kind === "task_end" || full.kind === "kill" ? toolCount : undefined,
+      tokenCount:
+        full.kind === "task_end" || full.kind === "kill"
+          ? getProgress(taskId)?.tokenCount ?? 0
+          : undefined,
+    });
+    // Live stream to caller's onUpdate (TUI/RPC will see partialResult immediately).
+    try {
+      opts.onProgress?.({
+        taskId,
+        agentType: opts.agentDef.agentType,
+        description,
+        timeline: timeline.slice(),
+        lastEvent: full,
+        toolCallCount: toolCount,
+        turnCount,
+        tokenCount: getProgress(taskId)?.tokenCount ?? 0,
+        status: full.kind === "task_end" ? "completed" : full.kind === "kill" ? "killed" : "running",
+      });
+    } catch (err) {
+      logError(err, "onProgress callback");
+    }
+  };
+
+  pushProgress({
     kind: "task_start",
     summary: `${opts.agentDef.agentType} → ${opts.prompt.slice(0, 60)}`,
-    description: opts.description,
-    agentType: opts.agentDef.agentType,
   });
 
   void initTaskOutput(taskId).catch((e) => {
@@ -213,15 +291,10 @@ export async function spawnLocalAgent(
     logError(e, "initTaskOutput race");
   });
 
-  // 4. subscribe — drives progress, output translation, agent_end signal.
-  let turnCount = 0;
-  let toolCount = 0;
-  let lastFinalText = "";
-  let agentEnded = false;
-  let agentEndedResolve: () => void = () => {};
-  const agentEndedPromise = new Promise<void>((resolve) => {
-    agentEndedResolve = resolve;
-  });
+  // 5. subscribe — drives translation, output writing, agent_end signal.
+  // Note: counters declared earlier (so pushProgress can see them). pushProgress
+  // is invoked from inside the subscribe listener for tool_start / tool_end /
+  // task_end milestones.
 
   const unsub = session.subscribe((event) => {
     const e = event as {
@@ -240,25 +313,19 @@ export async function spawnLocalAgent(
       toolCount += 1;
       if (e.toolName) {
         recordToolStart(taskId, e.toolName);
-        emitTaskProgress(pi, {
-          taskId,
-          taskType: "local_agent",
+        pushProgress({
           kind: "tool_start",
           toolName: e.toolName,
           summary: previewToolStart(e.toolName, e.args),
-          agentType: opts.agentDef.agentType,
         });
       }
     }
     if (e.type === "tool_execution_end" && e.toolName) {
-      emitTaskProgress(pi, {
-        taskId,
-        taskType: "local_agent",
+      pushProgress({
         kind: "tool_end",
         toolName: e.toolName,
         isError: !!e.isError,
         summary: previewToolEnd(e.toolName, e.result, !!e.isError),
-        agentType: opts.agentDef.agentType,
       });
     }
     if (e.type === "turn_start") {
@@ -291,14 +358,9 @@ export async function spawnLocalAgent(
     }
     if (e.type === "agent_end") {
       agentEnded = true;
-      emitTaskProgress(pi, {
-        taskId,
-        taskType: "local_agent",
+      pushProgress({
         kind: "task_end",
         summary: `done (turns=${turnCount}, tools=${toolCount})`,
-        agentType: opts.agentDef.agentType,
-        toolCallCount: toolCount,
-        tokenCount: getProgress(taskId)?.tokenCount ?? 0,
       });
       agentEndedResolve();
     }
@@ -321,8 +383,6 @@ export async function spawnLocalAgent(
   const promptPromise = session.prompt(promptText).catch((e) => {
     logError(e, "session.prompt");
   });
-
-  const description = opts.description ?? opts.prompt.slice(0, 60);
 
   const finalize = async (
     statusVal: "completed",

@@ -1,7 +1,12 @@
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { TaskStore } from "../../tasks/taskStore.js";
-import { spawnLocalAgent as _spawn, type SpawnLocalAgentOptions, type SpawnLocalAgentResult } from "../spawnLocalAgent.js";
+import {
+  spawnLocalAgent as _spawn,
+  type SpawnLocalAgentOptions,
+  type SpawnLocalAgentProgressSnapshot,
+  type SpawnLocalAgentResult,
+} from "../spawnLocalAgent.js";
 import { getBuiltInAgents, FORK_AGENT } from "../agentDefinitions/builtIn.js";
 import { mergeAgentDefinitions, getAgentDefinition } from "../agentDefinitions/resolve.js";
 import { loadAgentsFromDir } from "../agentDefinitions/loadFromDisk.js";
@@ -44,6 +49,39 @@ interface TaskAgentDetails {
   isBackgrounded?: boolean;
   toolCallCount?: number;
   tokenCount?: number;
+  /**
+   * Live progress timeline — pushed via onUpdate as the sub-agent runs.
+   * Only present on partial / running results; the final result keeps the
+   * complete timeline so renderers can display the full trace.
+   */
+  timeline?: SpawnLocalAgentProgressSnapshot["timeline"];
+  description?: string;
+}
+
+/**
+ * Serialise a progress snapshot into a multi-line text block — what the LLM
+ * eventually consumes (the assistant tool result) AND what the TUI/RPC sees as
+ * partialResult content during streaming.
+ *
+ * Mirrors `outputTranslator.translateAgentEvent` for human-readable output but
+ * builds it from the timeline array (so each onUpdate emits the full running
+ * transcript, letting the renderer overwrite the tool block with each tick).
+ */
+function renderTimeline(snap: SpawnLocalAgentProgressSnapshot): string {
+  const lines: string[] = [];
+  lines.push(`▶ ${snap.agentType} — ${snap.description}`);
+  for (const e of snap.timeline) {
+    if (e.kind === "tool_start") {
+      lines.push(`  ↳ ${e.summary}`);
+    } else if (e.kind === "tool_end") {
+      lines.push(`  ${e.isError ? "✗" : "✓"} ${e.summary}`);
+    } else if (e.kind === "task_end") {
+      lines.push(`■ ${e.summary}`);
+    } else if (e.kind === "kill") {
+      lines.push(`✗ ${e.summary}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 export function buildTaskAgentTool(
@@ -78,7 +116,7 @@ export function buildTaskAgentTool(
     description,
     parameters: TaskAgentParams,
     executionMode: "parallel",
-    async execute(_callId: unknown, raw: unknown, _signal, _onUpdate, ctx: ExtensionContext) {
+    async execute(_callId: unknown, raw: unknown, _signal, onUpdate, ctx: ExtensionContext) {
       const params = raw as {
         description: string;
         prompt: string;
@@ -115,6 +153,32 @@ export function buildTaskAgentTool(
         }
       }
 
+      // Stream sub-agent progress to the tool's caller via onUpdate. Each call
+      // emits a full snapshot of the timeline as a multi-line text block. The
+      // TUI / RPC renders these as live tool_execution_update events — every
+      // sub-agent tool call appears in real time under THIS task_agent's tool
+      // result block (no merging across parallel task_agent invocations).
+      const onProgress = (snap: SpawnLocalAgentProgressSnapshot): void => {
+        try {
+          onUpdate?.({
+            content: [{ type: "text", text: renderTimeline(snap) }],
+            details: {
+              action: "task_agent",
+              taskId: snap.taskId,
+              agentType: snap.agentType,
+              status: snap.status,
+              isBackgrounded: false,
+              toolCallCount: snap.toolCallCount,
+              tokenCount: snap.tokenCount,
+              timeline: snap.timeline,
+              description: snap.description,
+            } satisfies TaskAgentDetails,
+          });
+        } catch {
+          // onUpdate failures must NOT propagate — they would kill the sub-agent.
+        }
+      };
+
       try {
         const result = await _spawner(pi, store, {
           prompt: params.prompt,
@@ -126,6 +190,7 @@ export function buildTaskAgentTool(
           forceBackground: params.run_in_background === true,
           parentSessionFile,
           allRegisteredTools: pi.getActiveTools(),
+          onProgress,
         });
         if (result.backgrounded) {
           return {

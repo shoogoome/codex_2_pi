@@ -39,17 +39,57 @@ export default function localshellExtension(pi: ExtensionAPI): void {
         "Run a shell command as a tracked task. Use ONLY for long-running, interactive, or backgroundable commands; for short one-shot commands use the regular `bash` tool. Auto-backgrounds after timeout_ms (default 60000).",
       parameters: TaskBashParams,
       executionMode: "parallel",
-      async execute(_callId: unknown, raw: unknown) {
+      async execute(_callId: unknown, raw: unknown, _signal, onUpdate) {
         const { command, description, timeout_ms } = raw as {
           command: string;
           description: string;
           timeout_ms?: number;
         };
+
+        // Last-wins coalesce: at most one onUpdate flush per ~100ms keeps the
+        // tool result block stable when bash spits hundreds of lines/sec.
+        const FLUSH_INTERVAL_MS = 100;
+        let pending: string | null = null;
+        let lastSent = 0;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const sendNow = (cumulative: string): void => {
+          pending = null;
+          lastSent = Date.now();
+          try {
+            onUpdate?.({
+              content: [{ type: "text", text: `▶ ${description}\n${cumulative}` }],
+              details: {
+                action: "task_bash",
+                taskId: undefined,
+                status: "running",
+                bytesReceived: cumulative.length,
+              },
+            });
+          } catch {
+            // onUpdate failure must not propagate
+          }
+        };
+        const scheduleFlush = (cumulative: string): void => {
+          pending = cumulative;
+          const sinceLast = Date.now() - lastSent;
+          if (sinceLast >= FLUSH_INTERVAL_MS) {
+            sendNow(cumulative);
+            return;
+          }
+          if (timer) return;
+          timer = setTimeout(() => {
+            timer = undefined;
+            if (pending !== null) sendNow(pending);
+          }, FLUSH_INTERVAL_MS - sinceLast);
+        };
+
         const result = await spawnLocalShell(pi, handle.store, {
           command,
           description,
           timeoutMs: timeout_ms,
+          onProgress: (snap) => scheduleFlush(snap.cumulative),
         });
+        if (timer) clearTimeout(timer);
         const head = result.backgrounded
           ? `Backgrounded (taskId=${result.taskId}). Last ${result.output.length} bytes:\n`
           : `${result.status}${result.exitCode !== undefined ? ` (exit ${result.exitCode})` : ""} taskId=${result.taskId}\n`;

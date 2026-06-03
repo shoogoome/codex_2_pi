@@ -55,6 +55,27 @@ export interface SpawnLocalShellOptions {
   timeoutMs?: number;
   cwd?: string;
   operations?: BashOperations;
+  /**
+   * Stream channel — invoked on each output chunk (from `onData`) so callers
+   * (the task_bash tool's `execute`) can pipe live output into Pi's
+   * `tool_execution_update` event via the tool's onUpdate callback.
+   *
+   * Snapshot includes the cumulative output so far and the latest chunk.
+   * Throttle / coalesce logic should live in the caller; here we forward each
+   * chunk as it arrives.
+   */
+  onProgress?: (snap: SpawnLocalShellProgressSnapshot) => void;
+}
+
+export interface SpawnLocalShellProgressSnapshot {
+  taskId: string;
+  description: string;
+  /** Cumulative output bytes seen so far (string-decoded). */
+  cumulative: string;
+  /** Just the most recent chunk that triggered this snapshot. */
+  chunk: string;
+  /** Bytes received so far. */
+  bytesReceived: number;
 }
 
 export interface SpawnLocalShellResult {
@@ -125,15 +146,33 @@ export function spawnLocalShell(
 
   let resultRef: { exitCode: number | null } | null = null;
   let resolved = false;
+  // Cumulative output buffer for streaming snapshots — kept in-memory only for
+  // onProgress; the durable copy goes to disk via appendTaskOutput.
+  let cumulative = "";
+  let bytesReceived = 0;
 
   // 同步启动 exec(使 fake.finish/emit 立即可用)
   const execPromise = ops
     .exec(opts.command, cwd, {
       onData: (buf) => {
+        const chunk = buf.toString("utf8");
+        cumulative += chunk;
+        bytesReceived += buf.length;
         try {
-          appendTaskOutput(taskId, buf.toString("utf8"));
+          appendTaskOutput(taskId, chunk);
         } catch (e) {
           logError(e, "spawnLocalShell appendTaskOutput");
+        }
+        try {
+          opts.onProgress?.({
+            taskId,
+            description: opts.description,
+            cumulative,
+            chunk,
+            bytesReceived,
+          });
+        } catch (e) {
+          logError(e, "spawnLocalShell onProgress");
         }
       },
       signal: abort.signal,
