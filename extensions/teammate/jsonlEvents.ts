@@ -13,6 +13,7 @@ import type {
   TeammateEvent,
   TeammateIdentity,
 } from "./types.js";
+import type { TeamTask } from "./teamTasks/types.js";
 
 export interface ReplayedTeammate {
   identity: TeammateIdentity;
@@ -24,10 +25,11 @@ export interface ReplayedTeammate {
 export interface ReplayedState {
   teams: Record<string, TeamState>;
   teammates: Record<string, ReplayedTeammate>;
+  teamTasks: Record<string, TeamTask>;
 }
 
 export function reduceTeammateEvents(events: readonly TeammateEvent[]): ReplayedState {
-  let state: ReplayedState = { teams: {}, teammates: {} };
+  let state: ReplayedState = { teams: {}, teammates: {}, teamTasks: {} };
   for (const event of events) {
     state = applyEvent(state, event);
   }
@@ -55,7 +57,7 @@ function applyEvent(state: ReplayedState, event: TeammateEvent): ReplayedState {
           teammatesCopy[agentId] = { ...tm, lastStatus: "killed" };
         }
       }
-      return { teams: teamsCopy, teammates: teammatesCopy };
+      return { ...state, teams: teamsCopy, teammates: teammatesCopy };
     }
     case "teammate_spawn": {
       const team = state.teams[event.identity.teamName];
@@ -76,7 +78,7 @@ function applyEvent(state: ReplayedState, event: TeammateEvent): ReplayedState {
           lastStatus: "running",
         };
       }
-      return { teams: teamsCopy, teammates: teammatesCopy };
+      return { ...state, teams: teamsCopy, teammates: teammatesCopy };
     }
     case "teammate_terminal": {
       const tm = state.teammates[event.agentId];
@@ -93,6 +95,37 @@ function applyEvent(state: ReplayedState, event: TeammateEvent): ReplayedState {
     case "shutdown_request":
     case "shutdown_response":
       return state;
+    case "team_task_create": {
+      // Idempotent: re-creating the same id replaces the entry. Replays of
+      // a duplicate prefix therefore converge on the latest snapshot.
+      return {
+        ...state,
+        teamTasks: { ...state.teamTasks, [event.task.id]: event.task },
+      };
+    }
+    case "team_task_update": {
+      const existing = state.teamTasks[event.taskId];
+      if (!existing) return state;
+      const merged: TeamTask = {
+        ...existing,
+        ...event.patch,
+        // Preserve identity fields and bump updatedAt.
+        id: existing.id,
+        teamName: existing.teamName,
+        createdAt: existing.createdAt,
+        updatedAt: event.updatedAt,
+      };
+      return {
+        ...state,
+        teamTasks: { ...state.teamTasks, [event.taskId]: merged },
+      };
+    }
+    case "team_task_delete": {
+      if (!state.teamTasks[event.taskId]) return state;
+      const teamTasksCopy = { ...state.teamTasks };
+      delete teamTasksCopy[event.taskId];
+      return { ...state, teamTasks: teamTasksCopy };
+    }
     default: {
       // Defensive: unknown kind. Asserts at the type level via never check.
       const _exhaustive: never = event;

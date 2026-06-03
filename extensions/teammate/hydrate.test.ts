@@ -28,7 +28,7 @@ const t1id = {
 describe("hydrateTeammateState", () => {
   it("empty entries → empty state", () => {
     const state = hydrateTeammateState([]);
-    expect(state).toEqual({ teams: {}, teammates: {} });
+    expect(state).toEqual({ teams: {}, teammates: {}, teamTasks: {} });
   });
 
   it("rebuilds from team_create + teammate_spawn events", () => {
@@ -217,6 +217,7 @@ describe("respawnTeammates", () => {
           lastStatus: "completed",
         },
       },
+      teamTasks: {},
     };
 
     const taskStore = createTaskStore();
@@ -279,6 +280,7 @@ describe("respawnTeammates", () => {
           lastStatus: "running",
         },
       },
+      teamTasks: {},
     };
     const taskStore = createTaskStore();
     const handle: TeammateHandle = {
@@ -375,6 +377,7 @@ describe("respawnTeammates", () => {
           lastStatus: "running",
         },
       },
+      teamTasks: {},
     };
     const taskStore = createTaskStore();
     const handle: TeammateHandle = {
@@ -435,6 +438,7 @@ describe("respawnTeammates", () => {
           lastStatus: "running",
         },
       },
+      teamTasks: {},
     };
     const taskStore = createTaskStore();
     const handle: TeammateHandle = {
@@ -502,6 +506,7 @@ describe("respawnTeammates", () => {
           lastStatus: "running",
         },
       },
+      teamTasks: {},
     };
     const taskStore = createTaskStore();
     const handle: TeammateHandle = {

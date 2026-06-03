@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { reduceTeammateEvents } from "./jsonlEvents.js";
 import type { TeammateEvent, TeammateIdentity } from "./types.js";
+import type { TeamTask } from "./teamTasks/types.js";
 
 const t1id: TeammateIdentity = {
   agentId: "r@t1",
@@ -109,6 +110,128 @@ describe("reduceTeammateEvents", () => {
 
   it("empty event list yields empty state", () => {
     const state = reduceTeammateEvents([]);
-    expect(state).toEqual({ teams: {}, teammates: {} });
+    expect(state).toEqual({ teams: {}, teammates: {}, teamTasks: {} });
+  });
+
+  describe("team_task_* events", () => {
+    const baseTask: TeamTask = {
+      id: "tt-1",
+      teamName: "t1",
+      subject: "investigate",
+      status: "pending",
+      blockedBy: [],
+      blocks: [],
+      createdAt: 100,
+      updatedAt: 100,
+    };
+
+    it("team_task_create adds task to teamTasks slice", () => {
+      const events: TeammateEvent[] = [
+        { kind: "team_task_create", task: baseTask },
+      ];
+      const state = reduceTeammateEvents(events);
+      expect(state.teamTasks["tt-1"]).toEqual(baseTask);
+    });
+
+    it("team_task_update applies patch and updates updatedAt", () => {
+      const events: TeammateEvent[] = [
+        { kind: "team_task_create", task: baseTask },
+        {
+          kind: "team_task_update",
+          taskId: "tt-1",
+          teamName: "t1",
+          patch: { status: "in_progress", owner: "leader" },
+          updatedAt: 200,
+        },
+      ];
+      const state = reduceTeammateEvents(events);
+      expect(state.teamTasks["tt-1"]!.status).toBe("in_progress");
+      expect(state.teamTasks["tt-1"]!.owner).toBe("leader");
+      expect(state.teamTasks["tt-1"]!.updatedAt).toBe(200);
+      // Untouched fields remain.
+      expect(state.teamTasks["tt-1"]!.subject).toBe("investigate");
+      expect(state.teamTasks["tt-1"]!.createdAt).toBe(100);
+    });
+
+    it("team_task_update replaces array fields wholesale (no merge)", () => {
+      const taskWithDeps: TeamTask = {
+        ...baseTask,
+        blockedBy: ["tt-a", "tt-b"],
+        blocks: ["tt-c"],
+      };
+      const events: TeammateEvent[] = [
+        { kind: "team_task_create", task: taskWithDeps },
+        {
+          kind: "team_task_update",
+          taskId: "tt-1",
+          teamName: "t1",
+          patch: { blockedBy: ["tt-x"] },
+          updatedAt: 200,
+        },
+      ];
+      const state = reduceTeammateEvents(events);
+      expect(state.teamTasks["tt-1"]!.blockedBy).toEqual(["tt-x"]);
+      // `blocks` was not in the patch, so it stays.
+      expect(state.teamTasks["tt-1"]!.blocks).toEqual(["tt-c"]);
+    });
+
+    it("team_task_update on unknown task is a no-op", () => {
+      const events: TeammateEvent[] = [
+        {
+          kind: "team_task_update",
+          taskId: "tt-ghost",
+          teamName: "t1",
+          patch: { status: "completed" },
+          updatedAt: 200,
+        },
+      ];
+      const state = reduceTeammateEvents(events);
+      expect(state.teamTasks).toEqual({});
+    });
+
+    it("team_task_delete removes the task", () => {
+      const events: TeammateEvent[] = [
+        { kind: "team_task_create", task: baseTask },
+        { kind: "team_task_delete", taskId: "tt-1", teamName: "t1" },
+      ];
+      const state = reduceTeammateEvents(events);
+      expect(state.teamTasks["tt-1"]).toBeUndefined();
+    });
+
+    it("team_task_delete on unknown task is a no-op", () => {
+      const events: TeammateEvent[] = [
+        { kind: "team_task_delete", taskId: "tt-ghost", teamName: "t1" },
+      ];
+      const state = reduceTeammateEvents(events);
+      expect(state.teamTasks).toEqual({});
+    });
+
+    it("team_task slice is independent of teams / teammates slices", () => {
+      const events: TeammateEvent[] = [
+        { kind: "team_create", teamName: "t1", createdAt: 1 },
+        {
+          kind: "teammate_spawn",
+          identity: t1id,
+          sessionFile: "/tmp/r.jsonl",
+          initialPrompt: "go",
+        },
+        { kind: "team_task_create", task: baseTask },
+        {
+          kind: "team_task_update",
+          taskId: "tt-1",
+          teamName: "t1",
+          patch: { status: "completed" },
+          updatedAt: 300,
+        },
+      ];
+      const state = reduceTeammateEvents(events);
+      // Team/teammate side untouched by team_task events.
+      expect(state.teams["t1"]).toBeDefined();
+      expect(state.teams["t1"]!.memberAgentIds).toEqual(["r@t1"]);
+      expect(state.teammates["r@t1"]!.lastStatus).toBe("running");
+      // teamTasks slice carries the patched task.
+      expect(state.teamTasks["tt-1"]!.status).toBe("completed");
+      expect(state.teamTasks["tt-1"]!.updatedAt).toBe(300);
+    });
   });
 });

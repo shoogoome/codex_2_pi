@@ -2,6 +2,7 @@
 
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { TaskStateBase } from "../tasks/Task.js";
+import type { TeamTaskEvent } from "./teamTasks/types.js";
 
 /**
  * 一个 teammate 的身份标识。`agentId` 全局唯一(`name@team`),
@@ -130,7 +131,8 @@ export type TeammateEvent =
       requestId: string;
       approve: boolean;
       feedback?: string;
-    };
+    }
+  | TeamTaskEvent;
 
 /**
  * Type guard — 判断一个 unknown 是否是 InProcessTeammateTaskState。
