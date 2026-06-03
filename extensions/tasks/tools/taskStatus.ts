@@ -28,7 +28,12 @@ export function buildTaskStatusTool(store: TaskStore): ToolDefinition<typeof Tas
   return {
     name: "task_status",
     label: "Task status",
-    description: "Read a task's current status, terminal exit info, and incremental output past a byte offset.",
+    description:
+      "Read a task's current status, terminal exit info, and incremental output past a byte offset." +
+      "\n\n## Polling caveat\n\n" +
+      "- Do NOT use task_status to poll teammate progress after send_message. Teammate replies are AUTOMATICALLY delivered to your context as new turns; just wait or work on other things.\n" +
+      "- Do NOT use task_status to check if a teammate is idle. Idle notifications are auto-delivered with triggerTurn:false (informational). Polling adds noise without value.\n" +
+      "- DO use task_status when: (a) you have an explicit reason to inspect a long-running local_bash task or local_agent sub-agent, (b) debugging a stuck task, or (c) verifying terminal state after kill.",
     parameters: TaskStatusParams,
     executionMode: "parallel",
     async execute(_callId, rawParams): Promise<AgentToolResult<TaskStatusDetails>> {

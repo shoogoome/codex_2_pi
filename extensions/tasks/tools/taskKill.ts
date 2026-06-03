@@ -13,7 +13,10 @@ export function buildTaskKillTool(store: TaskStore): ToolDefinition<typeof TaskK
   return {
     name: "task_kill",
     label: "Kill task",
-    description: "Stop a running task by ID. Works across all task types (bash, agent, ...).",
+    description:
+      "Stop a running task by ID. Works across all task types (bash, agent, ...)." +
+      "\n\n## Polling caveat\n\n" +
+      "- For teammates, prefer the graceful protocol: `send_message {to:\"<name>\", message:'{\"type\":\"shutdown_request\",\"request_id\":\"r1\"}'}` — the teammate's loop auto-acks and exits. Use task_kill only as a forced last resort (or via team_delete cascade for the whole team).",
     parameters: TaskKillParams,
     executionMode: "parallel",
     async execute(_callId, rawParams): Promise<AgentToolResult<{ action: string }>> {

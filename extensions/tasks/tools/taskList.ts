@@ -26,7 +26,11 @@ export function buildTaskListTool(store: TaskStore): ToolDefinition<typeof TaskL
   return {
     name: "task_list",
     label: "List tasks",
-    description: "List currently registered tasks. Filter='running' (default) or 'all'.",
+    description:
+      "List currently registered tasks. Filter='running' (default) or 'all'." +
+      "\n\n## Polling caveat\n\n" +
+      "- task_list shows ALL active tasks. Don't use it as a \"show me my teammates\" check — your team membership is reflected in the TUI widget and any teammate updates arrive as automatic context messages.\n" +
+      "- Use task_list mainly for: (a) finding background tasks you spawned earlier, (b) seeing if there are unrelated tasks competing for resources.",
     parameters: TaskListParams,
     executionMode: "parallel",
     async execute(_callId, rawParams): Promise<AgentToolResult<TaskListDetails>> {
