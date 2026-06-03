@@ -132,6 +132,79 @@ describe("teamTaskStore", () => {
     expect(updated!.id).toBe("t1"); // unchanged
   });
 
+  it("updateTask with null sentinel clears owner/description/metadata back to undefined", () => {
+    const store = createTeamTaskStore();
+    store.createTask({
+      id: "t1",
+      teamName: "r",
+      subject: "s",
+      description: "old desc",
+      owner: "alice",
+      metadata: { k: 1 },
+      createdAt: 1,
+    });
+    // Sanity check: fields are set.
+    expect(store.getTask("t1")!.owner).toBe("alice");
+    expect(store.getTask("t1")!.description).toBe("old desc");
+    expect(store.getTask("t1")!.metadata).toEqual({ k: 1 });
+
+    // Clear owner via null.
+    const cleared1 = store.updateTask("t1", { owner: null, updatedAt: 2 });
+    expect(cleared1!.owner).toBeUndefined();
+    expect("owner" in cleared1!).toBe(false);
+    // Other fields untouched.
+    expect(cleared1!.description).toBe("old desc");
+    expect(cleared1!.metadata).toEqual({ k: 1 });
+
+    // Clear description via null.
+    const cleared2 = store.updateTask("t1", {
+      description: null,
+      updatedAt: 3,
+    });
+    expect(cleared2!.description).toBeUndefined();
+    expect("description" in cleared2!).toBe(false);
+
+    // Clear metadata via null.
+    const cleared3 = store.updateTask("t1", { metadata: null, updatedAt: 4 });
+    expect(cleared3!.metadata).toBeUndefined();
+    expect("metadata" in cleared3!).toBe(false);
+  });
+
+  it("updateTask with concrete value still sets owner/description/metadata (regression)", () => {
+    const store = createTeamTaskStore();
+    store.createTask({ id: "t1", teamName: "r", subject: "s", createdAt: 1 });
+    const updated = store.updateTask("t1", {
+      owner: "bob",
+      description: "d",
+      metadata: { k: 2 },
+      updatedAt: 2,
+    });
+    expect(updated!.owner).toBe("bob");
+    expect(updated!.description).toBe("d");
+    expect(updated!.metadata).toEqual({ k: 2 });
+  });
+
+  it("updateTask without owner/description/metadata in patch leaves them untouched (regression)", () => {
+    const store = createTeamTaskStore();
+    store.createTask({
+      id: "t1",
+      teamName: "r",
+      subject: "s",
+      description: "keep",
+      owner: "alice",
+      metadata: { k: 1 },
+      createdAt: 1,
+    });
+    const updated = store.updateTask("t1", {
+      subject: "new subject",
+      updatedAt: 2,
+    });
+    expect(updated!.subject).toBe("new subject");
+    expect(updated!.owner).toBe("alice");
+    expect(updated!.description).toBe("keep");
+    expect(updated!.metadata).toEqual({ k: 1 });
+  });
+
   it("updateTask blockedBy add → upstream.blocks gains; remove → upstream.blocks loses", () => {
     const store = createTeamTaskStore();
     store.createTask({ id: "u1", teamName: "r", subject: "u1", createdAt: 1 });

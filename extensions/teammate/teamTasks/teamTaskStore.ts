@@ -41,11 +41,13 @@ export interface TeamTaskStore {
     id: string,
     patch: {
       subject?: string;
-      description?: string;
+      // null = clear (set back to undefined / remove the property).
+      // undefined / absent = skip (leave the field untouched).
+      description?: string | null;
       status?: TeamTask["status"];
-      owner?: string;
+      owner?: string | null;
       blockedBy?: string[];
-      metadata?: Record<string, unknown>;
+      metadata?: Record<string, unknown> | null;
       updatedAt: number;
     },
   ): TeamTask | undefined;
@@ -133,12 +135,29 @@ export function createTeamTaskStore(): TeamTaskStore {
         if (!existing) return prev;
         const nextTask: TeamTask = { ...existing };
         if (patch.subject !== undefined) nextTask.subject = patch.subject;
+        // null = clear (delete property), string/object = set, undefined = skip.
         if (patch.description !== undefined) {
-          nextTask.description = patch.description;
+          if (patch.description === null) {
+            delete nextTask.description;
+          } else {
+            nextTask.description = patch.description;
+          }
         }
         if (patch.status !== undefined) nextTask.status = patch.status;
-        if (patch.owner !== undefined) nextTask.owner = patch.owner;
-        if (patch.metadata !== undefined) nextTask.metadata = patch.metadata;
+        if (patch.owner !== undefined) {
+          if (patch.owner === null) {
+            delete nextTask.owner;
+          } else {
+            nextTask.owner = patch.owner;
+          }
+        }
+        if (patch.metadata !== undefined) {
+          if (patch.metadata === null) {
+            delete nextTask.metadata;
+          } else {
+            nextTask.metadata = patch.metadata;
+          }
+        }
         nextTask.updatedAt = patch.updatedAt;
 
         const next: Snapshot = { ...prev, [id]: nextTask };
