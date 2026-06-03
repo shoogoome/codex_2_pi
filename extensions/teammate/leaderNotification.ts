@@ -29,6 +29,13 @@ function buildContent(details: LeaderNotificationDetails): string {
  *
  * @param triggerTurn — true for DMs (leader should wake up and respond),
  *                       false for idle status (informational only).
+ *
+ * Note: Pi marks the captured `pi` handle "stale" once a sub-AgentSession
+ * has taken over the extension runtime (which is exactly when teammate
+ * callbacks fire). We treat that as a benign "leader is busy, skip
+ * notification this round" and silently swallow — the prompt-level
+ * guidance (D1.fix.1) tells the LLM that messages may be delivered
+ * later anyway. Other errors still get logged.
  */
 export function postLeaderNotification(
   pi: Pick<ExtensionAPI, "sendMessage">,
@@ -46,6 +53,11 @@ export function postLeaderNotification(
       { triggerTurn },
     );
   } catch (e) {
+    // Stale-ctx errors are expected when teammate callbacks fire mid-sub-session.
+    // Silently drop — prompt guidance covers the soft-delivery semantics.
+    if (e instanceof Error && /stale after session replacement/i.test(e.message)) {
+      return;
+    }
     logError(e, "postLeaderNotification");
   }
 }
