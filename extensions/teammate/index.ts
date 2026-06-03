@@ -13,6 +13,8 @@ import {
 import { buildTeamCreateTool } from "./tools/teamCreate.js";
 import { buildSendMessageTool } from "./tools/sendMessage.js";
 import { buildTeamDeleteTool } from "./tools/teamDelete.js";
+import { hydrateTeammateState, respawnTeammates } from "./hydrate.js";
+import { logError } from "../tasks/logging.js";
 
 export default function teammateExtension(pi: ExtensionAPI): void {
   const teamStore = createTeamStore();
@@ -22,13 +24,29 @@ export default function teammateExtension(pi: ExtensionAPI): void {
 
   installTeammateEventContextFilter(pi);
 
-  pi.on("session_start", () => {
+  pi.on("session_start", async (_event, ctx) => {
     _bindPi(pi);
     const tasksHandle = getTasksHandle(pi);
     tasksHandle.registerTaskType("in_process_teammate", InProcessTeammateTask);
     pi.registerTool(buildTeamCreateTool(pi));
     pi.registerTool(buildSendMessageTool(pi));
     pi.registerTool(buildTeamDeleteTool(pi));
+
+    // Hydrate teammates from the parent session's jsonl. Failures must not
+    // break session_start — a corrupt or unreadable jsonl should still allow
+    // the extension to load fresh.
+    try {
+      const entries = ctx.sessionManager.getEntries();
+      const state = hydrateTeammateState(entries as never);
+      await respawnTeammates(state, {
+        pi,
+        taskStore: tasksHandle.store,
+        handle,
+        cwd: ctx.cwd,
+      });
+    } catch (e) {
+      logError(e, "teammate hydrate");
+    }
   });
 
   pi.on("session_shutdown", async () => {
