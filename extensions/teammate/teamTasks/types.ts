@@ -6,6 +6,8 @@
 // stream as other teammate events; jsonlEvents.ts reduces them into the
 // `teamTasks` slice of ReplayedState.
 
+import type { TeammateEvent } from "../types.js";
+
 /**
  * Coordination unit shared between leader and teammates. Identified by a
  * short opaque id (e.g. "tt-3akj9d2x"). `blocks` is the inverse of
@@ -48,11 +50,7 @@ export type TeamTaskEvent =
  * sharing the prefix automatically narrow correctly.
  */
 export function isTeamTaskEvent(
-  event: { kind: string },
+  event: TeammateEvent,
 ): event is TeamTaskEvent {
-  return (
-    event.kind === "team_task_create" ||
-    event.kind === "team_task_update" ||
-    event.kind === "team_task_delete"
-  );
+  return event.kind.startsWith("team_task_");
 }

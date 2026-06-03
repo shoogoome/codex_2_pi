@@ -73,6 +73,17 @@ describe("isTeamTaskEvent", () => {
     }
   });
 
+  it("returns true for hypothetical future team_task_* kinds", () => {
+    // Future-proof: any kind starting with team_task_ narrows to TeamTaskEvent.
+    // We don't actually extend the union; we cast a minimal stub to test the guard.
+    const future = {
+      kind: "team_task_archive",
+      taskId: "tt-x",
+      teamName: "t",
+    } as unknown as TeammateEvent;
+    expect(isTeamTaskEvent(future)).toBe(true);
+  });
+
   it("TeamTask interface accepts optional fields and arrays", () => {
     const t: TeamTask = {
       id: "tt-x",
