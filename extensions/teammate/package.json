@@ -1,0 +1,12 @@
+{
+  "name": "pi-teammate-extension",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.ts",
+  "pi": { "extensions": ["index.ts"] },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  }
+}
