@@ -76,9 +76,12 @@ describe("teammateExtension entrypoint", () => {
     teammateExtension(pi as never);
     const start = handlers.get("session_start")!;
     await start({});
-    expect(pi.registerTool).toHaveBeenCalledTimes(1);
-    const tool = pi.registerTool.mock.calls[0]![0] as { name: string };
-    expect(tool.name).toBe("team_create");
+    expect(pi.registerTool).toHaveBeenCalledTimes(2);
+    const names = pi.registerTool.mock.calls.map(
+      (c: unknown[]) => (c[0] as { name: string }).name,
+    );
+    expect(names).toContain("team_create");
+    expect(names).toContain("send_message");
   });
 
   it("session_shutdown unregisters task type and resets stores", async () => {
