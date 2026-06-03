@@ -3,6 +3,7 @@ import { buildTeamDeleteTool } from "./teamDelete.js";
 import { attachTeammateHandle, type TeammateHandle } from "../handle.js";
 import { createTeamStore } from "../teamStore.js";
 import { createMailbox } from "../mailbox.js";
+import { createTeamTaskStore } from "../teamTasks/teamTaskStore.js";
 import { createTaskStore, _setDefaultTaskStoreForTest } from "../../tasks/taskStore.js";
 import { _resetTaskOutputDirForTest } from "../../tasks/outputPath.js";
 import { _clearOutputsForTest } from "../../tasks/diskOutput.js";
@@ -32,7 +33,11 @@ function buildPi(taskStore: TaskStore): FakePi {
 }
 
 function buildHandle(): TeammateHandle {
-  return { teamStore: createTeamStore(), mailbox: createMailbox() };
+  return {
+    teamStore: createTeamStore(),
+    mailbox: createMailbox(),
+    teamTaskStore: createTeamTaskStore(),
+  };
 }
 
 function makeTeammateTask(taskStore: TaskStore, agentName: string, teamName: string): InProcessTeammateTaskState {

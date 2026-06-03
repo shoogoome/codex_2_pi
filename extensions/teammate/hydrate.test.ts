@@ -15,6 +15,7 @@ import { _resetTaskOutputDirForTest } from "../tasks/outputPath.js";
 import { _clearOutputsForTest } from "../tasks/diskOutput.js";
 import { createTeamStore } from "./teamStore.js";
 import { createMailbox } from "./mailbox.js";
+import { createTeamTaskStore } from "./teamTasks/teamTaskStore.js";
 import type { TeammateHandle } from "./handle.js";
 import type { ReplayedState } from "./jsonlEvents.js";
 
@@ -224,6 +225,7 @@ describe("respawnTeammates", () => {
     const handle: TeammateHandle = {
       teamStore: createTeamStore(),
       mailbox: createMailbox(),
+      teamTaskStore: createTeamTaskStore(),
     };
     const result = await respawnTeammates(state, {
       pi: buildPi() as never,
@@ -286,6 +288,7 @@ describe("respawnTeammates", () => {
     const handle: TeammateHandle = {
       teamStore: createTeamStore(),
       mailbox: createMailbox(),
+      teamTaskStore: createTeamTaskStore(),
     };
     await respawnTeammates(state, {
       pi: buildPi() as never,
@@ -383,6 +386,7 @@ describe("respawnTeammates", () => {
     const handle: TeammateHandle = {
       teamStore: createTeamStore(),
       mailbox: createMailbox(),
+      teamTaskStore: createTeamTaskStore(),
     };
     const promise = respawnTeammates(state, {
       pi: buildPi() as never,
@@ -444,6 +448,7 @@ describe("respawnTeammates", () => {
     const handle: TeammateHandle = {
       teamStore: createTeamStore(),
       mailbox: createMailbox(),
+      teamTaskStore: createTeamTaskStore(),
     };
     const pi = buildPi();
     await respawnTeammates(state, {
@@ -512,6 +517,7 @@ describe("respawnTeammates", () => {
     const handle: TeammateHandle = {
       teamStore: createTeamStore(),
       mailbox: createMailbox(),
+      teamTaskStore: createTeamTaskStore(),
     };
     const pi = buildPi();
     await respawnTeammates(state, {

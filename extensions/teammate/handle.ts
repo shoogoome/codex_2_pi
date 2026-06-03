@@ -10,10 +10,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { TeamStore } from "./teamStore.js";
 import type { Mailbox } from "./mailbox.js";
+import type { TeamTaskStore } from "./teamTasks/teamTaskStore.js";
 
 export interface TeammateHandle {
   teamStore: TeamStore;
   mailbox: Mailbox;
+  teamTaskStore: TeamTaskStore;
 }
 
 const HANDLE_KEY = "teammate";

@@ -3,6 +3,7 @@ import { buildTeamCreateTool } from "./teamCreate.js";
 import { attachTeammateHandle } from "../handle.js";
 import { createTeamStore } from "../teamStore.js";
 import { createMailbox } from "../mailbox.js";
+import { createTeamTaskStore } from "../teamTasks/teamTaskStore.js";
 
 function buildPi(): {
   events: Record<string, unknown>;
@@ -18,7 +19,11 @@ describe("team_create tool", () => {
   beforeEach(() => {
     pi = buildPi();
     teamStore = createTeamStore();
-    attachTeammateHandle(pi as never, { teamStore, mailbox: createMailbox() });
+    attachTeammateHandle(pi as never, {
+      teamStore,
+      mailbox: createMailbox(),
+      teamTaskStore: createTeamTaskStore(),
+    });
   });
 
   it("creates a new team and emits team_create event", async () => {

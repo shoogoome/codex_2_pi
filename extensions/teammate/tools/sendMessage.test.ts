@@ -1,11 +1,17 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { buildSendMessageTool } from "./sendMessage.js";
 import { attachTeammateHandle } from "../handle.js";
 import { createTeamStore } from "../teamStore.js";
 import { createMailbox } from "../mailbox.js";
+import { createTeamTaskStore } from "../teamTasks/teamTaskStore.js";
 import { runAsTeammate } from "../als.js";
 import { buildShutdownRequest, buildShutdownResponse } from "../shutdownHandshake.js";
-import type { TeammateIdentity, MailboxMessage } from "../types.js";
+import {
+  registerLeaderChannel,
+  _resetLeaderBridgeForTest,
+  type LeaderChannel,
+} from "../leaderBridge.js";
+import type { TeammateIdentity, MailboxMessage, LeaderNotificationDetails } from "../types.js";
 
 function buildPi(): {
   events: Record<string, unknown>;
@@ -19,7 +25,7 @@ describe("send_message tool — basics", () => {
     const pi = buildPi();
     const teamStore = createTeamStore();
     const mailbox = createMailbox();
-    attachTeammateHandle(pi as never, { teamStore, mailbox });
+    attachTeammateHandle(pi as never, { teamStore, mailbox, teamTaskStore: createTeamTaskStore() });
 
     const recv = vi.fn();
     mailbox.registerReceiver("alpha", recv);
@@ -47,7 +53,7 @@ describe("send_message tool — basics", () => {
   it("uses sender's agentName when called inside ALS context", async () => {
     const pi = buildPi();
     const mailbox = createMailbox();
-    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox });
+    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox, teamTaskStore: createTeamTaskStore() });
 
     const recv = vi.fn();
     mailbox.registerReceiver("beta", recv);
@@ -71,7 +77,7 @@ describe("send_message tool — basics", () => {
   it("detects shutdown_request protocol and sets isProtocol=true", async () => {
     const pi = buildPi();
     const mailbox = createMailbox();
-    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox });
+    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox, teamTaskStore: createTeamTaskStore() });
 
     const recv = vi.fn();
     mailbox.registerReceiver("gamma", recv);
@@ -88,7 +94,7 @@ describe("send_message tool — basics", () => {
   it("emits message_sent event", async () => {
     const pi = buildPi();
     const mailbox = createMailbox();
-    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox });
+    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox, teamTaskStore: createTeamTaskStore() });
     mailbox.registerReceiver("alpha", vi.fn());
 
     const tool = buildSendMessageTool(pi as never);
@@ -109,7 +115,7 @@ describe("send_message tool — basics", () => {
   it("broadcast '*' sends to all online teammates except sender", async () => {
     const pi = buildPi();
     const mailbox = createMailbox();
-    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox });
+    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox, teamTaskStore: createTeamTaskStore() });
 
     const a = vi.fn();
     const b = vi.fn();
@@ -137,7 +143,7 @@ describe("send_message tool — basics", () => {
   it("buffers when recipient is offline", async () => {
     const pi = buildPi();
     const mailbox = createMailbox();
-    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox });
+    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox, teamTaskStore: createTeamTaskStore() });
 
     const tool = buildSendMessageTool(pi as never);
     await tool.execute("c6", { to: "ghost", message: "hi" } as never, undefined as never, undefined, {} as never);
@@ -146,7 +152,7 @@ describe("send_message tool — basics", () => {
 
   it("rejects empty to", async () => {
     const pi = buildPi();
-    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox: createMailbox() });
+    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox: createMailbox(), teamTaskStore: createTeamTaskStore() });
     const tool = buildSendMessageTool(pi as never);
     const result = await tool.execute("c7", { to: "  ", message: "x" } as never, undefined as never, undefined, {} as never);
     expect((result as { isError?: boolean }).isError).toBe(true);
@@ -154,7 +160,7 @@ describe("send_message tool — basics", () => {
 
   it("rejects empty message", async () => {
     const pi = buildPi();
-    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox: createMailbox() });
+    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox: createMailbox(), teamTaskStore: createTeamTaskStore() });
     const tool = buildSendMessageTool(pi as never);
     const result = await tool.execute("c8", { to: "alpha", message: "" } as never, undefined as never, undefined, {} as never);
     expect((result as { isError?: boolean }).isError).toBe(true);
@@ -165,7 +171,7 @@ describe("send_message — protocol event emission", () => {
   it("when body is shutdown_request → emits both message_sent and shutdown_request events", async () => {
     const pi = buildPi();
     const mailbox = createMailbox();
-    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox });
+    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox, teamTaskStore: createTeamTaskStore() });
     mailbox.registerReceiver("alpha", vi.fn());
 
     const tool = buildSendMessageTool(pi as never);
@@ -199,7 +205,7 @@ describe("send_message — protocol event emission", () => {
   it("when body is shutdown_response → emits both message_sent and shutdown_response events", async () => {
     const pi = buildPi();
     const mailbox = createMailbox();
-    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox });
+    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox, teamTaskStore: createTeamTaskStore() });
     mailbox.registerReceiver("alpha", vi.fn());
 
     const tool = buildSendMessageTool(pi as never);
@@ -230,7 +236,7 @@ describe("send_message — protocol event emission", () => {
   it("plain text body emits only message_sent (no shutdown_* events)", async () => {
     const pi = buildPi();
     const mailbox = createMailbox();
-    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox });
+    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox, teamTaskStore: createTeamTaskStore() });
     mailbox.registerReceiver("alpha", vi.fn());
 
     const tool = buildSendMessageTool(pi as never);
@@ -257,10 +263,16 @@ describe("send_message — protocol event emission", () => {
 });
 
 describe("send_message — leader notification channel", () => {
+  beforeEach(() => {
+    // The leaderBridge is a process-global singleton; reset so each test
+    // starts with no leader channel registered (default fallback path).
+    _resetLeaderBridgeForTest();
+  });
+
   it("when to='leader' from a teammate — posts pi.sendMessage with customType=teammate/notification + triggerTurn:true", async () => {
     const pi = buildPi();
     const mailbox = createMailbox();
-    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox });
+    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox, teamTaskStore: createTeamTaskStore() });
 
     const id: TeammateIdentity = {
       agentId: "alice@team1",
@@ -304,7 +316,7 @@ describe("send_message — leader notification channel", () => {
     const pi = buildPi();
     const mailbox = createMailbox();
     const sendSpy = vi.spyOn(mailbox, "send");
-    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox });
+    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox, teamTaskStore: createTeamTaskStore() });
 
     const id: TeammateIdentity = {
       agentId: "alice@team1",
@@ -330,7 +342,7 @@ describe("send_message — leader notification channel", () => {
   it("when to='*' from a teammate — also posts leader notification (broadcast includes leader)", async () => {
     const pi = buildPi();
     const mailbox = createMailbox();
-    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox });
+    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox, teamTaskStore: createTeamTaskStore() });
 
     const id: TeammateIdentity = {
       agentId: "alice@team1",
@@ -366,7 +378,7 @@ describe("send_message — leader notification channel", () => {
     const pi = buildPi();
     const mailbox = createMailbox();
     const sendSpy = vi.spyOn(mailbox, "send");
-    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox });
+    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox, teamTaskStore: createTeamTaskStore() });
 
     const id: TeammateIdentity = {
       agentId: "alice@team1",
@@ -390,7 +402,7 @@ describe("send_message — leader notification channel", () => {
   it("when sender is leader (no ALS) — does NOT post leader notification (would notify itself)", async () => {
     const pi = buildPi();
     const mailbox = createMailbox();
-    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox });
+    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox, teamTaskStore: createTeamTaskStore() });
 
     const tool = buildSendMessageTool(pi as never);
     await tool.execute(
@@ -411,7 +423,7 @@ describe("send_message — leader notification channel", () => {
   it("when teammate sends to a peer (not leader / not '*') — no leader notification posted", async () => {
     const pi = buildPi();
     const mailbox = createMailbox();
-    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox });
+    attachTeammateHandle(pi as never, { teamStore: createTeamStore(), mailbox, teamTaskStore: createTeamTaskStore() });
     mailbox.registerReceiver("bob", vi.fn());
 
     const id: TeammateIdentity = {
@@ -436,5 +448,89 @@ describe("send_message — leader notification channel", () => {
         (m as { customType?: string }).customType === "teammate/notification",
     );
     expect(notifications.length).toBe(0);
+  });
+
+  it("routes to the leaderBridge channel (real leader pi) when one is registered, NOT the local sub-session pi", async () => {
+    // Simulate a teammate sub-session: its own pi/handle, isolated from the
+    // leader. A leader channel is registered on the process-global bridge.
+    const subSessionPi = buildPi();
+    attachTeammateHandle(subSessionPi as never, {
+      teamStore: createTeamStore(),
+      mailbox: createMailbox(),
+      teamTaskStore: createTeamTaskStore(),
+    });
+
+    const delivered: Array<{ details: LeaderNotificationDetails; triggerTurn: boolean }> = [];
+    const channel: LeaderChannel = {
+      deliver: (details, triggerTurn) => delivered.push({ details, triggerTurn }),
+    };
+    registerLeaderChannel("leader-s1", channel);
+
+    const id: TeammateIdentity = {
+      agentId: "alice@team1",
+      agentName: "alice",
+      teamName: "team1",
+      agentType: "general-purpose",
+    };
+    const tool = buildSendMessageTool(subSessionPi as never);
+    await runAsTeammate(id, async () => {
+      await tool.execute(
+        "c",
+        { to: "leader", message: "result is 42" } as never,
+        undefined as never,
+        undefined,
+        {} as never,
+      );
+    });
+
+    // Delivered through the bridge channel (the real leader), with correct payload.
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]!.triggerTurn).toBe(true);
+    expect(delivered[0]!.details.kind).toBe("message");
+    expect(delivered[0]!.details.agentId).toBe("alice@team1");
+    expect((delivered[0]!.details as { body: string }).body).toBe("result is 42");
+
+    // The sub-session's OWN pi must NOT receive the notification (the D1 bug).
+    const localNotifs = subSessionPi.sendMessage.mock.calls.filter(
+      ([m]: unknown[]) =>
+        (m as { customType?: string }).customType === "teammate/notification",
+    );
+    expect(localNotifs.length).toBe(0);
+  });
+
+  it("broadcast '*' from a teammate also routes to the leaderBridge channel when registered", async () => {
+    const subSessionPi = buildPi();
+    const mailbox = createMailbox();
+    attachTeammateHandle(subSessionPi as never, {
+      teamStore: createTeamStore(),
+      mailbox,
+      teamTaskStore: createTeamTaskStore(),
+    });
+
+    const delivered: Array<{ details: LeaderNotificationDetails; triggerTurn: boolean }> = [];
+    registerLeaderChannel("leader-s1", {
+      deliver: (details, triggerTurn) => delivered.push({ details, triggerTurn }),
+    });
+
+    const id: TeammateIdentity = {
+      agentId: "alice@team1",
+      agentName: "alice",
+      teamName: "team1",
+      agentType: "general-purpose",
+    };
+    const tool = buildSendMessageTool(subSessionPi as never);
+    await runAsTeammate(id, async () => {
+      await tool.execute(
+        "c",
+        { to: "*", message: "everyone" } as never,
+        undefined as never,
+        undefined,
+        {} as never,
+      );
+    });
+
+    expect(delivered).toHaveLength(1);
+    expect((delivered[0]!.details as { to: string }).to).toBe("*");
+    expect((delivered[0]!.details as { body: string }).body).toBe("everyone");
   });
 });

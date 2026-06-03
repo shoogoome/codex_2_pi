@@ -4,6 +4,7 @@ import { createTaskStore } from "../../tasks/taskStore.js";
 import { attachTeammateHandle } from "../../teammate/handle.js";
 import { createTeamStore } from "../../teammate/teamStore.js";
 import { createMailbox } from "../../teammate/mailbox.js";
+import { createTeamTaskStore } from "../../teammate/teamTasks/teamTaskStore.js";
 
 const fakePi: any = { events: {}, sendMessage: vi.fn(), getActiveTools: () => [] };
 const fakeCtx: any = {
@@ -126,7 +127,7 @@ function makeFakePiWithTeammateHandle(): any {
   // Pre-create the team so spawnTeammate's validation passes (when not stubbed).
   teamStore.createTeam("research", undefined, 1);
   const pi: any = { events: {}, sendMessage: vi.fn(), getActiveTools: () => [] };
-  attachTeammateHandle(pi as never, { teamStore, mailbox });
+  attachTeammateHandle(pi as never, { teamStore, mailbox, teamTaskStore: createTeamTaskStore() });
   return pi;
 }
 

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { spawnTeammate, _setSdkForTest } from "./spawnTeammate.js";
 import { createTeamStore } from "./teamStore.js";
 import { createMailbox } from "./mailbox.js";
+import { createTeamTaskStore } from "./teamTasks/teamTaskStore.js";
 import { createTaskStore, _setDefaultTaskStoreForTest } from "../tasks/taskStore.js";
 import { _resetTaskOutputDirForTest } from "../tasks/outputPath.js";
 import { _clearOutputsForTest } from "../tasks/diskOutput.js";
@@ -52,7 +53,11 @@ afterEach(async () => {
 });
 
 function buildHandle(): TeammateHandle {
-  return { teamStore: createTeamStore(), mailbox: createMailbox() };
+  return {
+    teamStore: createTeamStore(),
+    mailbox: createMailbox(),
+    teamTaskStore: createTeamTaskStore(),
+  };
 }
 
 describe("spawnTeammate — happy path", () => {
@@ -122,14 +127,16 @@ describe("spawnTeammate — happy path", () => {
   });
 
   it("filters out task_agent / team_create / team_delete from teammate's tool pool", async () => {
-    const createSessionMock = vi.fn(async (_opts: { tools: readonly string[] }) => ({
-      session: {
-        prompt: vi.fn().mockResolvedValue(undefined),
-        abort: vi.fn().mockResolvedValue(undefined),
-        dispose: vi.fn(),
-        subscribe: vi.fn(() => () => {}),
-      },
-    }));
+    const createSessionMock = vi.fn(
+      async (_opts: { tools: readonly string[]; customTools?: readonly unknown[] }) => ({
+        session: {
+          prompt: vi.fn().mockResolvedValue(undefined),
+          abort: vi.fn().mockResolvedValue(undefined),
+          dispose: vi.fn(),
+          subscribe: vi.fn(() => () => {}),
+        },
+      }),
+    );
     fakePi.getActiveTools.mockReturnValue([
       "read",
       "grep",
@@ -160,6 +167,11 @@ describe("spawnTeammate — happy path", () => {
     expect(args.tools).not.toContain("task_agent");
     expect(args.tools).not.toContain("team_create");
     expect(args.tools).not.toContain("team_delete");
+
+    // An identity-bound send_message must be injected as a customTool so the
+    // teammate sub-session can resolve its sender without cross-realm ALS.
+    const customTools = (args.customTools ?? []) as Array<{ name?: string }>;
+    expect(customTools.some((t) => t?.name === "send_message")).toBe(true);
   });
 });
 

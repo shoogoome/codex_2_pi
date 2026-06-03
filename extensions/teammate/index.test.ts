@@ -9,6 +9,10 @@ import { TEAMMATE_EVENT_CUSTOM_TYPE } from "./eventEmit.js";
 import { _setHydrateSdkForTest } from "./hydrate.js";
 import { InProcessTeammateTask } from "./killTeammate.js";
 import type { InProcessTeammateTaskState } from "./types.js";
+import {
+  getLeaderChannel,
+  _resetLeaderBridgeForTest,
+} from "./leaderBridge.js";
 
 function buildFakeTasksHandle(): {
   handle: {
@@ -70,6 +74,15 @@ describe("teammateExtension entrypoint", () => {
     expect(handle.mailbox).toBeDefined();
   });
 
+  it("attaches a teamTaskStore on the handle (initially empty)", () => {
+    const { pi } = buildFakePi();
+    teammateExtension(pi as never);
+    const handle = getTeammateHandle(pi as never);
+    expect(handle.teamTaskStore).toBeDefined();
+    expect(handle.teamTaskStore.get()).toEqual({});
+    expect(typeof handle.teamTaskStore.createTask).toBe("function");
+  });
+
   it("session_start registers in_process_teammate task type", async () => {
     const { pi, handlers, tasksHandle } = buildFakePi();
     teammateExtension(pi as never);
@@ -87,9 +100,26 @@ describe("teammateExtension entrypoint", () => {
     );
   });
 
-  it("session_start registers the team_create tool", async () => {
+  it("registers send_message at the factory top-level (before session_start) so teammate sub-sessions get it", () => {
     const { pi, handlers } = buildFakePi();
     teammateExtension(pi as never);
+    // send_message must be registered synchronously at extension load — NOT
+    // deferred to session_start — because teammate sub-sessions never fire
+    // session_start. (Regression guard for the missing-send_message bug.)
+    const namesAtLoad = pi.registerTool.mock.calls.map(
+      (c: unknown[]) => (c[0] as { name: string }).name,
+    );
+    expect(namesAtLoad).toContain("send_message");
+    expect(namesAtLoad).not.toContain("team_create");
+    expect(namesAtLoad).not.toContain("team_delete");
+    // session_start handler exists but has not run yet.
+    expect(handlers.has("session_start")).toBe(true);
+  });
+
+  it("session_start registers the leader-only tools (team_create + team_delete)", async () => {
+    const { pi, handlers } = buildFakePi();
+    teammateExtension(pi as never);
+    pi.registerTool.mockClear();
     const start = handlers.get("session_start")!;
     await start(
       {},
@@ -98,23 +128,30 @@ describe("teammateExtension entrypoint", () => {
         sessionManager: { getSessionId: () => "s1", getEntries: () => [] },
       },
     );
-    expect(pi.registerTool).toHaveBeenCalledTimes(3);
     const names = pi.registerTool.mock.calls.map(
       (c: unknown[]) => (c[0] as { name: string }).name,
     );
     expect(names).toContain("team_create");
-    expect(names).toContain("send_message");
     expect(names).toContain("team_delete");
+    // send_message is registered at top-level, not in session_start.
+    expect(names).not.toContain("send_message");
   });
 
   it("session_shutdown unregisters task type and resets stores", async () => {
     const { pi, handlers, tasksHandle } = buildFakePi();
     teammateExtension(pi as never);
-    const { teamStore, mailbox } = getTeammateHandle(pi as never);
+    const { teamStore, mailbox, teamTaskStore } = getTeammateHandle(pi as never);
     teamStore.createTeam("t", undefined, 1);
     mailbox.registerReceiver("a", () => {});
+    teamTaskStore.createTask({
+      id: "tt1",
+      teamName: "t",
+      subject: "draft",
+      createdAt: 1,
+    });
     expect(teamStore.list()).toHaveLength(1);
     expect(mailbox.onlineAgents()).toEqual(["a"]);
+    expect(Object.keys(teamTaskStore.get())).toEqual(["tt1"]);
 
     const shutdown = handlers.get("session_shutdown")!;
     await shutdown({}, {});
@@ -124,6 +161,40 @@ describe("teammateExtension entrypoint", () => {
     );
     expect(teamStore.list()).toHaveLength(0);
     expect(mailbox.onlineAgents()).toEqual([]);
+    expect(teamTaskStore.get()).toEqual({});
+  });
+
+  it("leader session_start registers a leaderBridge channel; session_shutdown unregisters it", async () => {
+    _resetLeaderBridgeForTest();
+    const { pi, handlers } = buildFakePi();
+    teammateExtension(pi as never);
+
+    expect(getLeaderChannel()).toBeUndefined();
+
+    const fakeCtx = {
+      cwd: "/tmp",
+      hasUI: false,
+      sessionManager: { getSessionId: () => "leader-s1", getEntries: () => [] },
+    };
+    await handlers.get("session_start")!({}, fakeCtx);
+
+    const channel = getLeaderChannel();
+    expect(channel).toBeDefined();
+
+    // deliver routes to the leader's pi.sendMessage as a teammate/notification
+    channel!.deliver(
+      { kind: "message", agentId: "alice@t1", to: "leader", body: "hi leader" },
+      true,
+    );
+    const notif = pi.sendMessage.mock.calls.find(
+      ([m]: unknown[]) =>
+        (m as { customType?: string }).customType === "teammate/notification",
+    );
+    expect(notif).toBeDefined();
+    expect((notif![1] as { triggerTurn?: boolean }).triggerTurn).toBe(true);
+
+    await handlers.get("session_shutdown")!({}, fakeCtx);
+    expect(getLeaderChannel()).toBeUndefined();
   });
 
   it("session_start hydrates teammates from session jsonl entries", async () => {

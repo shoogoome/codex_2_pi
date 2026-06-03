@@ -13,6 +13,7 @@ import { registerTask } from "../tasks/framework.js";
 import { createTaskStateBase } from "../tasks/Task.js";
 import { createTeamStore } from "./teamStore.js";
 import { createMailbox } from "./mailbox.js";
+import { createTeamTaskStore } from "./teamTasks/teamTaskStore.js";
 import type { TeammateHandle } from "./handle.js";
 import type { InProcessTeammateTaskState } from "./types.js";
 
@@ -34,7 +35,7 @@ function buildHandle(teamName?: string): TeammateHandle {
     ts.createTeam(teamName, undefined, 1);
     ts.addMember(teamName, "alpha@" + teamName);
   }
-  return { teamStore: ts, mailbox: createMailbox() };
+  return { teamStore: ts, mailbox: createMailbox(), teamTaskStore: createTeamTaskStore() };
 }
 
 function buildRunningTask(

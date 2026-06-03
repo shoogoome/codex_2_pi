@@ -3,6 +3,7 @@ import { installTeammateEventContextFilter } from "./eventEmit.js";
 import { attachTeammateHandle, type TeammateHandle } from "./handle.js";
 import { createTeamStore } from "./teamStore.js";
 import { createMailbox } from "./mailbox.js";
+import { createTeamTaskStore } from "./teamTasks/teamTaskStore.js";
 import { getTasksHandle } from "../tasks/handle.js";
 import { getRunningTasks } from "../tasks/framework.js";
 import {
@@ -17,28 +18,78 @@ import { hydrateTeammateState, respawnTeammates } from "./hydrate.js";
 import { logError } from "../tasks/logging.js";
 import { renderTeamWidget } from "./ui/teamWidget.js";
 import { isInProcessTeammateTask } from "./types.js";
+import {
+  registerLeaderChannel,
+  unregisterLeaderChannel,
+} from "./leaderBridge.js";
+import { postLeaderNotification } from "./leaderNotification.js";
 
 const WIDGET_KEY = "teammate-team";
 
 export default function teammateExtension(pi: ExtensionAPI): void {
   const teamStore = createTeamStore();
   const mailbox = createMailbox();
-  const handle: TeammateHandle = { teamStore, mailbox };
+  const teamTaskStore = createTeamTaskStore();
+  const handle: TeammateHandle = { teamStore, mailbox, teamTaskStore };
   attachTeammateHandle(pi, handle);
 
   installTeammateEventContextFilter(pi);
+
+  // Register `send_message` at the factory top-level (NOT inside session_start).
+  //
+  // Why top-level: a teammate sub-session is created by spawnTeammate via
+  // createAgentSessionFromServices and driven purely by session.prompt() — it
+  // is NEVER given session.bindExtensions(), so its `session_start` event does
+  // not fire. Tools registered inside session_start (the leader-only tools
+  // below) therefore never exist in a teammate sub-session. send_message MUST
+  // be available to teammates (that is how they talk back to the leader and to
+  // peers), so it has to be registered in the factory body, which runs at
+  // extension-load time for EVERY session — leader and teammate alike.
+  //
+  // Safe at top-level: buildSendMessageTool(pi) only resolves the handle via
+  // getTeammateHandle(pi) inside execute(), at call time — not at registration
+  // time — so it does not depend on session_start having attached the handle.
+  pi.registerTool(buildSendMessageTool(pi));
 
   // Module-scoped (per extension instance) — survives across session_start /
   // session_shutdown reload cycles so we can clean up subscribers from a
   // previous cycle before re-subscribing.
   let unsubWidget: (() => void) | undefined;
+  // sessionId of the leader channel we registered on the process-global
+  // leaderBridge, so session_shutdown can unregister exactly that entry.
+  let leaderChannelSessionId: string | undefined;
 
   pi.on("session_start", async (_event, ctx) => {
     _bindPi(pi);
+
+    // Register this (leader) session on the process-global bridge so teammate
+    // sub-sessions — which run in isolated extension runtimes and cannot reach
+    // this pi via the eventBus-attached handle — can deliver notifications to
+    // the real leader. The deliver closure captures THIS leader's pi; spikes
+    // proved the leader pi stays valid for the leader's whole lifetime (only
+    // the leader's own dispose/reload marks it stale), and a teammate
+    // sub-session being active does not invalidate it.
+    //
+    // Note: teammate sub-sessions are driven via session.prompt(), never
+    // session.bindExtensions(), so this session_start handler does NOT fire
+    // for them — only the real leader ever registers a channel.
+    const sessionId = ctx.sessionManager.getSessionId();
+    if (sessionId) {
+      leaderChannelSessionId = sessionId;
+      registerLeaderChannel(sessionId, {
+        deliver: (details, triggerTurn) => {
+          postLeaderNotification(pi, details, triggerTurn);
+        },
+      });
+    }
+
     const tasksHandle = getTasksHandle(pi);
     tasksHandle.registerTaskType("in_process_teammate", InProcessTeammateTask);
+    // Leader-only tools. These are intentionally registered in session_start
+    // (not top-level): teammate sub-sessions never fire session_start, and the
+    // blocklist in spawnTeammate strips these from teammates anyway, so keeping
+    // them here keeps them off teammates while still available to the leader.
     pi.registerTool(buildTeamCreateTool(pi));
-    pi.registerTool(buildSendMessageTool(pi));
     pi.registerTool(buildTeamDeleteTool(pi));
 
     // Hydrate teammates from the parent session's jsonl. Failures must not
@@ -87,6 +138,10 @@ export default function teammateExtension(pi: ExtensionAPI): void {
   pi.on("session_shutdown", async () => {
     unsubWidget?.();
     unsubWidget = undefined;
+    if (leaderChannelSessionId) {
+      unregisterLeaderChannel(leaderChannelSessionId);
+      leaderChannelSessionId = undefined;
+    }
     const tasksHandle = getTasksHandle(pi);
     const running = getRunningTasks(tasksHandle.store.get()).filter(
       (t) => t.type === "in_process_teammate",
@@ -107,5 +162,6 @@ export default function teammateExtension(pi: ExtensionAPI): void {
     _unbindPi();
     teamStore._resetForTest();
     mailbox._resetForTest();
+    teamTaskStore._resetForTest();
   });
 }
