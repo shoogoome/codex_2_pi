@@ -21,7 +21,12 @@ function buildFakeTasksHandle(): {
 }
 
 function buildFakePi(): {
-  pi: { on: ReturnType<typeof vi.fn>; events: Record<string, unknown> };
+  pi: {
+    on: ReturnType<typeof vi.fn>;
+    events: Record<string, unknown>;
+    registerTool: ReturnType<typeof vi.fn>;
+    sendMessage: ReturnType<typeof vi.fn>;
+  };
   handlers: Map<string, (event: unknown) => unknown>;
   tasksHandle: ReturnType<typeof buildFakeTasksHandle>["handle"];
 } {
@@ -32,6 +37,8 @@ function buildFakePi(): {
       handlers.set(evt, h),
     ),
     events: { __pi_tasks_handle__: tasksHandle } as Record<string, unknown>,
+    registerTool: vi.fn(),
+    sendMessage: vi.fn(),
   };
   return { pi, handlers, tasksHandle };
 }
@@ -62,6 +69,16 @@ describe("teammateExtension entrypoint", () => {
       "in_process_teammate",
       expect.objectContaining({ name: "InProcessTeammateTask" }),
     );
+  });
+
+  it("session_start registers the team_create tool", async () => {
+    const { pi, handlers } = buildFakePi();
+    teammateExtension(pi as never);
+    const start = handlers.get("session_start")!;
+    await start({});
+    expect(pi.registerTool).toHaveBeenCalledTimes(1);
+    const tool = pi.registerTool.mock.calls[0]![0] as { name: string };
+    expect(tool.name).toBe("team_create");
   });
 
   it("session_shutdown unregisters task type and resets stores", async () => {

@@ -10,6 +10,7 @@ import {
   _unbindPi,
   InProcessTeammateTask,
 } from "./killTeammate.js";
+import { buildTeamCreateTool } from "./tools/teamCreate.js";
 
 export default function teammateExtension(pi: ExtensionAPI): void {
   const teamStore = createTeamStore();
@@ -23,6 +24,7 @@ export default function teammateExtension(pi: ExtensionAPI): void {
     _bindPi(pi);
     const tasksHandle = getTasksHandle(pi);
     tasksHandle.registerTaskType("in_process_teammate", InProcessTeammateTask);
+    pi.registerTool(buildTeamCreateTool(pi));
   });
 
   pi.on("session_shutdown", async () => {
