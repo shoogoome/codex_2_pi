@@ -11,12 +11,33 @@
 // Task 4.2 wraps this with the actual respawn flow (calling SessionManager.open
 // for each running teammate). Task 4.3 wires it into session_start.
 
-import { TEAMMATE_EVENT_CUSTOM_TYPE } from "./eventEmit.js";
+import {
+  createAgentSessionServices as _realCreateAgentSessionServices,
+  createAgentSessionFromServices as _realCreateAgentSessionFromServices,
+  SessionManager as _RealSessionManager,
+  type AgentSession,
+  type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
+
+import type { TaskStore } from "../tasks/taskStore.js";
+import { registerTask, updateTaskState } from "../tasks/framework.js";
+import { evictTaskOutput, initTaskOutput } from "../tasks/diskOutput.js";
+import { getTaskOutputPath } from "../tasks/outputPath.js";
+import { createTaskStateBase, generateTaskId } from "../tasks/Task.js";
+import { logError } from "../tasks/logging.js";
+
+import { TEAMMATE_EVENT_CUSTOM_TYPE, emitTeammateEvent } from "./eventEmit.js";
 import {
   reduceTeammateEvents,
   type ReplayedState,
 } from "./jsonlEvents.js";
-import type { TeammateEvent } from "./types.js";
+import type { TeammateHandle } from "./handle.js";
+import { startTeammateLoop } from "./teammateLoop.js";
+import {
+  isInProcessTeammateTask,
+  type InProcessTeammateTaskState,
+  type TeammateEvent,
+} from "./types.js";
 
 export interface SessionEntryLike {
   type: string;
@@ -38,4 +59,266 @@ export function hydrateTeammateState(
     events.push(details as TeammateEvent);
   }
   return reduceTeammateEvents(events);
+}
+
+// ---------- Task 4.2: respawn flow ----------
+
+export interface HydrateSdkBindings {
+  createAgentSessionServices: (opts: { cwd: string }) => Promise<unknown>;
+  SessionManagerOpen: (path: string) => unknown;
+  createAgentSessionFromServices: (opts: {
+    services: unknown;
+    sessionManager: unknown;
+    tools: readonly string[];
+  }) => Promise<{ session: unknown }>;
+}
+
+const _hydrateSdkDefaults: HydrateSdkBindings = {
+  createAgentSessionServices: (opts) =>
+    _realCreateAgentSessionServices({ cwd: opts.cwd }) as unknown as Promise<unknown>,
+  SessionManagerOpen: (path) => _RealSessionManager.open(path),
+  createAgentSessionFromServices: (opts) =>
+    _realCreateAgentSessionFromServices({
+      services: opts.services as never,
+      sessionManager: opts.sessionManager as never,
+      tools: opts.tools as never,
+    }) as unknown as Promise<{ session: unknown }>,
+};
+
+let _hydrateSdk: HydrateSdkBindings = { ..._hydrateSdkDefaults };
+
+/**
+ * Test helper — replace SDK bindings for the duration of a test. Passing an
+ * empty object resets to defaults; partial overrides only the specified keys.
+ */
+export function _setHydrateSdkForTest(
+  bindings: Partial<HydrateSdkBindings>,
+): void {
+  _hydrateSdk = { ..._hydrateSdkDefaults, ...bindings };
+}
+
+const TEAMMATE_TOOLS_BLOCKLIST = new Set([
+  "task_agent",
+  "team_create",
+  "team_delete",
+]);
+
+export interface RespawnContext {
+  pi: ExtensionAPI;
+  taskStore: TaskStore;
+  handle: TeammateHandle;
+  cwd: string;
+}
+
+/**
+ * Re-create running teammates from a previously replayed state.
+ *
+ * For each teammate whose `lastStatus === "running"`:
+ *   1. Open the persisted SessionManager from `sessionFile`.
+ *   2. Build services + AgentSession with the same tool blocklist as
+ *      `spawnTeammate` (no `task_agent` / `team_create` / `team_delete`).
+ *   3. Register the task in TaskStore with the replayed identity.
+ *   4. Ensure the team exists in teamStore and add the agentId as a member.
+ *   5. Start `teammateLoop` in resume mode (`initialPrompt: undefined`) so
+ *      the loop goes straight to idle waiting on the mailbox.
+ *
+ * Processes serially (`for ... await`) to avoid races during rebuild.
+ * Idempotent: if a running teammate task with the same `agentId` already
+ * exists in TaskStore, the entry is skipped.
+ */
+export async function respawnTeammates(
+  state: ReplayedState,
+  ctx: RespawnContext,
+): Promise<{ respawned: string[]; skipped: string[] }> {
+  const respawned: string[] = [];
+  const skipped: string[] = [];
+
+  for (const [agentId, replayed] of Object.entries(state.teammates)) {
+    if (replayed.lastStatus !== "running") {
+      skipped.push(agentId);
+      continue;
+    }
+
+    // Idempotency: if a running teammate task already exists, skip.
+    const exists = Object.values(ctx.taskStore.get()).find(
+      (t): t is InProcessTeammateTaskState =>
+        isInProcessTeammateTask(t) &&
+        t.status === "running" &&
+        t.identity.agentId === agentId,
+    );
+    if (exists) {
+      skipped.push(agentId);
+      continue;
+    }
+
+    // Ensure team exists in teamStore (replay should already include it,
+    // but createTeam is a no-op if present, so this is safe).
+    const teamState = state.teams[replayed.identity.teamName];
+    if (teamState) {
+      ctx.handle.teamStore.createTeam(
+        teamState.teamName,
+        teamState.description,
+        teamState.createdAt,
+      );
+    }
+    ctx.handle.teamStore.addMember(replayed.identity.teamName, agentId);
+
+    // Open the persisted session and wire up an AgentSession on top of it.
+    const sm = _hydrateSdk.SessionManagerOpen(replayed.sessionFile);
+    const services = await _hydrateSdk.createAgentSessionServices({ cwd: ctx.cwd });
+    const allTools = ctx.pi.getActiveTools();
+    const tools = allTools.filter(
+      (name) => !TEAMMATE_TOOLS_BLOCKLIST.has(name),
+    );
+    const { session: sessionUnknown } =
+      await _hydrateSdk.createAgentSessionFromServices({
+        services,
+        sessionManager: sm,
+        tools,
+      });
+    const session = sessionUnknown as AgentSession;
+
+    // Register task with the same shape spawnTeammate would create — but
+    // start in idle since we are resuming an already-active session.
+    const taskId = generateTaskId("in_process_teammate");
+    const outputFile = getTaskOutputPath(taskId);
+    const initial: InProcessTeammateTaskState = {
+      ...createTaskStateBase({
+        id: taskId,
+        type: "in_process_teammate",
+        description: `${replayed.identity.agentName}@${replayed.identity.teamName}`,
+        outputFile,
+      }),
+      type: "in_process_teammate",
+      status: "running",
+      identity: replayed.identity,
+      prompt: replayed.initialPrompt,
+      sessionFile: replayed.sessionFile,
+      session,
+      isIdle: true,
+      pendingMessages: [],
+      shutdownRequested: false,
+      shutdownAcknowledged: false,
+      toolCallCount: 0,
+      tokenCount: 0,
+      turnCount: 0,
+    };
+    registerTask(initial, ctx.taskStore);
+
+    // Init output file (fire-and-forget, EEXIST tolerated for re-respawn races).
+    void initTaskOutput(taskId).catch((e: unknown) => {
+      if (
+        typeof e === "object" &&
+        e !== null &&
+        "code" in e &&
+        (e as { code: unknown }).code === "EEXIST"
+      ) {
+        return;
+      }
+      logError(e, "respawnTeammates initTaskOutput");
+    });
+
+    const abortController = new AbortController();
+    updateTaskState<InProcessTeammateTaskState>(
+      taskId,
+      ctx.taskStore,
+      (cur) => ({
+        ...cur,
+        abortController,
+      }),
+    );
+
+    // Capture refs so closures don't reach back into ctx after the loop returns.
+    const teamName = replayed.identity.teamName;
+    const piRef = ctx.pi;
+    const taskStoreRef = ctx.taskStore;
+    const handleRef = ctx.handle;
+
+    startTeammateLoop({
+      identity: replayed.identity,
+      initialPrompt: undefined, // resume — go straight to idle
+      session,
+      mailbox: ctx.handle.mailbox,
+      abortSignal: abortController.signal,
+      onTurnStart: (cause) => {
+        updateTaskState<InProcessTeammateTaskState>(
+          taskId,
+          taskStoreRef,
+          (t) => ({
+            ...t,
+            isIdle: false,
+            turnCount:
+              cause.kind === "initial" ? t.turnCount : t.turnCount + 1,
+          }),
+        );
+      },
+      onIdle: () => {
+        updateTaskState<InProcessTeammateTaskState>(
+          taskId,
+          taskStoreRef,
+          (t) => ({ ...t, isIdle: true }),
+        );
+      },
+      onShutdownRequestReceived: (requestId) => {
+        emitTeammateEvent(piRef, {
+          kind: "shutdown_request",
+          agentId,
+          requestId,
+        });
+        updateTaskState<InProcessTeammateTaskState>(
+          taskId,
+          taskStoreRef,
+          (t) => ({ ...t, shutdownRequested: true }),
+        );
+      },
+      onShutdownAcked: (requestId, approve) => {
+        emitTeammateEvent(piRef, {
+          kind: "shutdown_response",
+          agentId,
+          requestId,
+          approve,
+        });
+        updateTaskState<InProcessTeammateTaskState>(
+          taskId,
+          taskStoreRef,
+          (t) => ({ ...t, shutdownAcknowledged: approve }),
+        );
+      },
+      onTerminal: (reason) => {
+        const cur = taskStoreRef.getTask(taskId) as
+          | InProcessTeammateTaskState
+          | undefined;
+        if (cur?.notified) return;
+
+        const terminalStatus: "completed" | "killed" =
+          reason === "shutdown" ? "completed" : "killed";
+        updateTaskState<InProcessTeammateTaskState>(
+          taskId,
+          taskStoreRef,
+          (t) => ({
+            ...t,
+            status: terminalStatus,
+            endTime: Date.now(),
+            notified: true,
+          }),
+        );
+        emitTeammateEvent(piRef, {
+          kind: "teammate_terminal",
+          agentId,
+          status: terminalStatus,
+        });
+        handleRef.teamStore.removeMember(teamName, agentId);
+        try {
+          session.dispose();
+        } catch (e) {
+          logError(e, "respawnTeammates session.dispose");
+        }
+        void evictTaskOutput(taskId);
+      },
+    });
+
+    respawned.push(agentId);
+  }
+
+  return { respawned, skipped };
 }
