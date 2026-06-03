@@ -415,7 +415,11 @@ describe("teammateExtension entrypoint", () => {
     const fakeCtx = {
       cwd: "/tmp",
       hasUI: true,
-      ui: { setWidget: setWidgetMock },
+      ui: {
+        setWidget: setWidgetMock,
+        onTerminalInput: vi.fn(() => () => {}),
+        setEditorComponent: vi.fn(),
+      },
       sessionManager: {
         getSessionId: () => "s1",
         getEntries: () => [],
@@ -612,5 +616,275 @@ describe("teammateExtension entrypoint", () => {
     errSpy.mockRestore();
 
     InProcessTeammateTask.kill = origKill;
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // D.4 — view-swap integration tests (editor swap + selectedAgentId widget)
+  // ──────────────────────────────────────────────────────────────────────
+
+  it("session_start with hasUI=true registers a terminal-input handler (D.3 keybindings wiring)", async () => {
+    const handlers = new Map<
+      string,
+      (event: unknown, ctx: unknown) => unknown
+    >();
+    const fakeTasksHandle = {
+      store: createTaskStore(),
+      registerTaskType: vi.fn(),
+      getTaskType: () => undefined,
+      unregisterTaskType: vi.fn(),
+    };
+    const onTerminalInputMock = vi.fn(() => () => {});
+    const pi: ExtensionAPI = {
+      on: vi.fn((evt: string, h: (e: unknown, c: unknown) => unknown) => {
+        handlers.set(evt, h);
+      }),
+      events: { __pi_tasks_handle__: fakeTasksHandle },
+      registerTool: vi.fn(),
+      sendMessage: vi.fn(),
+      getActiveTools: vi.fn().mockReturnValue([]),
+    } as never;
+    teammateExtension(pi);
+
+    const fakeCtx = {
+      cwd: "/tmp",
+      hasUI: true,
+      ui: {
+        setWidget: vi.fn(),
+        onTerminalInput: onTerminalInputMock,
+        setEditorComponent: vi.fn(),
+      },
+      sessionManager: { getSessionId: () => "s1", getEntries: () => [] },
+    };
+    await handlers.get("session_start")!({}, fakeCtx);
+    expect(onTerminalInputMock).toHaveBeenCalledTimes(1);
+    await handlers.get("session_shutdown")!({}, fakeCtx);
+  });
+
+  it("widget render includes selectedAgentId highlight when viewState selects a teammate", async () => {
+    const handlers = new Map<
+      string,
+      (event: unknown, ctx: unknown) => unknown
+    >();
+    const taskStore = createTaskStore();
+    const fakeTasksHandle = {
+      store: taskStore,
+      registerTaskType: vi.fn(),
+      getTaskType: () => undefined,
+      unregisterTaskType: vi.fn(),
+    };
+    const setWidgetMock = vi.fn();
+    // Capture the registered terminal-input handler so the test can drive it.
+    let capturedHandler:
+      | ((data: string) => unknown)
+      | undefined;
+    const onTerminalInputMock = vi.fn((h: (data: string) => unknown) => {
+      capturedHandler = h;
+      return () => {
+        capturedHandler = undefined;
+      };
+    });
+    const pi: ExtensionAPI = {
+      on: vi.fn((evt: string, h: (e: unknown, c: unknown) => unknown) => {
+        handlers.set(evt, h);
+      }),
+      events: { __pi_tasks_handle__: fakeTasksHandle },
+      registerTool: vi.fn(),
+      sendMessage: vi.fn(),
+      getActiveTools: vi.fn().mockReturnValue([]),
+    } as never;
+    teammateExtension(pi);
+
+    const fakeCtx = {
+      cwd: "/tmp",
+      hasUI: true,
+      ui: {
+        setWidget: setWidgetMock,
+        onTerminalInput: onTerminalInputMock,
+        setEditorComponent: vi.fn(),
+      },
+      sessionManager: { getSessionId: () => "s1", getEntries: () => [] },
+    };
+    await handlers.get("session_start")!({}, fakeCtx);
+
+    // Seed a team + running teammate so the cycle pool is non-empty.
+    const handle = getTeammateHandle(pi);
+    handle.teamStore.createTeam("t1", undefined, 1);
+    const aliceState: InProcessTeammateTaskState = {
+      ...createTaskStateBase({
+        id: "alice-t",
+        type: "in_process_teammate",
+        description: "alice@t1",
+        outputFile: "/tmp/alice.out",
+      }),
+      type: "in_process_teammate",
+      status: "running",
+      identity: {
+        agentId: "alice@t1",
+        agentName: "alice",
+        teamName: "t1",
+        agentType: "general-purpose",
+      },
+      prompt: "go",
+      sessionFile: "/tmp/alice.jsonl",
+      isIdle: false,
+      pendingMessages: [],
+      shutdownRequested: false,
+      shutdownAcknowledged: false,
+      toolCallCount: 0,
+      tokenCount: 0,
+      turnCount: 0,
+    };
+    registerTask(aliceState, taskStore);
+    handle.teamStore.addMember("t1", "alice@t1");
+
+    // Press ↓ — viewState transitions to leader_with_selection(alice@t1).
+    expect(capturedHandler).toBeDefined();
+    setWidgetMock.mockClear();
+    capturedHandler!("\x1b[B");
+
+    // Last setWidget call should now contain the highlighted "▶ alice" line.
+    expect(setWidgetMock).toHaveBeenCalled();
+    const lastCall =
+      setWidgetMock.mock.calls[setWidgetMock.mock.calls.length - 1]!;
+    const lines = lastCall[1] as string[];
+    expect(lines.some((l) => l.includes("▶ ● alice"))).toBe(true);
+
+    await handlers.get("session_shutdown")!({}, fakeCtx);
+  });
+
+  it("entering teammate view installs a custom editor; exiting restores the default", async () => {
+    const handlers = new Map<
+      string,
+      (event: unknown, ctx: unknown) => unknown
+    >();
+    const taskStore = createTaskStore();
+    const fakeTasksHandle = {
+      store: taskStore,
+      registerTaskType: vi.fn(),
+      getTaskType: () => undefined,
+      unregisterTaskType: vi.fn(),
+    };
+    let capturedHandler: ((data: string) => unknown) | undefined;
+    const onTerminalInputMock = vi.fn((h: (data: string) => unknown) => {
+      capturedHandler = h;
+      return () => {
+        capturedHandler = undefined;
+      };
+    });
+    const setEditorComponentMock = vi.fn();
+    const pi: ExtensionAPI = {
+      on: vi.fn((evt: string, h: (e: unknown, c: unknown) => unknown) => {
+        handlers.set(evt, h);
+      }),
+      events: { __pi_tasks_handle__: fakeTasksHandle },
+      registerTool: vi.fn(),
+      sendMessage: vi.fn(),
+      getActiveTools: vi.fn().mockReturnValue([]),
+    } as never;
+    teammateExtension(pi);
+
+    const fakeCtx = {
+      cwd: "/tmp",
+      hasUI: true,
+      ui: {
+        setWidget: vi.fn(),
+        onTerminalInput: onTerminalInputMock,
+        setEditorComponent: setEditorComponentMock,
+      },
+      sessionManager: { getSessionId: () => "s1", getEntries: () => [] },
+    };
+    await handlers.get("session_start")!({}, fakeCtx);
+
+    // Seed running teammate.
+    const handle = getTeammateHandle(pi);
+    handle.teamStore.createTeam("t1", undefined, 1);
+    const aliceState: InProcessTeammateTaskState = {
+      ...createTaskStateBase({
+        id: "alice-t",
+        type: "in_process_teammate",
+        description: "alice@t1",
+        outputFile: "/tmp/alice.out",
+      }),
+      type: "in_process_teammate",
+      status: "running",
+      identity: {
+        agentId: "alice@t1",
+        agentName: "alice",
+        teamName: "t1",
+        agentType: "general-purpose",
+      },
+      prompt: "go",
+      sessionFile: "/tmp/alice.jsonl",
+      isIdle: false,
+      pendingMessages: [],
+      shutdownRequested: false,
+      shutdownAcknowledged: false,
+      toolCallCount: 0,
+      tokenCount: 0,
+      turnCount: 0,
+    };
+    registerTask(aliceState, taskStore);
+    handle.teamStore.addMember("t1", "alice@t1");
+
+    // ↓ to select; Enter to enter teammate view.
+    setEditorComponentMock.mockClear();
+    capturedHandler!("\x1b[B");
+    capturedHandler!("\r");
+    // Should have installed a factory (function), not undefined.
+    const installCalls = setEditorComponentMock.mock.calls.filter(
+      (c: unknown[]) => typeof c[0] === "function",
+    );
+    expect(installCalls.length).toBeGreaterThanOrEqual(1);
+
+    // Esc to exit — should restore default (call with undefined).
+    setEditorComponentMock.mockClear();
+    capturedHandler!("\x1b");
+    expect(setEditorComponentMock).toHaveBeenCalledWith(undefined);
+
+    await handlers.get("session_shutdown")!({}, fakeCtx);
+  });
+
+  it("session_shutdown unsubscribes keybindings + restores default editor", async () => {
+    const handlers = new Map<
+      string,
+      (event: unknown, ctx: unknown) => unknown
+    >();
+    const fakeTasksHandle = {
+      store: createTaskStore(),
+      registerTaskType: vi.fn(),
+      getTaskType: () => undefined,
+      unregisterTaskType: vi.fn(),
+    };
+    const inputUnsub = vi.fn();
+    const onTerminalInputMock = vi.fn(() => inputUnsub);
+    const setEditorComponentMock = vi.fn();
+    const pi: ExtensionAPI = {
+      on: vi.fn((evt: string, h: (e: unknown, c: unknown) => unknown) => {
+        handlers.set(evt, h);
+      }),
+      events: { __pi_tasks_handle__: fakeTasksHandle },
+      registerTool: vi.fn(),
+      sendMessage: vi.fn(),
+      getActiveTools: vi.fn().mockReturnValue([]),
+    } as never;
+    teammateExtension(pi);
+
+    const fakeCtx = {
+      cwd: "/tmp",
+      hasUI: true,
+      ui: {
+        setWidget: vi.fn(),
+        onTerminalInput: onTerminalInputMock,
+        setEditorComponent: setEditorComponentMock,
+      },
+      sessionManager: { getSessionId: () => "s1", getEntries: () => [] },
+    };
+    await handlers.get("session_start")!({}, fakeCtx);
+
+    setEditorComponentMock.mockClear();
+    await handlers.get("session_shutdown")!({}, fakeCtx);
+    expect(inputUnsub).toHaveBeenCalled();
+    // Editor default restored on shutdown (last call should be undefined).
+    expect(setEditorComponentMock).toHaveBeenCalledWith(undefined);
   });
 });
