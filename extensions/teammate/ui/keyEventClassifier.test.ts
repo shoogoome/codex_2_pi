@@ -28,6 +28,10 @@ describe("classifyKey", () => {
     expect(classifyKey("K")).toEqual({ kind: "kill" });
   });
 
+  it("Ctrl+G (BEL, \\x07) -> toggle-focus", () => {
+    expect(classifyKey("\x07")).toEqual({ kind: "toggle-focus" });
+  });
+
   it("unknown bytes -> ignore", () => {
     expect(classifyKey("a")).toEqual({ kind: "ignore" });
     expect(classifyKey("\x1b[C")).toEqual({ kind: "ignore" }); // right arrow

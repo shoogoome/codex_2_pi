@@ -7,12 +7,15 @@ export type KeyAction =
   | { kind: "enter" }
   | { kind: "esc" }
   | { kind: "kill" }
+  | { kind: "toggle-focus" }
   | { kind: "ignore" };
 
 // Common terminal escape sequences:
 //   "\x1b[A" = ↑    "\x1b[B" = ↓    "\x1b[C" = →    "\x1b[D" = ←
 //   "\x09"   = Tab  "\x1b"   = Esc  "\r" / "\n" = Enter
+//   "\x07"   = Ctrl+G (BEL) — toggles panel focus
 export function classifyKey(data: string): KeyAction {
+  if (data === "\x07") return { kind: "toggle-focus" };
   if (data === "\x1b[A") return { kind: "cycle", direction: "prev" };
   if (data === "\x1b[B") return { kind: "cycle", direction: "next" };
   if (data === "\x09") return { kind: "cycle", direction: "next" };

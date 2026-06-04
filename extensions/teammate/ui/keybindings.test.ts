@@ -148,37 +148,127 @@ beforeEach(() => {
   _resetTeammatePiBindingForTest();
 });
 
-describe("registerTeammateKeybindings", () => {
+describe("registerTeammateKeybindings (focus-aware)", () => {
   it("registers a handler on ui.onTerminalInput", () => {
     const h = makeHarness();
     expect(h.fakeUI.onTerminalInput).toHaveBeenCalledTimes(1);
     expect(h.fakeUI.handlers.size).toBe(1);
   });
 
-  it("leader + ↑ + has teammates → cycle prev + consume", () => {
-    const h = makeHarness({
-      tasks: [
-        { id: "t1", agentName: "alpha" },
-        { id: "t2", agentName: "beta" },
-      ],
-    });
-    const result = h.trigger("\x1b[A");
-    expect(result).toEqual({ consume: true });
-    expect(h.viewState.get()).toEqual({
-      kind: "leader_with_selection",
-      selectedAgentId: "beta@team1",
-    });
-  });
+  // ─── Blurred panel: only Ctrl+G is consumed; everything else passes ───
 
-  it("leader + ↑ + no teammates → no-op + not consume", () => {
-    const h = makeHarness();
+  it("blurred leader + ↑ → ignore + not consume (passes through)", () => {
+    const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
     const before = h.viewState.get();
     const result = h.trigger("\x1b[A");
     expect(result).toBeUndefined();
     expect(h.viewState.get()).toBe(before);
   });
 
-  it("leader_with_selection + ↓ → cycle next + consume", () => {
+  it("blurred leader + Tab → ignore + not consume", () => {
+    const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
+    const before = h.viewState.get();
+    const result = h.trigger("\x09");
+    expect(result).toBeUndefined();
+    expect(h.viewState.get()).toBe(before);
+  });
+
+  it("blurred leader + Enter → ignore + not consume", () => {
+    const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
+    const before = h.viewState.get();
+    const result = h.trigger("\r");
+    expect(result).toBeUndefined();
+    expect(h.viewState.get()).toBe(before);
+  });
+
+  it("blurred leader + Esc → ignore + not consume", () => {
+    const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
+    const before = h.viewState.get();
+    const result = h.trigger("\x1b");
+    expect(result).toBeUndefined();
+    expect(h.viewState.get()).toBe(before);
+  });
+
+  it("blurred leader + k → ignore + not consume", () => {
+    const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
+    const before = h.viewState.get();
+    const result = h.trigger("k");
+    expect(result).toBeUndefined();
+    expect(h.viewState.get()).toBe(before);
+  });
+
+  it("blurred leader + 'a' (printable) → ignore + not consume", () => {
+    const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
+    const before = h.viewState.get();
+    const result = h.trigger("a");
+    expect(result).toBeUndefined();
+    expect(h.viewState.get()).toBe(before);
+  });
+
+  // ─── Ctrl+G — universal toggle ───
+
+  it("blurred leader + Ctrl+G → focused=true + consume", () => {
+    const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
+    const result = h.trigger("\x07");
+    expect(result).toEqual({ consume: true });
+    expect(h.viewState.get()).toEqual({ kind: "leader", focused: true });
+  });
+
+  it("focused leader + Ctrl+G → focused=false + consume (blurs)", () => {
+    const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
+    h.viewState.toggleFocus();
+    const result = h.trigger("\x07");
+    expect(result).toEqual({ consume: true });
+    expect(h.viewState.get()).toEqual({ kind: "leader", focused: false });
+  });
+
+  it("teammate view + Ctrl+G → ignore + not consume (editor owns it)", () => {
+    const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
+    h.viewState.selectAgent("alpha@team1");
+    h.viewState.enterTeammateView();
+    const before = h.viewState.get();
+    const result = h.trigger("\x07");
+    expect(result).toBeUndefined();
+    expect(h.viewState.get()).toBe(before);
+  });
+
+  // ─── Focused panel — navigation ───
+
+  it("focused leader + ↑ + has teammates → cycle prev + consume", () => {
+    const h = makeHarness({
+      tasks: [
+        { id: "t1", agentName: "alpha" },
+        { id: "t2", agentName: "beta" },
+      ],
+    });
+    h.viewState.toggleFocus();
+    const result = h.trigger("\x1b[A");
+    expect(result).toEqual({ consume: true });
+    expect(h.viewState.get()).toEqual({
+      kind: "leader_with_selection",
+      selectedAgentId: "beta@team1",
+      focused: true,
+    });
+  });
+
+  it("focused leader + ↑ + no teammates → no-op + not consume", () => {
+    const h = makeHarness();
+    h.viewState.toggleFocus();
+    const before = h.viewState.get();
+    const result = h.trigger("\x1b[A");
+    expect(result).toBeUndefined();
+    expect(h.viewState.get()).toBe(before);
+  });
+
+  it("focused leader + Esc → blur + consume", () => {
+    const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
+    h.viewState.toggleFocus();
+    const result = h.trigger("\x1b");
+    expect(result).toEqual({ consume: true });
+    expect(h.viewState.get()).toEqual({ kind: "leader", focused: false });
+  });
+
+  it("focused leader_with_selection + ↓ → cycle next + consume", () => {
     const h = makeHarness({
       tasks: [
         { id: "t1", agentName: "alpha" },
@@ -186,15 +276,17 @@ describe("registerTeammateKeybindings", () => {
       ],
     });
     h.viewState.selectAgent("alpha@team1");
+    h.viewState.toggleFocus();
     const result = h.trigger("\x1b[B");
     expect(result).toEqual({ consume: true });
     expect(h.viewState.get()).toEqual({
       kind: "leader_with_selection",
       selectedAgentId: "beta@team1",
+      focused: true,
     });
   });
 
-  it("leader_with_selection + Tab → cycle next + consume", () => {
+  it("focused leader_with_selection + Tab → cycle next + consume", () => {
     const h = makeHarness({
       tasks: [
         { id: "t1", agentName: "alpha" },
@@ -202,17 +294,20 @@ describe("registerTeammateKeybindings", () => {
       ],
     });
     h.viewState.selectAgent("alpha@team1");
+    h.viewState.toggleFocus();
     const result = h.trigger("\x09");
     expect(result).toEqual({ consume: true });
     expect(h.viewState.get()).toEqual({
       kind: "leader_with_selection",
       selectedAgentId: "beta@team1",
+      focused: true,
     });
   });
 
-  it("leader_with_selection + Enter → enterTeammateView + consume", () => {
+  it("focused leader_with_selection + Enter → enterTeammateView + consume", () => {
     const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
     h.viewState.selectAgent("alpha@team1");
+    h.viewState.toggleFocus();
     const result = h.trigger("\r");
     expect(result).toEqual({ consume: true });
     expect(h.viewState.get()).toEqual({
@@ -221,32 +316,50 @@ describe("registerTeammateKeybindings", () => {
     });
   });
 
-  it("leader_with_selection + Esc → reset + consume", () => {
+  it("focused leader_with_selection + Esc → reset + consume", () => {
     const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
     h.viewState.selectAgent("alpha@team1");
+    h.viewState.toggleFocus();
     const result = h.trigger("\x1b");
     expect(result).toEqual({ consume: true });
-    expect(h.viewState.get()).toEqual({ kind: "leader" });
+    expect(h.viewState.get()).toEqual({ kind: "leader", focused: false });
   });
 
-  it("leader_with_selection + k + selected task exists → kill (status=killed) + reset + consume", async () => {
+  it("focused leader_with_selection + k + selected task exists → kill + reset + consume", async () => {
     const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
     h.viewState.selectAgent("alpha@team1");
+    h.viewState.toggleFocus();
     const result = h.trigger("k");
     expect(result).toEqual({ consume: true });
-    expect(h.viewState.get()).toEqual({ kind: "leader" });
-    // Allow microtasks for the void killTeammate to resolve.
+    expect(h.viewState.get()).toEqual({ kind: "leader", focused: false });
     await Promise.resolve();
     await Promise.resolve();
     expect(h.taskStore.getTask("t1")?.status).toBe("killed");
   });
 
-  it("leader_with_selection + k + selected task no longer exists → reset + consume (no throw)", () => {
+  it("focused leader_with_selection + k + selected task missing → reset + consume (no throw)", () => {
     const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
     h.viewState.selectAgent("ghost@team1");
+    h.viewState.toggleFocus();
     expect(() => h.trigger("k")).not.toThrow();
-    expect(h.viewState.get()).toEqual({ kind: "leader" });
+    expect(h.viewState.get()).toEqual({ kind: "leader", focused: false });
   });
+
+  it("blurred leader_with_selection + ↑ → ignore + not consume (must press Ctrl+G first)", () => {
+    const h = makeHarness({
+      tasks: [
+        { id: "t1", agentName: "alpha" },
+        { id: "t2", agentName: "beta" },
+      ],
+    });
+    h.viewState.selectAgent("alpha@team1");
+    const before = h.viewState.get();
+    const result = h.trigger("\x1b[A");
+    expect(result).toBeUndefined();
+    expect(h.viewState.get()).toBe(before);
+  });
+
+  // ─── Teammate view — Enter / Esc only ───
 
   it("teammate + Enter → exitTeammateView + consume", () => {
     const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
@@ -257,6 +370,7 @@ describe("registerTeammateKeybindings", () => {
     expect(h.viewState.get()).toEqual({
       kind: "leader_with_selection",
       selectedAgentId: "alpha@team1",
+      focused: true,
     });
   });
 
@@ -269,10 +383,11 @@ describe("registerTeammateKeybindings", () => {
     expect(h.viewState.get()).toEqual({
       kind: "leader_with_selection",
       selectedAgentId: "alpha@team1",
+      focused: true,
     });
   });
 
-  it("teammate + 'a' → ignore + not consume (passes through to editor)", () => {
+  it("teammate + 'a' → ignore + not consume", () => {
     const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
     h.viewState.selectAgent("alpha@team1");
     h.viewState.enterTeammateView();
@@ -282,21 +397,7 @@ describe("registerTeammateKeybindings", () => {
     expect(h.viewState.get()).toBe(before);
   });
 
-  it("leader + Enter → ignore + not consume (passes through)", () => {
-    const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
-    const before = h.viewState.get();
-    const result = h.trigger("\r");
-    expect(result).toBeUndefined();
-    expect(h.viewState.get()).toBe(before);
-  });
-
-  it("leader + k → ignore + not consume (passes through)", () => {
-    const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
-    const before = h.viewState.get();
-    const result = h.trigger("k");
-    expect(result).toBeUndefined();
-    expect(h.viewState.get()).toBe(before);
-  });
+  // ─── Misc ───
 
   it("unsub → handler is no longer registered", () => {
     const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
@@ -312,7 +413,7 @@ describe("registerTeammateKeybindings", () => {
         { id: "t2", agentName: "beta" },
       ],
     });
-    // Mark beta as completed; cycle should land on alpha only.
+    h.viewState.toggleFocus();
     h.taskStore.set((prev) => ({
       ...prev,
       t2: { ...prev.t2!, status: "completed" },
@@ -322,6 +423,7 @@ describe("registerTeammateKeybindings", () => {
     expect(h.viewState.get()).toEqual({
       kind: "leader_with_selection",
       selectedAgentId: "alpha@team1",
+      focused: true,
     });
   });
 });

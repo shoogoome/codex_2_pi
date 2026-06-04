@@ -1,7 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { renderTeamWidget } from "./teamWidget.js";
+import { renderTeamWidget, buildTeamWidget } from "./teamWidget.js";
 import type { TeamState, InProcessTeammateTaskState } from "../types.js";
 import { createTaskStateBase } from "../../tasks/Task.js";
+import { createTeamStore } from "../teamStore.js";
+import { createTaskStore } from "../../tasks/taskStore.js";
+import { registerTask } from "../../tasks/framework.js";
+import { createViewStateStore } from "./viewState.js";
+import type { TUI } from "@earendil-works/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 
 function buildTask(
   agentName: string,
@@ -231,11 +237,186 @@ describe("renderTeamWidget", () => {
     const tasks = [
       buildTask("x".repeat(200), "wide", { turnCount: 99, tokenCount: 999_999 }),
     ];
-    const lines = renderTeamWidget([team], tasks, { width: 40 });
+    const lines = renderTeamWidget(team ? [team] : [], tasks, { width: 40 });
     for (const line of lines) {
       expect(line.length).toBeLessThanOrEqual(40);
     }
     // At least one line truncated → contains ellipsis
     expect(lines.some((l) => l.endsWith("…"))).toBe(true);
+  });
+
+  // ── focused-header rendering ──
+
+  it("focused=true → header line shows ● + focused hint", () => {
+    const team: TeamState = {
+      teamName: "research",
+      createdAt: 1,
+      memberAgentIds: ["alice@research"],
+    };
+    const tasks = [buildTask("alice", "research")];
+    const lines = renderTeamWidget([team], tasks, { focused: true });
+    expect(lines[0]).toContain("●");
+    expect(lines[0]).toContain("Team");
+    expect(lines[0]).toMatch(/↑↓|move|Enter|Esc/);
+    // Header is prepended — original first line moves to index 1.
+    expect(lines[1]).toMatch(/▶ research/);
+  });
+
+  it("focused=false → header line shows ○ + 'Ctrl+G to focus'", () => {
+    const team: TeamState = {
+      teamName: "research",
+      createdAt: 1,
+      memberAgentIds: ["alice@research"],
+    };
+    const tasks = [buildTask("alice", "research")];
+    const lines = renderTeamWidget([team], tasks, { focused: false });
+    expect(lines[0]).toContain("○");
+    expect(lines[0]).toContain("Ctrl+G");
+  });
+
+  it("focused undefined → no header (legacy output)", () => {
+    const team: TeamState = {
+      teamName: "research",
+      createdAt: 1,
+      memberAgentIds: ["alice@research"],
+    };
+    const tasks = [buildTask("alice", "research")];
+    const lines = renderTeamWidget([team], tasks);
+    // First line is the team header, not a focus header.
+    expect(lines[0]).toMatch(/▶ research/);
+    expect(lines[0]).not.toContain("○");
+    expect(lines[0]).not.toContain("Ctrl+G");
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// buildTeamWidget — panel-style factory
+// ──────────────────────────────────────────────────────────────────────
+
+describe("buildTeamWidget (factory)", () => {
+  const fakeTui = {} as unknown as TUI;
+  const fakeTheme = {} as unknown as Theme;
+
+  function makeDeps() {
+    const teamStore = createTeamStore();
+    const taskStore = createTaskStore();
+    const viewState = createViewStateStore();
+    return { teamStore, taskStore, viewState };
+  }
+
+  it("returns a Component with render / invalidate / dispose", () => {
+    const deps = makeDeps();
+    const factory = buildTeamWidget(deps);
+    const component = factory(fakeTui, fakeTheme);
+    expect(typeof component.render).toBe("function");
+    expect(typeof component.invalidate).toBe("function");
+    expect(typeof component.dispose).toBe("function");
+  });
+
+  it("render() pulls latest data from stores on every call", () => {
+    const deps = makeDeps();
+    const factory = buildTeamWidget(deps);
+    const component = factory(fakeTui, fakeTheme);
+
+    // Initially no teams → empty array.
+    expect(component.render(80)).toEqual([]);
+
+    // Add a team + a teammate task → render should now include them.
+    deps.teamStore.createTeam("research", undefined, 1);
+    const aliceState: InProcessTeammateTaskState = {
+      ...createTaskStateBase({
+        id: "alice-t",
+        type: "in_process_teammate",
+        description: "alice@research",
+        outputFile: "/tmp/alice.out",
+      }),
+      type: "in_process_teammate",
+      status: "running",
+      identity: {
+        agentId: "alice@research",
+        agentName: "alice",
+        teamName: "research",
+        agentType: "general-purpose",
+      },
+      prompt: "go",
+      sessionFile: "/tmp/alice.jsonl",
+      isIdle: false,
+      pendingMessages: [],
+      shutdownRequested: false,
+      shutdownAcknowledged: false,
+      toolCallCount: 0,
+      tokenCount: 0,
+      turnCount: 0,
+    };
+    registerTask(aliceState, deps.taskStore);
+    deps.teamStore.addMember("research", "alice@research");
+
+    const lines = component.render(80);
+    expect(lines.some((l) => l.includes("alice"))).toBe(true);
+    expect(lines.some((l) => l.includes("research"))).toBe(true);
+    // Default viewState is leader/blurred → ○ header should appear.
+    expect(lines[0]).toContain("○");
+  });
+
+  it("render() reflects focused state from viewState", () => {
+    const deps = makeDeps();
+    deps.teamStore.createTeam("research", undefined, 1);
+    const factory = buildTeamWidget(deps);
+    const component = factory(fakeTui, fakeTheme);
+
+    deps.viewState.toggleFocus();
+    const lines = component.render(80);
+    expect(lines[0]).toContain("●");
+    expect(lines[0]).toMatch(/↑↓|move|Enter/);
+  });
+
+  it("render() reflects selectedAgentId via highlight prefix", () => {
+    const deps = makeDeps();
+    deps.teamStore.createTeam("research", undefined, 1);
+    const aliceState: InProcessTeammateTaskState = {
+      ...createTaskStateBase({
+        id: "alice-t",
+        type: "in_process_teammate",
+        description: "alice@research",
+        outputFile: "/tmp/alice.out",
+      }),
+      type: "in_process_teammate",
+      status: "running",
+      identity: {
+        agentId: "alice@research",
+        agentName: "alice",
+        teamName: "research",
+        agentType: "general-purpose",
+      },
+      prompt: "go",
+      sessionFile: "/tmp/alice.jsonl",
+      isIdle: true,
+      pendingMessages: [],
+      shutdownRequested: false,
+      shutdownAcknowledged: false,
+      toolCallCount: 0,
+      tokenCount: 0,
+      turnCount: 0,
+    };
+    registerTask(aliceState, deps.taskStore);
+    deps.teamStore.addMember("research", "alice@research");
+    deps.viewState.selectAgent("alice@research");
+    deps.viewState.toggleFocus();
+
+    const factory = buildTeamWidget(deps);
+    const component = factory(fakeTui, fakeTheme);
+    const lines = component.render(80);
+    expect(lines.some((l) => l.startsWith("▶ ◌ alice"))).toBe(true);
+  });
+
+  it("render() in teammate view → focused=false header (editor owns focus)", () => {
+    const deps = makeDeps();
+    deps.teamStore.createTeam("research", undefined, 1);
+    deps.viewState.selectAgent("alice@research");
+    deps.viewState.enterTeammateView();
+    const factory = buildTeamWidget(deps);
+    const component = factory(fakeTui, fakeTheme);
+    const lines = component.render(80);
+    expect(lines[0]).toContain("○");
   });
 });

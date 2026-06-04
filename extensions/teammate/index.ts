@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { installTeammateEventContextFilter } from "./eventEmit.js";
 import { attachTeammateHandle, type TeammateHandle } from "./handle.js";
 import { createTeamStore } from "./teamStore.js";
@@ -21,11 +21,12 @@ import { buildTeamTaskListTool } from "./teamTasks/tools/teamTaskList.js";
 import { buildTeamTaskGetTool } from "./teamTasks/tools/teamTaskGet.js";
 import { hydrateTeammateState, hydrateTeamTaskStore, respawnTeammates } from "./hydrate.js";
 import { logError } from "../tasks/logging.js";
-import { renderTeamWidget } from "./ui/teamWidget.js";
+import { buildTeamWidget } from "./ui/teamWidget.js";
 import { createViewStateStore } from "./ui/viewState.js";
 import { registerTeammateKeybindings } from "./ui/keybindings.js";
 import { buildTeammateEditorFactory } from "./ui/teammateEditorFactory.js";
 import { isInProcessTeammateTask } from "./types.js";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import {
   registerLeaderChannel,
   unregisterLeaderChannel,
@@ -138,31 +139,43 @@ export default function teammateExtension(pi: ExtensionAPI): void {
       // D.4 — view-state plumbing for keybindings + editor view swap.
       const viewState = createViewStateStore();
 
-      const refresh = (): void => {
-        const teams = handle.teamStore.list();
-        const teammates = Object.values(tasksHandle.store.get()).filter(
-          isInProcessTeammateTask,
-        );
-        // Compute selectedAgentId from viewState — used by widget highlight.
-        const vs = viewState.get();
-        const selectedAgentId =
-          vs.kind === "leader_with_selection"
-            ? vs.selectedAgentId
-            : vs.kind === "teammate"
-              ? vs.agentId
-              : undefined;
-        const lines = renderTeamWidget(teams, teammates, { selectedAgentId });
-        if (lines.length === 0) {
-          ctx.ui.setWidget(WIDGET_KEY, undefined);
-        } else {
-          ctx.ui.setWidget(WIDGET_KEY, lines, { placement: "belowEditor" });
-        }
+      // Capture the TUI handle when the factory is invoked, so store
+      // subscribers below can call `tui.requestRender()` to re-paint the
+      // panel (mirrors extensions/panel pattern).
+      let tuiHandle: TUI | undefined;
+      const innerFactory = buildTeamWidget({
+        teamStore: handle.teamStore,
+        taskStore: tasksHandle.store,
+        viewState,
+      });
+      const componentFactory = (
+        t: TUI,
+        theme: Theme,
+      ): Component & { dispose?(): void } => {
+        tuiHandle = t;
+        const component = innerFactory(t, theme);
+        const origDispose = component.dispose;
+        return {
+          ...component,
+          render: (width: number) => component.render(width),
+          dispose: () => {
+            tuiHandle = undefined;
+            origDispose?.();
+          },
+        };
+      };
+      ctx.ui.setWidget(WIDGET_KEY, componentFactory, {
+        placement: "aboveEditor",
+      });
+
+      const requestRender = (): void => {
+        tuiHandle?.requestRender();
       };
 
-      const u1 = handle.teamStore.subscribe(refresh);
-      const u2 = tasksHandle.store.subscribe(refresh);
+      const u1 = handle.teamStore.subscribe(requestRender);
+      const u2 = tasksHandle.store.subscribe(requestRender);
 
-      // D.3 — keybindings (↑↓ Tab Enter Esc k routing).
+      // D.3 — keybindings (Ctrl+G focus + ↑↓ Tab Enter Esc k routing).
       const unsubKeybindings = registerTeammateKeybindings({
         pi,
         ui: ctx.ui,
@@ -173,9 +186,9 @@ export default function teammateExtension(pi: ExtensionAPI): void {
 
       // D.4 — view-swap reactor: when viewState enters teammate mode, install
       // the teammate-input editor; when it leaves, restore the default. Also
-      // re-render the widget so the selectedAgentId highlight tracks viewState.
+      // request a re-render so the selectedAgentId highlight tracks viewState.
       const unsubViewSwap = viewState.subscribe((state) => {
-        refresh();
+        requestRender();
         if (state.kind === "teammate") {
           const teammates = Object.values(tasksHandle.store.get()).filter(
             isInProcessTeammateTask,
@@ -203,10 +216,11 @@ export default function teammateExtension(pi: ExtensionAPI): void {
         u2();
         unsubKeybindings();
         unsubViewSwap();
+        // Tear down the widget itself so the host can drop our component.
+        ctx.ui.setWidget(WIDGET_KEY, undefined);
         // Defensive: ensure the default editor is restored on shutdown.
         ctx.ui.setEditorComponent(undefined);
       };
-      refresh();
     }
   });
 

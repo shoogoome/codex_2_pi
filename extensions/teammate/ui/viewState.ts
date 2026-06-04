@@ -5,17 +5,25 @@
 //   - subscribe listeners fire synchronously after each successful mutation.
 //   - No-op mutations keep the same ref and skip listener notifications.
 //
-// Three view modes the leader can be in:
-//   - leader (default)
-//   - leader_with_selection (↑↓ highlights a teammate in the widget)
-//   - teammate (Enter swaps the editor to teammate context)
+// View modes the leader can be in:
+//   - leader (default)                      — panel may be focused or blurred
+//   - leader_with_selection                 — ↑↓ highlights a teammate; focused
+//                                             only when the user pressed Ctrl+G
+//   - teammate                              — Enter swaps the editor to teammate
+//                                             context; the editor owns focus, so
+//                                             this state does NOT carry a focus
+//                                             flag (the panel is implicitly blurred)
+//
+// Focus model (mirrors extensions/panel):
+//   - focused=false : keys (other than Ctrl+G) pass through to the editor.
+//   - focused=true  : ↑↓ Tab Enter Esc k are intercepted by the panel.
 //
 // Consumed by D.2 (widget highlight), D.3 (keyboard routing) and
 // D.4 (view swap).
 
 export type ViewState =
-  | { kind: "leader" }
-  | { kind: "leader_with_selection"; selectedAgentId: string }
+  | { kind: "leader"; focused: boolean }
+  | { kind: "leader_with_selection"; selectedAgentId: string; focused: boolean }
   | { kind: "teammate"; agentId: string };
 
 type Listener = (state: ViewState) => void;
@@ -28,10 +36,11 @@ export interface ViewStateStore {
   cycleSelection(direction: "next" | "prev", availableAgentIds: readonly string[]): void;
   enterTeammateView(): void;
   exitTeammateView(): void;
+  toggleFocus(): void;
   _resetForTest(): void;
 }
 
-const INITIAL: ViewState = { kind: "leader" };
+const INITIAL: ViewState = { kind: "leader", focused: false };
 
 export function createViewStateStore(): ViewStateStore {
   let state: ViewState = INITIAL;
@@ -75,14 +84,21 @@ export function createViewStateStore(): ViewStateStore {
       };
     },
     reset() {
-      set((prev) => (prev.kind === "leader" ? prev : { kind: "leader" }));
+      set((prev) =>
+        prev.kind === "leader" && prev.focused === false ? prev : { kind: "leader", focused: false },
+      );
     },
     selectAgent(agentId) {
       set((prev) => {
+        // Preserve focused on transition from a focused leader_with_selection
+        // (re-selecting the same id keeps ref equality so it's a no-op);
+        // entering selection from the leader state keeps focused=false.
         if (prev.kind === "leader_with_selection" && prev.selectedAgentId === agentId) {
           return prev;
         }
-        return { kind: "leader_with_selection", selectedAgentId: agentId };
+        const focused =
+          prev.kind === "leader_with_selection" || prev.kind === "leader" ? prev.focused : false;
+        return { kind: "leader_with_selection", selectedAgentId: agentId, focused };
       });
     },
     cycleSelection(direction, availableAgentIds) {
@@ -98,7 +114,8 @@ export function createViewStateStore(): ViewStateStore {
         ) {
           return prev;
         }
-        return { kind: "leader_with_selection", selectedAgentId: picked };
+        const focused = prev.focused;
+        return { kind: "leader_with_selection", selectedAgentId: picked, focused };
       });
     },
     enterTeammateView() {
@@ -110,7 +127,15 @@ export function createViewStateStore(): ViewStateStore {
     exitTeammateView() {
       set((prev) => {
         if (prev.kind !== "teammate") return prev;
-        return { kind: "leader_with_selection", selectedAgentId: prev.agentId };
+        // Returning from teammate view leaves the panel focused so the user
+        // can immediately ↑↓ navigate without re-pressing Ctrl+G.
+        return { kind: "leader_with_selection", selectedAgentId: prev.agentId, focused: true };
+      });
+    },
+    toggleFocus() {
+      set((prev) => {
+        if (prev.kind === "teammate") return prev;
+        return { ...prev, focused: !prev.focused };
       });
     },
     _resetForTest() {

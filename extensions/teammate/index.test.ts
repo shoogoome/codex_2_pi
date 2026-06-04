@@ -412,6 +412,8 @@ describe("teammateExtension entrypoint", () => {
     } as never;
     teammateExtension(pi);
 
+    const requestRender = vi.fn();
+    const fakeTui = { requestRender };
     const fakeCtx = {
       cwd: "/tmp",
       hasUI: true,
@@ -427,19 +429,32 @@ describe("teammateExtension entrypoint", () => {
     };
     await handlers.get("session_start")!({}, fakeCtx);
 
-    // Initial refresh: empty teams → setWidget called with undefined
-    expect(setWidgetMock).toHaveBeenCalledWith("teammate-team", undefined);
+    // setWidget should be called once with the factory + aboveEditor.
+    expect(setWidgetMock).toHaveBeenCalledTimes(1);
+    const setWidgetCall = setWidgetMock.mock.calls[0]!;
+    expect(setWidgetCall[0]).toBe("teammate-team");
+    expect(typeof setWidgetCall[1]).toBe("function");
+    expect(setWidgetCall[2]).toEqual({ placement: "aboveEditor" });
 
-    // Now create a team via the handle — should trigger refresh
+    // Invoke the factory to capture the TUI handle (mirrors the host's
+    // mount sequence) so subsequent store changes can drive requestRender.
+    const factory = setWidgetCall[1] as (
+      tui: unknown,
+      theme: unknown,
+    ) => { render: (w: number) => string[] };
+    const component = factory(fakeTui, {});
+    // Component renders fresh state — empty initially.
+    expect(component.render(80)).toEqual([]);
+
+    // Now create a team via the handle — should trigger requestRender.
     const handle = getTeammateHandle(pi);
-    setWidgetMock.mockClear();
+    requestRender.mockClear();
     handle.teamStore.createTeam("research", undefined, 1);
-    expect(setWidgetMock).toHaveBeenCalled();
-    const lastCall =
-      setWidgetMock.mock.calls[setWidgetMock.mock.calls.length - 1]!;
-    expect(lastCall[0]).toBe("teammate-team");
-    expect(Array.isArray(lastCall[1])).toBe(true);
-    expect(lastCall[2]).toEqual({ placement: "belowEditor" });
+    expect(requestRender).toHaveBeenCalled();
+
+    // Re-rendering after the change should now include the team line.
+    const lines = component.render(80);
+    expect(lines.some((l) => l.includes("research"))).toBe(true);
 
     // Cleanup so next tests are not affected by lingering listeners
     await handlers.get("session_shutdown")!({}, fakeCtx);
@@ -694,6 +709,8 @@ describe("teammateExtension entrypoint", () => {
     } as never;
     teammateExtension(pi);
 
+    const requestRender = vi.fn();
+    const fakeTui = { requestRender };
     const fakeCtx = {
       cwd: "/tmp",
       hasUI: true,
@@ -705,6 +722,14 @@ describe("teammateExtension entrypoint", () => {
       sessionManager: { getSessionId: () => "s1", getEntries: () => [] },
     };
     await handlers.get("session_start")!({}, fakeCtx);
+
+    // Mount the widget via its factory (mirrors host behaviour).
+    const setWidgetCall = setWidgetMock.mock.calls[0]!;
+    const factory = setWidgetCall[1] as (
+      tui: unknown,
+      theme: unknown,
+    ) => { render: (w: number) => string[] };
+    const component = factory(fakeTui, {});
 
     // Seed a team + running teammate so the cycle pool is non-empty.
     const handle = getTeammateHandle(pi);
@@ -737,17 +762,18 @@ describe("teammateExtension entrypoint", () => {
     registerTask(aliceState, taskStore);
     handle.teamStore.addMember("t1", "alice@t1");
 
-    // Press ↓ — viewState transitions to leader_with_selection(alice@t1).
+    // Press Ctrl+G to focus the panel; ↓ to select alice.
     expect(capturedHandler).toBeDefined();
-    setWidgetMock.mockClear();
+    capturedHandler!("\x07");
     capturedHandler!("\x1b[B");
 
-    // Last setWidget call should now contain the highlighted "▶ alice" line.
-    expect(setWidgetMock).toHaveBeenCalled();
-    const lastCall =
-      setWidgetMock.mock.calls[setWidgetMock.mock.calls.length - 1]!;
-    const lines = lastCall[1] as string[];
+    // Render now should highlight alice with "▶ ● alice".
+    const lines = component.render(80);
     expect(lines.some((l) => l.includes("▶ ● alice"))).toBe(true);
+    // Header reflects focused state.
+    expect(lines[0]).toContain("●");
+    // requestRender should have been driven by the store/viewstate listeners.
+    expect(requestRender).toHaveBeenCalled();
 
     await handlers.get("session_shutdown")!({}, fakeCtx);
   });
@@ -826,8 +852,9 @@ describe("teammateExtension entrypoint", () => {
     registerTask(aliceState, taskStore);
     handle.teamStore.addMember("t1", "alice@t1");
 
-    // ↓ to select; Enter to enter teammate view.
+    // Ctrl+G to focus, ↓ to select; Enter to enter teammate view.
     setEditorComponentMock.mockClear();
+    capturedHandler!("\x07");
     capturedHandler!("\x1b[B");
     capturedHandler!("\r");
     // Should have installed a factory (function), not undefined.

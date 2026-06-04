@@ -570,6 +570,19 @@ describe("D2 integration: Module D — view-swap end-to-end", () => {
     expect(onTerminalInputMock).toHaveBeenCalledTimes(1);
     expect(capturedHandler).toBeDefined();
 
+    // 1b) setWidget should have been called with a factory; mount it so we
+    //     can render and inspect output.
+    expect(setWidgetMock).toHaveBeenCalledTimes(1);
+    const setWidgetCall = setWidgetMock.mock.calls[0]!;
+    expect(typeof setWidgetCall[1]).toBe("function");
+    expect(setWidgetCall[2]).toEqual({ placement: "aboveEditor" });
+    const factory = setWidgetCall[1] as (
+      tui: unknown,
+      theme: unknown,
+    ) => { render: (w: number) => string[] };
+    const fakeTui = { requestRender: vi.fn() };
+    const component = factory(fakeTui, {});
+
     // 2) Seed an active teammate task + team membership so cycle pool is non-empty.
     const handle = getTeammateHandle(pi);
     handle.teamStore.createTeam("t1", undefined, 1);
@@ -601,13 +614,13 @@ describe("D2 integration: Module D — view-swap end-to-end", () => {
     };
     taskStore.set((prev) => ({ ...prev, [aliceState.id]: aliceState }));
 
-    // 3) ↓ → cycleSelection should select alice and refresh widget with highlight.
-    setWidgetMock.mockClear();
+    // 3) Ctrl+G to focus, then ↓ → cycleSelection picks alice;
+    //    component.render() reflects the highlight.
+    capturedHandler!("\x07");
     capturedHandler!("\x1b[B");
-    expect(setWidgetMock).toHaveBeenCalled();
-    const after = setWidgetMock.mock.calls[setWidgetMock.mock.calls.length - 1]!;
-    const lines = after[1] as string[];
+    const lines = component.render(80);
     expect(lines.some((l) => l.includes("▶ ● alice"))).toBe(true);
+    expect(fakeTui.requestRender).toHaveBeenCalled();
 
     // 4) Enter → enterTeammateView → setEditorComponent should be called with a
     //    factory function (not undefined).
