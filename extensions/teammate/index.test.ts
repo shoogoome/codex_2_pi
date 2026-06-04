@@ -39,6 +39,7 @@ function buildFakePi(): {
     registerTool: ReturnType<typeof vi.fn>;
     sendMessage: ReturnType<typeof vi.fn>;
     getActiveTools: ReturnType<typeof vi.fn>;
+    getAllTools: ReturnType<typeof vi.fn>;
   };
   handlers: Map<string, (event: unknown, ctx: unknown) => unknown>;
   tasksHandle: ReturnType<typeof buildFakeTasksHandle>["handle"];
@@ -53,6 +54,7 @@ function buildFakePi(): {
     registerTool: vi.fn(),
     sendMessage: vi.fn(),
     getActiveTools: vi.fn().mockReturnValue([]),
+    getAllTools: vi.fn().mockReturnValue([]),
   };
   return { pi, handlers, tasksHandle };
 }
@@ -305,6 +307,10 @@ describe("teammateExtension entrypoint", () => {
 
     (pi as unknown as { getActiveTools: ReturnType<typeof vi.fn> }).getActiveTools =
       vi.fn().mockReturnValue(["read", "send_message"]);
+    (pi as unknown as { getAllTools: ReturnType<typeof vi.fn> }).getAllTools =
+      vi.fn().mockReturnValue([{ name: "read" }, { name: "send_message" }]);
+    (pi as unknown as { getAllTools: ReturnType<typeof vi.fn> }).getAllTools =
+      vi.fn().mockReturnValue([{ name: "read" }, { name: "send_message" }]);
 
     const sessionStart = handlers.get("session_start")!;
     await sessionStart({}, fakeCtx);
@@ -337,6 +343,7 @@ describe("teammateExtension entrypoint", () => {
       registerTool: vi.fn(),
       sendMessage: vi.fn(),
       getActiveTools: vi.fn().mockReturnValue([]),
+    getAllTools: vi.fn().mockReturnValue([]),
     } as never;
 
     teammateExtension(pi);
@@ -409,6 +416,7 @@ describe("teammateExtension entrypoint", () => {
       registerTool: vi.fn(),
       sendMessage: vi.fn(),
       getActiveTools: vi.fn().mockReturnValue([]),
+    getAllTools: vi.fn().mockReturnValue([]),
     } as never;
     teammateExtension(pi);
 
@@ -480,6 +488,7 @@ describe("teammateExtension entrypoint", () => {
       registerTool: vi.fn(),
       sendMessage: vi.fn(),
       getActiveTools: vi.fn().mockReturnValue([]),
+    getAllTools: vi.fn().mockReturnValue([]),
     } as never;
     teammateExtension(pi);
 
@@ -537,6 +546,8 @@ describe("teammateExtension entrypoint", () => {
     };
     (pi as unknown as { getActiveTools: ReturnType<typeof vi.fn> }).getActiveTools =
       vi.fn().mockReturnValue([]);
+    (pi as unknown as { getAllTools: ReturnType<typeof vi.fn> }).getAllTools =
+      vi.fn().mockReturnValue([]);
 
     const sessionStart = handlers.get("session_start")!;
     await expect(sessionStart({}, fakeCtx)).resolves.not.toThrow();
@@ -563,6 +574,7 @@ describe("teammateExtension entrypoint", () => {
       registerTool: vi.fn(),
       sendMessage: vi.fn(),
       getActiveTools: vi.fn().mockReturnValue([]),
+    getAllTools: vi.fn().mockReturnValue([]),
     } as never;
     teammateExtension(pi);
 
@@ -657,6 +669,7 @@ describe("teammateExtension entrypoint", () => {
       registerTool: vi.fn(),
       sendMessage: vi.fn(),
       getActiveTools: vi.fn().mockReturnValue([]),
+    getAllTools: vi.fn().mockReturnValue([]),
     } as never;
     teammateExtension(pi);
 
@@ -706,6 +719,7 @@ describe("teammateExtension entrypoint", () => {
       registerTool: vi.fn(),
       sendMessage: vi.fn(),
       getActiveTools: vi.fn().mockReturnValue([]),
+    getAllTools: vi.fn().mockReturnValue([]),
     } as never;
     teammateExtension(pi);
 
@@ -807,6 +821,7 @@ describe("teammateExtension entrypoint", () => {
       registerTool: vi.fn(),
       sendMessage: vi.fn(),
       getActiveTools: vi.fn().mockReturnValue([]),
+    getAllTools: vi.fn().mockReturnValue([]),
     } as never;
     teammateExtension(pi);
 
@@ -865,9 +880,22 @@ describe("teammateExtension entrypoint", () => {
     );
     expect(installCalls.length).toBeGreaterThanOrEqual(1);
 
-    // Esc to exit — should restore default (call with undefined).
+    // The keybindings layer in teammate view passes Esc through to the
+    // swapped editor (whose onEscape calls deps.onExit → exitTeammateView).
+    // Build the editor from the recorded factory and fire onEscape to drive
+    // the exit, then assert setEditorComponent(undefined) restored default.
     setEditorComponentMock.mockClear();
-    capturedHandler!("\x1b");
+    const factory = installCalls[0]![0] as (
+      tui: unknown,
+      theme: unknown,
+      kb: unknown,
+    ) => { onEscape?: () => void };
+    const editor = factory(
+      { requestRender: vi.fn() },
+      { borderColor: "white" },
+      { matches: () => false },
+    );
+    editor.onEscape!();
     expect(setEditorComponentMock).toHaveBeenCalledWith(undefined);
 
     await handlers.get("session_shutdown")!({}, fakeCtx);
@@ -895,6 +923,7 @@ describe("teammateExtension entrypoint", () => {
       registerTool: vi.fn(),
       sendMessage: vi.fn(),
       getActiveTools: vi.fn().mockReturnValue([]),
+    getAllTools: vi.fn().mockReturnValue([]),
     } as never;
     teammateExtension(pi);
 
@@ -928,6 +957,7 @@ describe("teammateExtension entrypoint", () => {
     customMock: ReturnType<typeof vi.fn>;
     overlayHandle: { hide: ReturnType<typeof vi.fn> };
     overlayDoneRef: { current?: (value: void) => void };
+    setEditorComponentMock: ReturnType<typeof vi.fn>;
     fakeCtx: Record<string, unknown>;
     seedTeammate: (state: InProcessTeammateTaskState) => void;
     taskStore: ReturnType<typeof createTaskStore>;
@@ -986,15 +1016,17 @@ describe("teammateExtension entrypoint", () => {
       registerTool: vi.fn(),
       sendMessage: vi.fn(),
       getActiveTools: vi.fn().mockReturnValue([]),
+    getAllTools: vi.fn().mockReturnValue([]),
     } as never;
     teammateExtension(pi);
+    const setEditorComponentMock = vi.fn();
     const fakeCtx: Record<string, unknown> = {
       cwd: "/tmp",
       hasUI: true,
       ui: {
         setWidget: vi.fn(),
         onTerminalInput: onTerminalInputMock,
-        setEditorComponent: vi.fn(),
+        setEditorComponent: setEditorComponentMock,
         custom: customMock,
       },
       sessionManager: { getSessionId: () => "s1", getEntries: () => [] },
@@ -1006,6 +1038,7 @@ describe("teammateExtension entrypoint", () => {
       customMock,
       overlayHandle,
       overlayDoneRef,
+      setEditorComponentMock,
       fakeCtx,
       taskStore,
       seedTeammate: (state: InProcessTeammateTaskState) => {
@@ -1070,7 +1103,7 @@ describe("teammateExtension entrypoint", () => {
     await h.handlers.get("session_shutdown")!({}, h.fakeCtx);
   });
 
-  it("Path Y: leaving teammate view (Esc) calls done() on the overlay", async () => {
+  it("Path Y: leaving teammate view (Esc on editor) calls done() on the overlay", async () => {
     const h = buildPathYHarness();
     await h.handlers.get("session_start")!({}, h.fakeCtx);
     const handle = getTeammateHandle(h.pi);
@@ -1083,8 +1116,25 @@ describe("teammateExtension entrypoint", () => {
     h.capturedHandlerRef.current!("\r");
     expect(h.customMock).toHaveBeenCalledTimes(1);
 
-    // Esc — exit teammate view; extension should hide() the overlay handle.
-    h.capturedHandlerRef.current!("\x1b");
+    // The keybindings handler in teammate view passes Esc through to the
+    // swapped editor (whose onEscape calls deps.onExit → exitTeammateView).
+    // Build the editor from the recorded factory and fire onEscape; the
+    // viewState reactor then hides the overlay.
+    const installCalls = h.setEditorComponentMock.mock.calls.filter(
+      (c: unknown[]) => typeof c[0] === "function",
+    );
+    expect(installCalls.length).toBeGreaterThanOrEqual(1);
+    const factory = installCalls[0]![0] as (
+      tui: unknown,
+      theme: unknown,
+      kb: unknown,
+    ) => { onEscape?: () => void };
+    const editor = factory(
+      { requestRender: vi.fn() },
+      { borderColor: "white" },
+      { matches: () => false },
+    );
+    editor.onEscape!();
     expect(h.overlayHandle.hide).toHaveBeenCalled();
 
     await h.handlers.get("session_shutdown")!({}, h.fakeCtx);

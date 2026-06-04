@@ -359,40 +359,54 @@ describe("registerTeammateKeybindings (focus-aware)", () => {
     expect(h.viewState.get()).toBe(before);
   });
 
-  // ─── Teammate view — Enter / Esc only ───
+  // ─── Teammate view — ALL keys pass through to the swapped editor ───
 
-  it("teammate + Enter → exitTeammateView + consume", () => {
+  it("teammate + Enter → pass through (editor owns submit/exit)", () => {
     const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
     h.viewState.selectAgent("alpha@team1");
     h.viewState.enterTeammateView();
+    const before = h.viewState.get();
     const result = h.trigger("\r");
-    expect(result).toEqual({ consume: true });
-    expect(h.viewState.get()).toEqual({
-      kind: "leader_with_selection",
-      selectedAgentId: "alpha@team1",
-      focused: true,
-    });
+    expect(result).toBeUndefined();
+    expect(h.viewState.get()).toBe(before);
   });
 
-  it("teammate + Esc → exitTeammateView + consume", () => {
+  it("teammate + Esc → pass through (editor owns submit/exit)", () => {
     const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
     h.viewState.selectAgent("alpha@team1");
     h.viewState.enterTeammateView();
+    const before = h.viewState.get();
     const result = h.trigger("\x1b");
-    expect(result).toEqual({ consume: true });
-    expect(h.viewState.get()).toEqual({
-      kind: "leader_with_selection",
-      selectedAgentId: "alpha@team1",
-      focused: true,
-    });
+    expect(result).toBeUndefined();
+    expect(h.viewState.get()).toBe(before);
   });
 
-  it("teammate + 'a' → ignore + not consume", () => {
+  it("teammate + 'a' → pass through (editor owns input)", () => {
     const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
     h.viewState.selectAgent("alpha@team1");
     h.viewState.enterTeammateView();
     const before = h.viewState.get();
     const result = h.trigger("a");
+    expect(result).toBeUndefined();
+    expect(h.viewState.get()).toBe(before);
+  });
+
+  it("teammate + Tab → pass through (editor owns input)", () => {
+    const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
+    h.viewState.selectAgent("alpha@team1");
+    h.viewState.enterTeammateView();
+    const before = h.viewState.get();
+    const result = h.trigger("\x09");
+    expect(result).toBeUndefined();
+    expect(h.viewState.get()).toBe(before);
+  });
+
+  it("teammate + ↑ → pass through (editor owns input)", () => {
+    const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
+    h.viewState.selectAgent("alpha@team1");
+    h.viewState.enterTeammateView();
+    const before = h.viewState.get();
+    const result = h.trigger("\x1b[A");
     expect(result).toBeUndefined();
     expect(h.viewState.get()).toBe(before);
   });

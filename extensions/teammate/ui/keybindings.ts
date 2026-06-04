@@ -6,9 +6,10 @@
 //   - focused=true  : we intercept ↑↓ Tab Enter Esc k as panel controls.
 //                     Other keys still pass through (the panel does not own
 //                     a text buffer of its own).
-//   - teammate view : the editor has been swapped to a teammate-input
-//                     surface; only Enter / Esc are handled here, to exit
-//                     teammate view. Other keys flow to the swapped editor.
+//   - teammate view : ALL keys pass through — the swapped editor's
+//                     onSubmit/onEscape hooks call deps.onExit which
+//                     triggers exitTeammateView(). Pre-empting here would
+//                     prevent the user from typing or submitting anything.
 
 import type {
   ExtensionAPI,
@@ -57,9 +58,8 @@ export interface KeybindingsDeps {
  *     k               → killTeammate(selected) + reset (consume)
  *     other           → pass through
  *   teammate (focus owned by editor):
- *     Enter           → exitTeammateView (consume)
- *     Esc             → exitTeammateView (consume)
- *     other           → pass through
+ *     ALL keys pass through — the swapped editor's onSubmit/onEscape
+ *     hooks call deps.onExit which triggers exitTeammateView().
  */
 export function registerTeammateKeybindings(deps: KeybindingsDeps): () => void {
   const handler: TerminalInputHandler = (data) => {
@@ -74,13 +74,12 @@ export function registerTeammateKeybindings(deps: KeybindingsDeps): () => void {
       return { consume: true };
     }
 
-    // Teammate view: only Enter / Esc are panel concerns; everything else
-    // (including Ctrl+G handled above) falls through to the swapped editor.
+    // Teammate view: the swapped editor owns ALL keys including Enter/Esc.
+    // Its onSubmit/onEscape will trigger viewState.exitTeammateView() via the
+    // deps.onExit closure when the user submits empty / hits Esc. The
+    // keybindings layer must NOT intercept here — doing so would prevent
+    // the user from typing and submitting messages to the teammate.
     if (state.kind === "teammate") {
-      if (action.kind === "enter" || action.kind === "esc") {
-        deps.viewState.exitTeammateView();
-        return { consume: true };
-      }
       return undefined;
     }
 
