@@ -59,11 +59,15 @@ interface CapturedSendMessage {
   opts: { triggerTurn?: boolean } | undefined;
 }
 
-function buildLeaderPi(activeTools: readonly string[] = []): {
+function buildLeaderPi(
+  activeTools: readonly string[] = [],
+  allTools?: readonly string[],
+): {
   pi: ExtensionAPI;
   captured: CapturedSendMessage[];
 } {
   const captured: CapturedSendMessage[] = [];
+  const resolvedAll = allTools ?? activeTools;
   const pi = {
     on: vi.fn(),
     events: {},
@@ -75,6 +79,12 @@ function buildLeaderPi(activeTools: readonly string[] = []): {
       });
     }),
     getActiveTools: vi.fn().mockReturnValue([...activeTools]),
+    // spawnTeammate / hydrate use getAllTools (registered tools, not just
+    // currently-active set) so teammates always get bash even if the
+    // leader's localshell extension hides it.
+    getAllTools: vi
+      .fn()
+      .mockReturnValue([...resolvedAll].map((name) => ({ name }))),
   };
   return { pi: pi as never, captured };
 }
@@ -521,6 +531,58 @@ describe("D2 integration: Module C — teammate tool-pool gating + boilerplate",
     // Original prompt preserved at the tail:
     expect(sent.endsWith("find auth code")).toBe(true);
   });
+
+  it("spawnTeammate uses getAllTools so teammate gets bash even when localshell hid it from the leader's active set", async () => {
+    // Leader's *active* set has bash hidden (localshell replaces it with
+    // task_bash). The full registered set still has bash. The teammate must
+    // see bash regardless — that's the bug fix.
+    const { pi } = buildLeaderPi(
+      // active (what the leader currently uses)
+      ["read", "send_message", "task_bash", "task_kill"],
+      // all registered tools (including the hidden bash)
+      ["read", "send_message", "task_bash", "task_kill", "bash", "write", "edit"],
+    );
+    const handle = attachHandle(pi);
+    handle.teamStore.createTeam("research", undefined, 100);
+
+    const createSessionMock = vi.fn(
+      async (_opts: { tools: readonly string[]; customTools?: readonly unknown[] }) => ({
+        session: {
+          prompt: vi.fn().mockResolvedValue(undefined),
+          abort: vi.fn().mockResolvedValue(undefined),
+          dispose: vi.fn(),
+          subscribe: vi.fn(() => () => {}),
+        },
+      }),
+    );
+    _setSdkForTest({
+      createAgentSessionServices: vi.fn().mockResolvedValue({}),
+      SessionManagerCreate: vi.fn(() => ({
+        getSessionFile: () => "/tmp/spawn-int-3.jsonl",
+        getSessionId: () => "tm-int-3",
+        getEntries: () => [],
+        appendMessage: vi.fn(),
+      })),
+      createAgentSessionFromServices: createSessionMock,
+    });
+
+    const taskStore = createTaskStore();
+    _setDefaultTaskStoreForTest(taskStore);
+    await spawnTeammate(pi, taskStore, handle, {
+      teamName: "research",
+      agentName: "alice",
+      agentType: "general-purpose",
+      prompt: "go",
+      cwd: "/tmp",
+    });
+
+    expect(createSessionMock).toHaveBeenCalledTimes(1);
+    const args = createSessionMock.mock.calls[0]![0];
+    expect(args.tools).toContain("bash");
+    expect(args.tools).toContain("write");
+    expect(args.tools).toContain("edit");
+    expect(args.tools).toContain("task_bash");
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -557,6 +619,7 @@ describe("D2 integration: Module D — view-swap end-to-end", () => {
       registerTool: vi.fn(),
       sendMessage: vi.fn(),
       getActiveTools: vi.fn().mockReturnValue([]),
+      getAllTools: vi.fn().mockReturnValue([]),
     } as never;
     teammateExtension(pi);
 
@@ -632,19 +695,29 @@ describe("D2 integration: Module D — view-swap end-to-end", () => {
     expect(lines.some((l) => l.includes("▶ ● alice"))).toBe(true);
     expect(fakeTui.requestRender).toHaveBeenCalled();
 
-    // 4) Enter → enterTeammateView → setEditorComponent should be called with a
-    //    factory function (not undefined).
+    // 4) Enter (in leader_with_selection) → enterTeammateView →
+    //    setEditorComponent should be called with a factory function.
+    //    Keybindings consume Enter only at the leader level, NOT once we are
+    //    in teammate view (the swapped editor owns Enter/Esc there).
     setEditorComponentMock.mockClear();
-    capturedHandler!("\r");
+    const enterResult = capturedHandler!("\r");
+    expect(enterResult).toEqual({ consume: true });
     const installCalls = setEditorComponentMock.mock.calls.filter(
       (c: unknown[]) => typeof c[0] === "function",
     );
     expect(installCalls.length).toBeGreaterThanOrEqual(1);
 
-    // 5) Esc → exitTeammateView → setEditorComponent(undefined) restores default.
+    // 5) In teammate view, the keybindings handler must pass Enter/Esc
+    //    through (return undefined) so the swapped editor owns input. The
+    //    editor's onSubmit/onEscape (set by buildTeammateEditorFactory) are
+    //    what drive viewState.exitTeammateView via deps.onExit — those paths
+    //    are exercised by teammateEditorFactory.test.ts. Here we only assert
+    //    the keybindings-side contract: do NOT consume, do NOT call
+    //    setEditorComponent(undefined) ourselves.
     setEditorComponentMock.mockClear();
-    capturedHandler!("\x1b");
-    expect(setEditorComponentMock).toHaveBeenCalledWith(undefined);
+    const escResult = capturedHandler!("\x1b");
+    expect(escResult).toBeUndefined();
+    expect(setEditorComponentMock).not.toHaveBeenCalled();
 
     // Cleanup
     await handlers.get("session_shutdown")!({}, fakeCtx);

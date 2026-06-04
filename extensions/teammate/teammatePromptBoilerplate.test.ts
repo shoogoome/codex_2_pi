@@ -44,6 +44,19 @@ describe("buildTeammateBoilerplate", () => {
     // Negative: must NOT contain the old "你没有 bash" boilerplate.
     expect(b).not.toContain("没有 bash");
   });
+
+  it("explicitly states the teammate has full execution privileges", () => {
+    const b = buildTeammateBoilerplate(identity);
+    expect(b).toContain("完整执行权限");
+  });
+
+  it("includes an anti-hallucination disclaimer telling the LLM not to call the `mcp` tool", () => {
+    // Real-world failure: the teammate LLM was hallucinating `mcp({search:"bash"})`
+    // when it couldn't find a tool named `bash` (because localshell hid it).
+    // The boilerplate must explicitly suppress that.
+    const b = buildTeammateBoilerplate(identity);
+    expect(b).toContain("mcp");
+  });
 });
 
 describe("prependBoilerplate", () => {
