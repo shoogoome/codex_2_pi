@@ -10,6 +10,11 @@
 // only redraws the rows we emit and the leader's main chat would still
 // show through underneath (mirrors teammateOverlayRender.ts).
 
+import {
+  truncateToWidth,
+  visibleWidth,
+  wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import type { TaskPanelEntry } from "./taskPanelRender.js";
 
 export interface TaskOutputOverlayTheme {
@@ -40,20 +45,20 @@ function formatElapsed(elapsedMs: number): string {
 
 function wrap(line: string, width: number): string[] {
   if (width <= 0) return [line];
-  if (line.length <= width) return [line];
-  const out: string[] = [];
-  let i = 0;
-  while (i < line.length) {
-    out.push(line.slice(i, i + width));
-    i += width;
-  }
-  return out;
+  if (visibleWidth(line) <= width) return [line];
+  // Use Pi TUI's wrapTextWithAnsi so wrapping respects CJK / emoji /
+  // ANSI escapes (graphemes that are 2 cells wide must not be split).
+  return wrapTextWithAnsi(line, width);
 }
 
+// `truncate` is a thin shim over Pi TUI's truncateToWidth so call sites
+// stay compact. Width math is delegated to truncateToWidth /
+// visibleWidth which correctly account for CJK / emoji / ANSI escapes;
+// the previous hand-rolled `s.length`-based version silently overran for
+// non-ASCII content and tripped Pi's strict per-line width guard
+// ("Rendered line N exceeds terminal width").
 function truncate(s: string, width: number): string {
-  if (s.length <= width) return s;
-  if (width <= 1) return "…";
-  return s.slice(0, width - 1) + "…";
+  return truncateToWidth(s, width, "…");
 }
 
 function statusColor(status: string): string {
@@ -74,8 +79,8 @@ function composeHeader(
   const mid = elapsed;
   const right = "Esc to exit";
   const plain = `${left}   ${mid}  ${right}`;
-  if (plain.length <= width) {
-    const pad = width - plain.length;
+  if (visibleWidth(plain) <= width) {
+    const pad = width - visibleWidth(plain);
     const gap = " ".repeat(Math.max(3, pad));
     return `${theme.fg("accent", "▶ task:")} ${theme.fg("text", task.description)} ${theme.fg(stColor, `[${task.status}]`)}${gap}${theme.fg("dim", `${mid}  ${right}`)}`;
   }
@@ -120,7 +125,7 @@ export function renderTaskOutputOverlay(
     if (line === "(no output yet)") {
       out.push(theme.fg("dim", line));
     } else {
-      out.push(line.length > width ? truncate(line, width) : line);
+      out.push(visibleWidth(line) > width ? truncate(line, width) : line);
     }
   }
   while (out.length < height) out.push("");

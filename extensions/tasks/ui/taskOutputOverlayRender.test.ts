@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   renderTaskOutputOverlay,
   type TaskOutputOverlayTheme,
@@ -81,6 +82,32 @@ describe("renderTaskOutputOverlay", () => {
     });
     const bodyLine = out.find((l) => l.includes("xxx"))!;
     expect(bodyLine).toBeDefined();
-    expect(bodyLine.length).toBeLessThanOrEqual(30);
+    // Pi TUI's truncateToWidth wraps the result with ANSI reset codes,
+    // so we compare visibleWidth (not raw .length).
+    expect(visibleWidth(bodyLine)).toBeLessThanOrEqual(30);
+  });
+
+  it("CJK output / description never overrun visibleWidth (regression: multi task_agent crash)", () => {
+    // The output overlay header / body used local s.length truncation
+    // which silently overran for CJK content (each char visibleWidth=2,
+    // s.length=1) and crashed Pi when the strict width-check rejected
+    // the rendered line.
+    const cjk =
+      "写总体架构文档+生图prompt 这是一个超长的中文描述用来触发宽度计算";
+    const task = makeTask({
+      description: cjk,
+      status: "running",
+      startTime: 0,
+    });
+    const longOutput = `${cjk}\n${cjk.repeat(4)}\n生成🚀报告 ${"x".repeat(200)}`;
+    for (const width of [30, 60, 80, 152]) {
+      const lines = renderTaskOutputOverlay(task, longOutput, width, 12, {
+        theme: NOOP_THEME,
+        now: 5000,
+      });
+      for (const line of lines) {
+        expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      }
+    }
   });
 });

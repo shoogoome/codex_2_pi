@@ -3,6 +3,7 @@
 // concerns.
 
 import { describe, it, expect } from "vitest";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
   renderTeammateOverlay,
@@ -316,5 +317,24 @@ describe("renderTeammateOverlay", () => {
     expect(
       lines.some((l) => l.includes("<dim>(no messages yet)</dim>")),
     ).toBe(true);
+  });
+
+  it("CJK message bodies never overrun visibleWidth (regression: multi task_agent crash)", () => {
+    // Long CJK content used to slip through the local wrap()/truncate()
+    // helpers (which were s.length-based) and trip Pi TUI's strict width
+    // check, killing the whole Pi process when 4 task_agent ran in
+    // parallel with Chinese descriptions.
+    const cjk = "写总体架构文档+生图prompt 这是一个超长的中文描述用来触发宽度计算";
+    const entries: SessionEntry[] = [
+      userEntry(cjk, "u-cjk"),
+      assistantEntry("生成🚀报告并交叉验证全角字符 / emoji 宽度计算", "a-cjk"),
+      toolResultEntry(cjk.repeat(5)),
+    ];
+    for (const width of [30, 60, 80, 152]) {
+      const lines = renderTeammateOverlay(HEADER, entries, width, 24);
+      for (const line of lines) {
+        expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      }
+    }
   });
 });

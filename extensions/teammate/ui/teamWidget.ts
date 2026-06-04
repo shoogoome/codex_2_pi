@@ -19,6 +19,7 @@
 // Width default 80; caller can pass smaller via options.
 
 import type { Component, TUI } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TeamStore } from "../teamStore.js";
 import type { TaskStore } from "../../tasks/taskStore.js";
@@ -73,10 +74,15 @@ function formatTurns(n: number): string {
 }
 
 function truncate(s: string, width: number): string {
-  if (s.length <= width) return s;
-  if (width <= 1) return "…";
-  return s.slice(0, width - 1) + "…";
+  return truncateToWidth(s, width, "…");
 }
+
+// `truncate` is a thin shim over Pi TUI's truncateToWidth so existing
+// call sites stay compact. Width math is delegated to truncateToWidth /
+// visibleWidth which correctly account for CJK / emoji / ANSI escapes;
+// our previous hand-rolled `s.length`-based version silently overran the
+// width budget for non-ASCII content and tripped Pi's strict
+// per-line width guard ("Rendered line N exceeds terminal width").
 
 export function renderTeamWidget(
   teams: readonly TeamState[],

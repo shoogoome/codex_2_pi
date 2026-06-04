@@ -26,6 +26,11 @@
 // the renderer pure for tests and back-compat.
 
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import {
+  truncateToWidth,
+  visibleWidth,
+  wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import type { TeammateIdentity } from "../types.js";
 
 export interface TeammateOverlayHeader {
@@ -66,31 +71,27 @@ function composeHeader(
   const left = `${leftCore}  ${stats}`;
   const right = h.exitHint;
   const min = `${left}   ${right}`;
-  if (min.length <= width) {
-    const pad = width - left.length - right.length;
+  if (visibleWidth(min) <= width) {
+    const pad = width - visibleWidth(left) - visibleWidth(right);
     const gap = " ".repeat(Math.max(3, pad));
     const coloredLeft = `${theme.fg("accent", "▶ teammate:")} ${theme.fg("text", h.identity.agentId)}  ${theme.fg(stateColor, stats)}`;
     return `${coloredLeft}${gap}${theme.fg("dim", right)}`;
   }
-  return theme.fg("accent", min.slice(0, width));
+  return theme.fg("accent", truncateToWidth(min, width, "…"));
 }
 
 function wrap(line: string, w: number): string[] {
   if (w <= 0) return [line];
-  if (line.length <= w) return [line];
-  const out: string[] = [];
-  let i = 0;
-  while (i < line.length) {
-    out.push(line.slice(i, i + w));
-    i += w;
-  }
-  return out;
+  if (visibleWidth(line) <= w) return [line];
+  // Use Pi TUI's wrapTextWithAnsi so wrapping respects CJK / emoji /
+  // ANSI escapes (graphemes that are 2 cells wide must not be split).
+  return wrapTextWithAnsi(line, w);
 }
 
 function summarizeArgs(args: Record<string, unknown>): string {
   try {
     const s = JSON.stringify(args);
-    return s.length <= 60 ? s : `${s.slice(0, 57)}...`;
+    return visibleWidth(s) <= 60 ? s : truncateToWidth(s, 60, "...");
   } catch {
     return "{...}";
   }
@@ -130,7 +131,8 @@ function entryToLines(entry: SessionEntry): string[] | null {
     }
     if (msg.role === "toolResult") {
       const text = extractText(msg.content);
-      const truncated = text.length <= 80 ? text : `${text.slice(0, 77)}...`;
+      const truncated =
+        visibleWidth(text) <= 80 ? text : truncateToWidth(text, 80, "...");
       return [`[TOOL_RESULT] ${truncated}`];
     }
     return [`[${msg.role}]`];

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { renderTeamWidget, buildTeamWidget } from "./teamWidget.js";
 import type { TeamState, InProcessTeammateTaskState } from "../types.js";
 import { createTaskStateBase } from "../../tasks/Task.js";
@@ -239,10 +240,12 @@ describe("renderTeamWidget", () => {
     ];
     const lines = renderTeamWidget(team ? [team] : [], tasks, { width: 40 });
     for (const line of lines) {
-      expect(line.length).toBeLessThanOrEqual(40);
+      expect(visibleWidth(line)).toBeLessThanOrEqual(40);
     }
-    // At least one line truncated → contains ellipsis
-    expect(lines.some((l) => l.endsWith("…"))).toBe(true);
+    // At least one line truncated → contains ellipsis (Pi TUI's
+    // truncateToWidth wraps the result with ANSI reset codes so we use
+    // `includes` instead of `endsWith`).
+    expect(lines.some((l) => l.includes("…"))).toBe(true);
   });
 
   // ── focused-header rendering ──
@@ -572,5 +575,34 @@ describe("buildTeamWidget (factory)", () => {
     expect(lines.some((l) => l.includes("<dim>"))).toBe(true);
     // Idle teammate row should carry muted + dim tokens.
     expect(lines.some((l) => l.includes("<muted>◌</muted>"))).toBe(true);
+  });
+
+  it("CJK agent / team names never overrun visibleWidth (regression: multi task_agent crash)", () => {
+    // teamWidget is rendered as part of the Pi panel; long CJK
+    // agentName / teamName previously slipped past the local truncate()
+    // (s.length-based) and tripped Pi TUI's strict width check.
+    const team: TeamState = {
+      teamName: "项目研究",
+      createdAt: 1,
+      memberAgentIds: [
+        "起一个超长的中文别名用来触发宽度计算需要被截断的@项目研究",
+      ],
+    };
+    const tasks = [
+      buildTask(
+        "起一个超长的中文别名用来触发宽度计算需要被截断的",
+        "项目研究",
+        { isIdle: false, lastTool: "写文档", turnCount: 5, tokenCount: 1234 },
+      ),
+    ];
+    for (const width of [30, 40, 60, 80]) {
+      const lines = renderTeamWidget(team ? [team] : [], tasks, {
+        width,
+        focused: true,
+      });
+      for (const line of lines) {
+        expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      }
+    }
   });
 });

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   renderTaskPanel,
   type TaskPanelEntry,
@@ -170,7 +171,9 @@ describe("renderTaskPanel", () => {
     );
     const row = lines.find((l) => l.includes("xxx"))!;
     expect(row).toBeDefined();
-    expect(row.length).toBeLessThanOrEqual(40);
+    // Pi TUI's truncateToWidth wraps the result with ANSI reset codes,
+    // so we compare the visible width (not raw .length).
+    expect(visibleWidth(row)).toBeLessThanOrEqual(40);
     expect(row).toContain("…");
   });
 
@@ -184,5 +187,41 @@ describe("renderTaskPanel", () => {
       { width: 100, focused: false, theme: NOOP_THEME, now: 1000 },
     );
     expect(lines[0]).toContain("(2 running)");
+  });
+
+  it("CJK description never overruns visibleWidth budget (regression: multi task_agent crash)", () => {
+    // Pi TUI strict-checks rendered line visibleWidth and kills the process
+    // if it exceeds the terminal width. Local hand-rolled truncate(s, width)
+    // based on s.length silently overran for CJK (each char visibleWidth=2,
+    // but s.length=1) → 4 concurrent task_agent with Chinese descriptions
+    // crashed the Pi process. This test pins the invariant.
+    const tasks: TaskPanelEntry[] = [
+      makeEntry({
+        id: "t1",
+        type: "local_agent",
+        description:
+          "写总体架构文档+生图prompt 这是一个超长的中文描述用来触发 visibleWidth 计算",
+        status: "running",
+        startTime: 1000,
+      }),
+      makeEntry({
+        id: "t2",
+        type: "local_agent",
+        description: "起一个🚀长 emoji 中文 description 用来确认 wide-glyph 也被尊重",
+        status: "running",
+        startTime: 1001,
+      }),
+    ];
+    for (const width of [40, 60, 80, 100, 152]) {
+      const lines = renderTaskPanel(tasks, {
+        width,
+        focused: true,
+        theme: NOOP_THEME,
+        now: 2000,
+      });
+      for (const line of lines) {
+        expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      }
+    }
   });
 });

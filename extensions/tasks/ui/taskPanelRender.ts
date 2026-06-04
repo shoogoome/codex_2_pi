@@ -21,6 +21,8 @@
 // `now` is injectable so tests can pin elapsed deterministically;
 // production callers leave it undefined and we use Date.now().
 
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+
 export interface TaskPanelEntry {
   id: string;
   type: string;
@@ -47,10 +49,14 @@ const PLAIN_THEME: TaskPanelTheme = { fg: (_c, t) => t };
 const DEFAULT_WIDTH = 80;
 const TITLE = "Tasks";
 
+// `truncate` is a thin shim over Pi TUI's truncateToWidth so call sites
+// stay compact. Width math is delegated to truncateToWidth /
+// visibleWidth which correctly account for CJK / emoji / ANSI escapes;
+// the previous hand-rolled `s.length`-based version silently overran for
+// non-ASCII content and tripped Pi's strict per-line width guard
+// ("Rendered line N exceeds terminal width").
 function truncate(s: string, width: number): string {
-  if (s.length <= width) return s;
-  if (width <= 1) return "…";
-  return s.slice(0, width - 1) + "…";
+  return truncateToWidth(s, width, "…");
 }
 
 function formatTokens(n: number): string {
@@ -132,7 +138,7 @@ export function renderTaskPanel(
     // Compose plain text first to compute truncation budget without
     // ANSI sequences messing up width math (mirrors teammate widget).
     const plain = `${indent}${glyph}  ${typeBadge}  ${task.description}  ${elapsed}  ↓ ${tokens}`;
-    if (plain.length <= width) {
+    if (visibleWidth(plain) <= width) {
       const prefixSel = isSelected
         ? theme.fg("accent", "▶ ")
         : "  ";
@@ -148,7 +154,7 @@ export function renderTaskPanel(
     // + 2 spaces + typeBadge + 2 spaces + 2 spaces + elapsed + 2 spaces
     // + "↓ " + tokens.
     const fixed = `${indent}${glyph}  ${typeBadge}    ${elapsed}  ↓ ${tokens}`;
-    const budget = width - fixed.length;
+    const budget = width - visibleWidth(fixed);
     let descShown: string;
     if (budget <= 1) {
       // Not enough room for anything meaningful — fall back to a hard
@@ -158,7 +164,7 @@ export function renderTaskPanel(
     }
     descShown = truncate(task.description, budget);
     const final = `${indent}${glyph}  ${typeBadge}  ${descShown}  ${elapsed}  ↓ ${tokens}`;
-    lines.push(final.length > width ? truncate(final, width) : final);
+    lines.push(visibleWidth(final) > width ? truncate(final, width) : final);
   }
 
   return lines;
