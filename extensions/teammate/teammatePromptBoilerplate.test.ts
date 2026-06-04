@@ -19,9 +19,14 @@ describe("buildTeammateBoilerplate", () => {
     expect(b).toContain("alice");
   });
 
-  it("explains the missing write-class tools (bash / write / edit) intentionally", () => {
+  it("explains the cooperation contract via the 重要约定 section", () => {
     const b = buildTeammateBoilerplate(identity);
-    expect(b).toContain("没有 bash / write / edit");
+    expect(b).toContain("重要约定");
+  });
+
+  it("instructs the teammate to call request_plan_approval before mutating actions", () => {
+    const b = buildTeammateBoilerplate(identity);
+    expect(b).toContain("request_plan_approval");
   });
 
   it("references send_message as the cooperative escape hatch", () => {
@@ -31,11 +36,13 @@ describe("buildTeammateBoilerplate", () => {
     expect(b).toContain("\"leader\"");
   });
 
-  it("describes the read-only tool surface still available", () => {
+  it("acknowledges the teammate has full tool access (bash/write/edit) — no longer claims they're blocked", () => {
     const b = buildTeammateBoilerplate(identity);
-    expect(b).toContain("read");
-    expect(b).toContain("find");
-    expect(b).toContain("grep");
+    expect(b).toContain("bash");
+    expect(b).toContain("write");
+    expect(b).toContain("edit");
+    // Negative: must NOT contain the old "你没有 bash" boilerplate.
+    expect(b).not.toContain("没有 bash");
   });
 });
 

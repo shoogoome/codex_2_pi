@@ -11,16 +11,16 @@ describe("TEAMMATE_TOOLS_BLOCKLIST", () => {
     expect(TEAMMATE_TOOLS_BLOCKLIST.has("team_delete")).toBe(true);
   });
 
-  it("contains the D2 Path B write-class tools", () => {
-    expect(TEAMMATE_TOOLS_BLOCKLIST.has("bash")).toBe(true);
-    expect(TEAMMATE_TOOLS_BLOCKLIST.has("write")).toBe(true);
-    expect(TEAMMATE_TOOLS_BLOCKLIST.has("edit")).toBe(true);
-    expect(TEAMMATE_TOOLS_BLOCKLIST.has("task_bash")).toBe(true);
-    expect(TEAMMATE_TOOLS_BLOCKLIST.has("task_kill")).toBe(true);
+  it("does NOT block write-class tools (bash/write/edit/task_bash/task_kill) — teammate has full execution access, gated by request_plan_approval", () => {
+    expect(TEAMMATE_TOOLS_BLOCKLIST.has("bash")).toBe(false);
+    expect(TEAMMATE_TOOLS_BLOCKLIST.has("write")).toBe(false);
+    expect(TEAMMATE_TOOLS_BLOCKLIST.has("edit")).toBe(false);
+    expect(TEAMMATE_TOOLS_BLOCKLIST.has("task_bash")).toBe(false);
+    expect(TEAMMATE_TOOLS_BLOCKLIST.has("task_kill")).toBe(false);
   });
 
-  it("has exactly 8 entries — recursion guards (3) + write-class (5)", () => {
-    expect(TEAMMATE_TOOLS_BLOCKLIST.size).toBe(8);
+  it("has exactly 3 entries — only recursion guards remain", () => {
+    expect(TEAMMATE_TOOLS_BLOCKLIST.size).toBe(3);
   });
 });
 
@@ -29,7 +29,7 @@ describe("filterTeammateTools", () => {
     expect(filterTeammateTools([])).toEqual([]);
   });
 
-  it("removes every blocklisted tool from a fully-blocked input", () => {
+  it("removes only the recursion guards from a fully-input set", () => {
     const all = [
       "task_agent",
       "team_create",
@@ -40,10 +40,27 @@ describe("filterTeammateTools", () => {
       "task_bash",
       "task_kill",
     ];
-    expect(filterTeammateTools(all)).toEqual([]);
+    expect(filterTeammateTools(all)).toEqual([
+      "bash",
+      "write",
+      "edit",
+      "task_bash",
+      "task_kill",
+    ]);
   });
 
-  it("keeps non-blocked tools untouched and removes blocked ones", () => {
+  it("keeps write-class tools (bash/write/edit/task_bash/task_kill) untouched", () => {
+    const tools = ["bash", "write", "edit", "task_bash", "task_kill"];
+    expect(filterTeammateTools(tools)).toEqual([
+      "bash",
+      "write",
+      "edit",
+      "task_bash",
+      "task_kill",
+    ]);
+  });
+
+  it("keeps non-blocked tools untouched and removes recursion guards", () => {
     const mixed = [
       "read",
       "grep",
@@ -57,14 +74,16 @@ describe("filterTeammateTools", () => {
     expect(filterTeammateTools(mixed)).toEqual([
       "read",
       "grep",
+      "bash",
       "find",
       "send_message",
+      "edit",
       "ls",
     ]);
   });
 
   it("preserves input order of surviving tools", () => {
-    const ordered = ["alpha", "bash", "beta", "edit", "gamma"];
+    const ordered = ["alpha", "task_agent", "beta", "team_create", "gamma"];
     expect(filterTeammateTools(ordered)).toEqual(["alpha", "beta", "gamma"]);
   });
 });

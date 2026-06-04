@@ -124,15 +124,19 @@ describe("spawnTeammate — happy path", () => {
     await new Promise((r) => setImmediate(r));
     await new Promise((r) => setImmediate(r));
     // The teammate's initial prompt is the user-supplied prompt prepended
-    // with the D2/Path-B boilerplate (explains missing bash/write/edit and
-    // points to send_message{to:"leader"} as the cooperative escape).
+    // with the cooperation-contract boilerplate (full tool access, ask
+    // leader via request_plan_approval before mutating actions, send_message
+    // for progress / questions). Identity is interpolated.
     expect(promptFn).toHaveBeenCalledTimes(1);
     const sentPrompt = promptFn.mock.calls[0]![0] as string;
     expect(sentPrompt.endsWith("go")).toBe(true);
-    expect(sentPrompt).toContain("没有 bash / write / edit");
+    expect(sentPrompt).toContain("重要约定");
+    expect(sentPrompt).toContain("request_plan_approval");
     expect(sentPrompt).toContain("send_message");
     expect(sentPrompt).toContain("alice");
     expect(sentPrompt).toContain("research");
+    // Old "你没有 bash" framing must be gone — teammate now has full access.
+    expect(sentPrompt).not.toContain("没有 bash");
   });
 
   it("filters out task_agent / team_create / team_delete from teammate's tool pool", async () => {
@@ -153,7 +157,9 @@ describe("spawnTeammate — happy path", () => {
       "team_create",
       "team_delete",
       "send_message",
-      // D2 Module C / Path B — write-class tools must also be filtered.
+      // Write-class tools — post-D2 reversal: these MUST remain in
+      // teammate's pool (full execution access, gated by
+      // request_plan_approval). Only recursion guards are stripped.
       "bash",
       "write",
       "edit",
@@ -182,12 +188,14 @@ describe("spawnTeammate — happy path", () => {
     expect(args.tools).not.toContain("task_agent");
     expect(args.tools).not.toContain("team_create");
     expect(args.tools).not.toContain("team_delete");
-    // D2 Path B: write-class tools must be absent from teammate pool.
-    expect(args.tools).not.toContain("bash");
-    expect(args.tools).not.toContain("write");
-    expect(args.tools).not.toContain("edit");
-    expect(args.tools).not.toContain("task_bash");
-    expect(args.tools).not.toContain("task_kill");
+    // post-D2 reversal: write-class tools MUST remain in teammate pool;
+    // teammate is expected to call request_plan_approval before mutating
+    // actions (see teammatePromptBoilerplate).
+    expect(args.tools).toContain("bash");
+    expect(args.tools).toContain("write");
+    expect(args.tools).toContain("edit");
+    expect(args.tools).toContain("task_bash");
+    expect(args.tools).toContain("task_kill");
 
     // An identity-bound send_message must be injected as a customTool so the
     // teammate sub-session can resolve its sender without cross-realm ALS.

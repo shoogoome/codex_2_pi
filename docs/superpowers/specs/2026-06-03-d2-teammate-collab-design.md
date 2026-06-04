@@ -211,6 +211,8 @@ switch (protocol) {
 
 ## 4. Module C — permission sync(spike 后:Path B 降级)
 
+> **注:本节描述初版决策(spawn 时屏蔽 bash/write/edit/task_bash/task_kill,强 prompt 引导走 send_message)。最终实施按 default-open-with-plan-approval 模式,与 claudecode sub-agent 默认能写的行为对齐;详见 §10 末尾的 "post-D2 enhancement" 子节。**
+
 ### 4.1 spike 结论
 
 **两个并行 spike(0.1)反复确认:**
@@ -223,15 +225,18 @@ switch (protocol) {
 2. 覆盖 `session.agent.beforeToolCall` → 失去 SDK extension event 路由
 3. 注入 permission proxy 进 services → SDK 没暴露面
 
-### 4.2 Path B — 工具池剪裁 + prompt 引导 + leader 代理
+### 4.2 Path B — 工具池剪裁 + prompt 引导 + leader 代理(初版,后已反转)
+
+> **本小节为初版决策,实施一周后被 §10 末尾的 "post-D2 enhancement" 反转。**保留原文以便对照决策演化。
 
 不做 `permissionBridge.ts`。改为:
 
-**4.2.1 spawn 时收紧 teammate 的工具池**
+**4.2.1 spawn 时收紧 teammate 的工具池**(初版)
 
 `spawnTeammate.ts` 的 `TEAMMATE_TOOLS_BLOCKLIST` 扩展为同时屏蔽**写型工具**:
 
 ```ts
+// 初版决策(已被 post-D2 enhancement 反转 — 见 §10)
 const TEAMMATE_TOOLS_BLOCKLIST = new Set([
   // recursion guards (D1)
   "task_agent", "team_create", "team_delete",
@@ -242,15 +247,19 @@ const TEAMMATE_TOOLS_BLOCKLIST = new Set([
 
 teammate **保留**:read / find / grep / ls / send_message / request_plan_approval / team_task_*。这些是只读 + 通信工具,不会改文件系统/起进程。
 
-**4.2.2 强 prompt 引导**
+> **post-D2 反转:**实跑用户反馈过严,改为只屏蔽 D1 recursion guards(`task_agent` / `team_create` / `team_delete`),写型工具默认开放;通过 prompt 引导 LLM 在写动作前主动调 `request_plan_approval`。这与 claudecode sub-agent "默认能写,靠 sub-agent 自身约束" 的模型对齐。
 
-`teamCreate` / `task_agent` spawn teammate 的 prompt boilerplate 里加固一段:
+**4.2.2 强 prompt 引导**(初版告知"没有权限",后改为引导主动审批)
 
-> 你是 team `<name>` 的成员 `<agentName>`。**你没有 bash / write / edit 权限** —— 这是设计如此,不是配置错误。如果任务需要写文件、跑命令、改代码,请用 `send_message {to:"leader", message:"请帮我 ..."}` 让 leader 代为执行。`send_message` 是你与 leader 协作的唯一通道,leader 收到会立即唤醒并执行。
+初版 `teamCreate` / `task_agent` spawn teammate 的 prompt boilerplate 里加固一段:
+
+> 你是 team `<name>` 的成员 `<agentName>`。**你没有 bash / write / edit 权限** —— 这是设计如此,不是配置错误。如果任务需要写文件、跑命令、改代码,请用 `send_message {to:"leader", message:"请帮我 ..."}` 让 leader 代为执行。
+
+> **post-D2 反转后的新 boilerplate:**讲清楚"你与 leader 同 codebase 协作,有完整执行权限;改动用户文件 / 跑外部命令前先 `request_plan_approval`,只读探索不需要预审;阶段性进度 / 求助走 `send_message`"。不再声称"没有权限",因为那已经不是事实。
 
 这段固化在 spawn 时拼进 initialPrompt(可由 leader 在 `task_agent {prompt:...}` 时覆盖)。
 
-**4.2.3 不做的事**
+**4.2.3 不做的事**(初版与最终一致)
 
 - ❌ 不做 leader-side ui.confirm 弹框(没有 sub-session permission hook 可以触发它)
 - ❌ 不实现 `permission_request` / `permission_response` 协议消息(LLM 自然语言已足够)
@@ -430,5 +439,32 @@ D1.5 修复(spec §1.5)在 D2 spec 期间被识别为前置必修,实施过程�
 2. peer↔peer 通信路由仍走各自 sub-session mailbox(隔离),teammate 互发消息未真打通。leaderBridge 当前只单端 leader。
 3. teammate 的 LLM 思考 / 工具调用 trace 在 leader view 不显示(只显示 teammate 主动 send_message 的内容)。
 4. D.4 TeammateInputEditor 输入回显在 render 里手画(`> {buf}`),不走 base Editor 的光标 / 多行 / 中文输入支持。够用但不优雅。
+
+### Post-D2 enhancement: Module C 决策反转(2026-06-04)
+
+**背景**:初版 D2 Module C(spec §4.2)按"屏蔽写型工具 + 强 prompt 告知没权限 + 让 leader 代办"实施。一周实跑反馈下来发现这条路过严:
+
+- teammate 频繁需要跑短查询 bash / 读小文件 / 写临时文件,每个写动作都路由回 leader 让协作变重。
+- LLM 收到"你没有 bash"的 boilerplate 后,要么花一轮反复确认能力边界,要么在该自己干的时候硬要 leader 代办,反而把 leader 拖慢。
+- 与 claudecode sub-agent 的默认行为不一致 —— claudecode sub-agent 默认就有完整工具权限,我们没理由在 teammate 上做更严的默认。
+
+**新决策(default-open-with-plan-approval)**:
+
+| 旧 | 新 |
+|---|---|
+| `TEAMMATE_TOOLS_BLOCKLIST` 含 `bash / write / edit / task_bash / task_kill` | 只含 D1 recursion guards(`task_agent / team_create / team_delete`) |
+| Boilerplate "你没有 bash / write / edit 权限,请通过 send_message 让 leader 代办" | Boilerplate "你与 leader 同 codebase 协作,**有完整执行权限**;改动用户文件 / 跑外部命令 / 影响生产前先 `request_plan_approval`,只读探索不需要预审;进度 / 求助走 `send_message`" |
+
+**安全模型仍由两层守护**:
+
+1. **LLM 自身契约层**(boilerplate + `request_plan_approval` 工具):重要写动作前主动审批,这是 sub-agent 协作的常规姿态。
+2. **Pi 自身的 confirm 机制**:即使 sub-session 的 confirm 默认 reject 是后续 Pi 自身的决策,不在 teammate extension 责任内。
+
+实施 commit:本节同 commit。涉及 5 文件:
+- `extensions/teammate/teammateToolPool.ts`(BLOCKLIST 收缩)
+- `extensions/teammate/teammateToolPool.test.ts`(断言反转)
+- `extensions/teammate/teammatePromptBoilerplate.ts`(新 boilerplate)
+- `extensions/teammate/teammatePromptBoilerplate.test.ts`(断言更新)
+- `extensions/teammate/d2-integration.test.ts`(Module C 集成测反转)
 
 完。

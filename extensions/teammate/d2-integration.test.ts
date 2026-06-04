@@ -378,11 +378,11 @@ describe("D2 integration: Module B — plan_approval round-trip", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// Module C — spawnTeammate filters write-class tools + boilerplate
+// Module C — teammate tool-pool: only recursion guards filtered + boilerplate
 // ─────────────────────────────────────────────────────────────────────────
 
 describe("D2 integration: Module C — teammate tool-pool gating + boilerplate", () => {
-  it("spawnTeammate filters out bash/write/edit/task_bash/task_kill but keeps read/send_message/team_task_*", async () => {
+  it("spawnTeammate keeps bash/write/edit/task_bash/task_kill (full tool access) and only filters out recursion guards", async () => {
     const { pi } = buildLeaderPi([
       "read",
       "grep",
@@ -392,11 +392,11 @@ describe("D2 integration: Module C — teammate tool-pool gating + boilerplate",
       "team_task_update",
       "team_task_list",
       "team_task_get",
-      // Recursion guards
+      // Recursion guards — must be stripped
       "task_agent",
       "team_create",
       "team_delete",
-      // Write-class — must be stripped
+      // Write-class — must remain (teammate has full execution access)
       "bash",
       "write",
       "edit",
@@ -443,22 +443,22 @@ describe("D2 integration: Module C — teammate tool-pool gating + boilerplate",
 
     expect(createSessionMock).toHaveBeenCalledTimes(1);
     const args = createSessionMock.mock.calls[0]![0];
-    // Allowed
+    // Allowed (read-only + comms)
     expect(args.tools).toContain("read");
     expect(args.tools).toContain("grep");
     expect(args.tools).toContain("send_message");
     expect(args.tools).toContain("team_task_create");
     expect(args.tools).toContain("team_task_update");
-    // Recursion guards
+    // Write-class — teammate has full tool access; gated by request_plan_approval.
+    expect(args.tools).toContain("bash");
+    expect(args.tools).toContain("write");
+    expect(args.tools).toContain("edit");
+    expect(args.tools).toContain("task_bash");
+    expect(args.tools).toContain("task_kill");
+    // Recursion guards — must be stripped
     expect(args.tools).not.toContain("task_agent");
     expect(args.tools).not.toContain("team_create");
     expect(args.tools).not.toContain("team_delete");
-    // Write-class (D2 Path B)
-    expect(args.tools).not.toContain("bash");
-    expect(args.tools).not.toContain("write");
-    expect(args.tools).not.toContain("edit");
-    expect(args.tools).not.toContain("task_bash");
-    expect(args.tools).not.toContain("task_kill");
 
     // Identity-bound customTools must include both send_message and
     // request_plan_approval — the two channels by which the teammate talks
@@ -470,8 +470,8 @@ describe("D2 integration: Module C — teammate tool-pool gating + boilerplate",
     );
   });
 
-  it("spawnTeammate prepends boilerplate to initialPrompt so the LLM knows write-class are absent by design", async () => {
-    const { pi } = buildLeaderPi(["read", "send_message"]);
+  it("spawnTeammate prepends boilerplate to initialPrompt explaining the cooperation contract (request_plan_approval + send_message)", async () => {
+    const { pi } = buildLeaderPi(["read", "send_message", "bash", "write"]);
     const handle = attachHandle(pi);
     handle.teamStore.createTeam("research", undefined, 100);
 
@@ -509,10 +509,16 @@ describe("D2 integration: Module C — teammate tool-pool gating + boilerplate",
 
     expect(promptFn).toHaveBeenCalledTimes(1);
     const sent = promptFn.mock.calls[0]![0] as string;
-    expect(sent).toContain("没有 bash / write / edit");
+    // New cooperation-contract keywords:
+    expect(sent).toContain("重要约定");
+    expect(sent).toContain("request_plan_approval");
     expect(sent).toContain("send_message");
+    // Identity interpolation:
     expect(sent).toContain("alice");
     expect(sent).toContain("research");
+    // Old "你没有 bash" framing should be gone:
+    expect(sent).not.toContain("没有 bash");
+    // Original prompt preserved at the tail:
     expect(sent.endsWith("find auth code")).toBe(true);
   });
 });
