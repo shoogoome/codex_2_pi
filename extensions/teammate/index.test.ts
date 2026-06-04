@@ -798,6 +798,7 @@ describe("teammateExtension entrypoint", () => {
       };
     });
     const setEditorComponentMock = vi.fn();
+    const customMock = vi.fn(() => Promise.resolve());
     const pi: ExtensionAPI = {
       on: vi.fn((evt: string, h: (e: unknown, c: unknown) => unknown) => {
         handlers.set(evt, h);
@@ -816,6 +817,7 @@ describe("teammateExtension entrypoint", () => {
         setWidget: vi.fn(),
         onTerminalInput: onTerminalInputMock,
         setEditorComponent: setEditorComponentMock,
+        custom: customMock,
       },
       sessionManager: { getSessionId: () => "s1", getEntries: () => [] },
     };
@@ -913,5 +915,240 @@ describe("teammateExtension entrypoint", () => {
     expect(inputUnsub).toHaveBeenCalled();
     // Editor default restored on shutdown (last call should be undefined).
     expect(setEditorComponentMock).toHaveBeenCalledWith(undefined);
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // D2 enhancement (Path Y) — full-screen overlay view-swap tests
+  // ──────────────────────────────────────────────────────────────────────
+
+  function buildPathYHarness(): {
+    pi: ExtensionAPI;
+    handlers: Map<string, (event: unknown, ctx: unknown) => unknown>;
+    capturedHandlerRef: { current?: (data: string) => unknown };
+    customMock: ReturnType<typeof vi.fn>;
+    overlayHandle: { hide: ReturnType<typeof vi.fn> };
+    overlayDoneRef: { current?: (value: void) => void };
+    fakeCtx: Record<string, unknown>;
+    seedTeammate: (state: InProcessTeammateTaskState) => void;
+    taskStore: ReturnType<typeof createTaskStore>;
+  } {
+    const handlers = new Map<
+      string,
+      (event: unknown, ctx: unknown) => unknown
+    >();
+    const taskStore = createTaskStore();
+    const fakeTasksHandle = {
+      store: taskStore,
+      registerTaskType: vi.fn(),
+      getTaskType: () => undefined,
+      unregisterTaskType: vi.fn(),
+    };
+    const capturedHandlerRef: { current?: (data: string) => unknown } = {};
+    const onTerminalInputMock = vi.fn((h: (data: string) => unknown) => {
+      capturedHandlerRef.current = h;
+      return () => {
+        capturedHandlerRef.current = undefined;
+      };
+    });
+    const overlayHandle = { hide: vi.fn() };
+    const overlayDoneRef: { current?: (value: void) => void } = {};
+    // ctx.ui.custom mock: invokes the factory immediately so the extension
+    // can register its `done` callback (we capture it via overlayDoneRef);
+    // returns a Promise that resolves only when `done` is called.
+    const customMock = vi.fn(
+      (
+        factory: (
+          tui: unknown,
+          theme: unknown,
+          kb: unknown,
+          done: (v: void) => void,
+        ) => unknown,
+        opts?: { onHandle?: (h: unknown) => void },
+      ) => {
+        let resolveFn: (() => void) | undefined;
+        const promise = new Promise<void>((resolve) => {
+          resolveFn = () => resolve();
+        });
+        const realDone = (_v: void) => {
+          resolveFn?.();
+        };
+        overlayDoneRef.current = realDone;
+        factory({}, {}, {}, realDone);
+        opts?.onHandle?.(overlayHandle);
+        return promise;
+      },
+    );
+    const pi: ExtensionAPI = {
+      on: vi.fn((evt: string, h: (e: unknown, c: unknown) => unknown) => {
+        handlers.set(evt, h);
+      }),
+      events: { __pi_tasks_handle__: fakeTasksHandle },
+      registerTool: vi.fn(),
+      sendMessage: vi.fn(),
+      getActiveTools: vi.fn().mockReturnValue([]),
+    } as never;
+    teammateExtension(pi);
+    const fakeCtx: Record<string, unknown> = {
+      cwd: "/tmp",
+      hasUI: true,
+      ui: {
+        setWidget: vi.fn(),
+        onTerminalInput: onTerminalInputMock,
+        setEditorComponent: vi.fn(),
+        custom: customMock,
+      },
+      sessionManager: { getSessionId: () => "s1", getEntries: () => [] },
+    };
+    return {
+      pi,
+      handlers,
+      capturedHandlerRef,
+      customMock,
+      overlayHandle,
+      overlayDoneRef,
+      fakeCtx,
+      taskStore,
+      seedTeammate: (state: InProcessTeammateTaskState) => {
+        registerTask(state, taskStore);
+      },
+    };
+  }
+
+  function aliceState(): InProcessTeammateTaskState {
+    return {
+      ...createTaskStateBase({
+        id: "alice-t",
+        type: "in_process_teammate",
+        description: "alice@t1",
+        outputFile: "/tmp/alice.out",
+      }),
+      type: "in_process_teammate",
+      status: "running",
+      identity: {
+        agentId: "alice@t1",
+        agentName: "alice",
+        teamName: "t1",
+        agentType: "general-purpose",
+      },
+      prompt: "go",
+      sessionFile: "/tmp/alice.jsonl",
+      isIdle: false,
+      pendingMessages: [],
+      shutdownRequested: false,
+      shutdownAcknowledged: false,
+      toolCallCount: 0,
+      tokenCount: 0,
+      turnCount: 0,
+    };
+  }
+
+  it("Path Y: viewState entering teammate kind opens a full-screen overlay via ctx.ui.custom", async () => {
+    const h = buildPathYHarness();
+    await h.handlers.get("session_start")!({}, h.fakeCtx);
+    const handle = getTeammateHandle(h.pi);
+    handle.teamStore.createTeam("t1", undefined, 1);
+    h.seedTeammate(aliceState());
+    handle.teamStore.addMember("t1", "alice@t1");
+
+    h.capturedHandlerRef.current!("\x07"); // Ctrl+G focus
+    h.capturedHandlerRef.current!("\x1b[B"); // ↓ select alice
+    h.capturedHandlerRef.current!("\r"); // Enter — open teammate view
+
+    expect(h.customMock).toHaveBeenCalledTimes(1);
+    const opts = h.customMock.mock.calls[0]![1] as {
+      overlay?: boolean;
+      overlayOptions?: () => Record<string, unknown>;
+    };
+    expect(opts.overlay).toBe(true);
+    expect(typeof opts.overlayOptions).toBe("function");
+    const oo = opts.overlayOptions!();
+    expect(oo.width).toBe("100%");
+    expect(oo.maxHeight).toBe("100%");
+    expect(oo.anchor).toBe("top-left");
+    expect(oo.margin).toBe(0);
+
+    await h.handlers.get("session_shutdown")!({}, h.fakeCtx);
+  });
+
+  it("Path Y: leaving teammate view (Esc) calls done() on the overlay", async () => {
+    const h = buildPathYHarness();
+    await h.handlers.get("session_start")!({}, h.fakeCtx);
+    const handle = getTeammateHandle(h.pi);
+    handle.teamStore.createTeam("t1", undefined, 1);
+    h.seedTeammate(aliceState());
+    handle.teamStore.addMember("t1", "alice@t1");
+
+    h.capturedHandlerRef.current!("\x07");
+    h.capturedHandlerRef.current!("\x1b[B");
+    h.capturedHandlerRef.current!("\r");
+    expect(h.customMock).toHaveBeenCalledTimes(1);
+
+    // Esc — exit teammate view; extension should hide() the overlay handle.
+    h.capturedHandlerRef.current!("\x1b");
+    expect(h.overlayHandle.hide).toHaveBeenCalled();
+
+    await h.handlers.get("session_shutdown")!({}, h.fakeCtx);
+  });
+
+  it("Path Y: session_shutdown dismisses the overlay if still open", async () => {
+    const h = buildPathYHarness();
+    await h.handlers.get("session_start")!({}, h.fakeCtx);
+    const handle = getTeammateHandle(h.pi);
+    handle.teamStore.createTeam("t1", undefined, 1);
+    h.seedTeammate(aliceState());
+    handle.teamStore.addMember("t1", "alice@t1");
+
+    h.capturedHandlerRef.current!("\x07");
+    h.capturedHandlerRef.current!("\x1b[B");
+    h.capturedHandlerRef.current!("\r");
+    expect(h.customMock).toHaveBeenCalledTimes(1);
+
+    h.overlayHandle.hide.mockClear();
+    await h.handlers.get("session_shutdown")!({}, h.fakeCtx);
+    // shutdown drives unsubWidget → dismissOverlay → handle.hide()
+    expect(h.overlayHandle.hide).toHaveBeenCalled();
+  });
+
+  it("Path Y: viewState transitions to teammate kind for an unknown agentId — no overlay opened", async () => {
+    const h = buildPathYHarness();
+    await h.handlers.get("session_start")!({}, h.fakeCtx);
+    const handle = getTeammateHandle(h.pi);
+    // Two teammates; we will seed only alice but force the view onto a
+    // different (non-existent) agentId by selecting alice and then mutating
+    // the store — but a cleaner strategy: there is a brief window where
+    // selecting the only present teammate, killing it, and then pressing
+    // Enter would trip this path. Instead, exercise the guard directly: the
+    // unsubViewSwap subscriber checks for `target` after viewState change.
+    // We seed alice, select+enter (overlay opens), then exit, kill alice,
+    // and assert custom was called only once.
+    handle.teamStore.createTeam("t1", undefined, 1);
+    h.seedTeammate(aliceState());
+    handle.teamStore.addMember("t1", "alice@t1");
+
+    h.capturedHandlerRef.current!("\x07");
+    h.capturedHandlerRef.current!("\x1b[B");
+    h.capturedHandlerRef.current!("\r");
+    expect(h.customMock).toHaveBeenCalledTimes(1);
+
+    // Exit teammate view.
+    h.capturedHandlerRef.current!("\x1b");
+
+    // Now mutate state to a teammate kind referring to an agent that has
+    // never run. We simulate it by reaching into the runtime — easiest is
+    // to drop alice from the task store and try entering view again; the
+    // guard `if (target)` prevents a second custom() call.
+    updateTaskState<InProcessTeammateTaskState>("alice-t", h.taskStore, (t) => ({
+      ...t,
+      status: "completed",
+    }));
+    // Re-enter the cycle: re-select (still selected) + Enter.
+    h.capturedHandlerRef.current!("\x07");
+    h.capturedHandlerRef.current!("\x1b[B");
+    h.capturedHandlerRef.current!("\r");
+    // No new overlay opened — alice is no longer running, so the agentId
+    // lookup yields no isInProcessTeammateTask hit.
+    expect(h.customMock).toHaveBeenCalledTimes(1);
+
+    await h.handlers.get("session_shutdown")!({}, h.fakeCtx);
   });
 });

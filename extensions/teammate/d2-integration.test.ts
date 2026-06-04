@@ -561,6 +561,10 @@ describe("D2 integration: Module D — view-swap end-to-end", () => {
         setWidget: setWidgetMock,
         onTerminalInput: onTerminalInputMock,
         setEditorComponent: setEditorComponentMock,
+        // D2 Path Y enhancement: viewState entering teammate kind triggers
+        // ctx.ui.custom(factory, {overlay:true,...}). Stub returning a
+        // resolved Promise — the test does not exercise overlay lifecycle.
+        custom: vi.fn(() => Promise.resolve()),
       },
       sessionManager: { getSessionId: () => "leader-int", getEntries: () => [] },
     };

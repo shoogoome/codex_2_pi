@@ -1,4 +1,5 @@
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { installTeammateEventContextFilter } from "./eventEmit.js";
 import { attachTeammateHandle, type TeammateHandle } from "./handle.js";
 import { createTeamStore } from "./teamStore.js";
@@ -25,8 +26,9 @@ import { buildTeamWidget } from "./ui/teamWidget.js";
 import { createViewStateStore } from "./ui/viewState.js";
 import { registerTeammateKeybindings } from "./ui/keybindings.js";
 import { buildTeammateEditorFactory } from "./ui/teammateEditorFactory.js";
-import { isInProcessTeammateTask } from "./types.js";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import { buildTeammateOverlayComponent } from "./ui/teammateOverlayComponent.js";
+import { isInProcessTeammateTask, type InProcessTeammateTaskState } from "./types.js";
+import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import {
   registerLeaderChannel,
   unregisterLeaderChannel,
@@ -187,6 +189,33 @@ export default function teammateExtension(pi: ExtensionAPI): void {
       // D.4 — view-swap reactor: when viewState enters teammate mode, install
       // the teammate-input editor; when it leaves, restore the default. Also
       // request a re-render so the selectedAgentId highlight tracks viewState.
+      //
+      // D2 enhancement (Path Y): in addition to swapping the editor, open a
+      // full-screen ctx.ui.custom overlay that visually replaces the leader's
+      // main chat with a render of the teammate's session entries. The
+      // overlay handle + its `done` callback are kept in scope so we can
+      // dismiss it when viewState leaves teammate mode (or on
+      // session_shutdown).
+      let overlayHandle: OverlayHandle | undefined;
+      let overlayDone: ((value: void) => void) | undefined;
+      function dismissOverlay(): void {
+        if (overlayDone) {
+          try {
+            overlayDone();
+          } catch (e) {
+            logError(e, "teammate overlay done");
+          }
+          overlayDone = undefined;
+        }
+        if (overlayHandle) {
+          try {
+            overlayHandle.hide();
+          } catch (e) {
+            logError(e, "teammate overlay hide");
+          }
+          overlayHandle = undefined;
+        }
+      }
       const unsubViewSwap = viewState.subscribe((state) => {
         requestRender();
         if (state.kind === "teammate") {
@@ -205,9 +234,66 @@ export default function teammateExtension(pi: ExtensionAPI): void {
                 onExit: () => viewState.exitTeammateView(),
               }),
             );
+
+            // Open the full-screen overlay (only once per teammate-view entry).
+            // We capture the target task id rather than a reference so the
+            // header callback always reads the latest state from the store.
+            if (!overlayHandle && !overlayDone) {
+              const taskId = target.id;
+              const sessionFile = target.sessionFile;
+              const identity = target.identity;
+              const overlayPromise = ctx.ui.custom<void>(
+                (_tui, _theme, _kb, done) => {
+                  overlayDone = done;
+                  return buildTeammateOverlayComponent({
+                    identity,
+                    sessionFile,
+                    getTaskHeader: () => {
+                      const cur = tasksHandle.store.getTask(taskId) as
+                        | InProcessTeammateTaskState
+                        | undefined;
+                      if (cur && cur.type === "in_process_teammate") {
+                        return {
+                          taskCount: cur.turnCount,
+                          isIdle: cur.isIdle,
+                        };
+                      }
+                      return { taskCount: 0, isIdle: true };
+                    },
+                    openSession: (path) => SessionManager.open(path),
+                  });
+                },
+                {
+                  overlay: true,
+                  overlayOptions: () => ({
+                    width: "100%",
+                    maxHeight: "100%",
+                    anchor: "top-left",
+                    margin: 0,
+                  }),
+                  onHandle: (h) => {
+                    overlayHandle = h;
+                  },
+                },
+              );
+              if (overlayPromise && typeof overlayPromise.then === "function") {
+                overlayPromise.then(
+                  () => {
+                    overlayHandle = undefined;
+                    overlayDone = undefined;
+                  },
+                  (e: unknown) => {
+                    overlayHandle = undefined;
+                    overlayDone = undefined;
+                    logError(e, "teammate overlay promise");
+                  },
+                );
+              }
+            }
           }
         } else {
           ctx.ui.setEditorComponent(undefined);
+          dismissOverlay();
         }
       });
 
@@ -216,6 +302,8 @@ export default function teammateExtension(pi: ExtensionAPI): void {
         u2();
         unsubKeybindings();
         unsubViewSwap();
+        // D2 Path Y: dismiss the full-screen teammate overlay if still open.
+        dismissOverlay();
         // Tear down the widget itself so the host can drop our component.
         ctx.ui.setWidget(WIDGET_KEY, undefined);
         // Defensive: ensure the default editor is restored on shutdown.
