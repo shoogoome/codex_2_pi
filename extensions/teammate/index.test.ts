@@ -1099,6 +1099,18 @@ describe("teammateExtension entrypoint", () => {
     expect(oo.maxHeight).toBe("100%");
     expect(oo.anchor).toBe("top-left");
     expect(oo.margin).toBe(0);
+    // nonCapturing must be true — without it the overlay steals keyboard
+    // focus from the swapped editor and Esc / typed input is routed to
+    // the focus-less overlay component (which has no handleInput),
+    // making the editor appear unresponsive. See teammateOverlay nonCapturing
+    // commit for the user-visible regression.
+    expect(oo.nonCapturing).toBe(true);
+    // nonCapturing must be true — without it the overlay steals keyboard
+    // focus from the swapped editor and Esc / typed input is routed to
+    // the focus-less overlay component (which has no handleInput),
+    // making the editor appear unresponsive. See teammateOverlay nonCapturing
+    // commit for the user-visible regression.
+    expect(oo.nonCapturing).toBe(true);
 
     await h.handlers.get("session_shutdown")!({}, h.fakeCtx);
   });

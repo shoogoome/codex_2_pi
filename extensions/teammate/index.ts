@@ -299,6 +299,14 @@ export default function teammateExtension(pi: ExtensionAPI): void {
                     maxHeight: "100%",
                     anchor: "top-left",
                     margin: 0,
+                    // nonCapturing: the overlay must NOT steal keyboard
+                    // focus from the swapped editor — otherwise Pi's TUI
+                    // routes raw keys (including Esc) to the overlay
+                    // component (which has no handleInput) and the user
+                    // sees "Esc does nothing". With nonCapturing:true the
+                    // editor keeps focus and its onSubmit / onEscape hooks
+                    // fire normally.
+                    nonCapturing: true,
                   }),
                   onHandle: (h) => {
                     overlayHandle = h;
