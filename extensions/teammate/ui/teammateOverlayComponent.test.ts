@@ -100,4 +100,32 @@ describe("buildTeammateOverlayComponent", () => {
     expect(lines[0]).toContain("99");
     expect(lines[0]).toContain("idle");
   });
+
+  it("pads output to fallback height (=200) so the overlay covers the full viewport", () => {
+    const { deps } = buildDeps();
+    const c = buildTeammateOverlayComponent(deps);
+    const lines = c.render(80);
+    expect(lines.length).toBe(200);
+    // Trailing rows are empty strings (padding for full-screen coverage).
+    expect(lines[lines.length - 1]).toBe("");
+  });
+
+  it("honours an explicit defaultHeight in deps", () => {
+    const { deps } = buildDeps({ defaultHeight: 12 });
+    const c = buildTeammateOverlayComponent(deps);
+    const lines = c.render(80);
+    expect(lines.length).toBe(12);
+  });
+
+  it("getHeight callback takes precedence over defaultHeight, called every render", () => {
+    const getHeight = vi
+      .fn<() => number>()
+      .mockReturnValueOnce(8)
+      .mockReturnValueOnce(15);
+    const { deps } = buildDeps({ defaultHeight: 100, getHeight });
+    const c = buildTeammateOverlayComponent(deps);
+    expect(c.render(80).length).toBe(8);
+    expect(c.render(80).length).toBe(15);
+    expect(getHeight).toHaveBeenCalledTimes(2);
+  });
 });

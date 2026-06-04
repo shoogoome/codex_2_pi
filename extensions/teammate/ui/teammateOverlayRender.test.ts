@@ -170,12 +170,14 @@ describe("renderTeammateOverlay", () => {
     }
     const height = 6;
     const lines = renderTeammateOverlay(HEADER, entries, 80, height);
-    // header + separator + (height-2) body rows = height total
-    expect(lines.length).toBeLessThanOrEqual(height);
+    // header + separator + (height-2) body rows = height total (exact)
+    expect(lines.length).toBe(height);
     // newest message should be present (last in entries)
     expect(lines.some((l) => l.includes("msg49"))).toBe(true);
     // earliest should be dropped
     expect(lines.some((l) => l.includes("msg0"))).toBe(false);
+    // last row should carry real content, not empty padding
+    expect(lines[lines.length - 1]).not.toBe("");
   });
 
   it("wraps a single line wider than width-2", () => {
@@ -218,5 +220,31 @@ describe("renderTeammateOverlay", () => {
       24,
     );
     expect(lines.some((l) => l.includes("[TOOL_RESULT]"))).toBe(true);
+  });
+
+  it("pads short content with empty rows so output length === height", () => {
+    const lines = renderTeammateOverlay(
+      HEADER,
+      [userEntry("a"), assistantEntry("b")],
+      80,
+      20,
+    );
+    expect(lines.length).toBe(20);
+    // header + separator + 2 body lines = 4 non-empty rows; rest must be "".
+    expect(lines.slice(4).every((l) => l === "")).toBe(true);
+  });
+
+  it("pads with empty rows when entries is empty", () => {
+    const lines = renderTeammateOverlay(HEADER, [], 80, 10);
+    expect(lines.length).toBe(10);
+    expect(lines[0]).toContain("alice@team1");
+    expect(lines[1]).toMatch(/^─+$/);
+    expect(lines[2]).toContain("(no messages yet)");
+    expect(lines.slice(3).every((l) => l === "")).toBe(true);
+  });
+
+  it("returns an empty array when height is 0", () => {
+    const lines = renderTeammateOverlay(HEADER, [userEntry("hi")], 80, 0);
+    expect(lines).toEqual([]);
   });
 });
