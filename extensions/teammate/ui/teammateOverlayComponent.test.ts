@@ -128,4 +128,18 @@ describe("buildTeammateOverlayComponent", () => {
     expect(c.render(80).length).toBe(15);
     expect(getHeight).toHaveBeenCalledTimes(2);
   });
+
+  it("forwards theme.fg into renderTeammateOverlay so output carries colour tokens", () => {
+    const { deps } = buildDeps({
+      theme: {
+        fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+      },
+    });
+    const c = buildTeammateOverlayComponent(deps);
+    const lines = c.render(80);
+    // Header label is painted accent.
+    expect(lines[0]).toContain("<accent>▶ teammate:</accent>");
+    // Body row [USER] uses accent colour.
+    expect(lines.some((l) => l.includes("<accent>[USER]</accent>"))).toBe(true);
+  });
 });

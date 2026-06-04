@@ -25,6 +25,7 @@ import type { TeammateIdentity } from "../types.js";
 import {
   renderTeammateOverlay,
   type TeammateOverlayHeader,
+  type TeammateOverlayRenderTheme,
 } from "./teammateOverlayRender.js";
 
 /** Minimal SessionManager surface this component actually uses. */
@@ -60,6 +61,14 @@ export interface TeammateOverlayDeps {
    * for a tight fit.
    */
   getHeight?: () => number;
+  /**
+   * Optional theme handle for ANSI colouring. Forwarded as-is into
+   * `renderTeammateOverlay` so the rendered string[] carries semantic
+   * colour codes (accent / success / muted / dim / text). Production
+   * callers pass the Pi `Theme` from the `ctx.ui.custom` factory; tests
+   * either omit it or pass a mock. Default: plain pass-through.
+   */
+  theme?: TeammateOverlayRenderTheme;
 }
 
 export interface TeammateOverlayComponent extends Component {
@@ -89,7 +98,9 @@ export function buildTeammateOverlayComponent(
         isIdle: headerExtra.isIdle,
         exitHint: "Esc to exit teammate view",
       };
-      return renderTeammateOverlay(header, entries, width, h);
+      return renderTeammateOverlay(header, entries, width, h, {
+        theme: deps.theme,
+      });
     },
     invalidate(): void {
       // No internal cached render state — render() reads fresh each time.

@@ -7,9 +7,9 @@
 //     changes; live updates are driven by the host calling
 //     `tui.requestRender()` whenever stores notify.
 //
-// Visual style (plain text, no ANSI):
-//   ● team / panel  ↑↓ move · Enter open · Esc back · Ctrl+G blur     <- focused
-//   ○ team / panel  Ctrl+G to focus                                    <- blurred
+// Visual style (theme.fg-coloured; plain when no theme passed):
+//   ● team / panel  ↑↓ move · Enter open · Esc back · Ctrl+G blur     <- focused (accent)
+//   ○ team / panel  Ctrl+G to focus                                    <- blurred (dim)
 //   ▶ {teamName} ({N} members)
 //     ◌ {agent}    idle              [2 turns, 850 token]
 //     ● {agent}    → bash             [5 turns, 2.4k token]
@@ -30,6 +30,17 @@ import {
 } from "../types.js";
 import { isTerminalTaskStatus } from "../../tasks/Task.js";
 
+/**
+ * Minimal theme surface — only `fg(color, text)` is consumed by the renderer.
+ * Mirrors the contract used by `panel/panel-render.ts` so both widgets share
+ * one colour vocabulary (accent / muted / text / success / dim / error).
+ */
+export interface TeamWidgetRenderTheme {
+  fg(color: string, text: string): string;
+}
+
+const PLAIN_THEME: TeamWidgetRenderTheme = { fg: (_c, t) => t };
+
 export interface RenderTeamWidgetOptions {
   /** Max line width (default 80). Lines longer than this are truncated with `…`. */
   width?: number;
@@ -41,6 +52,10 @@ export interface RenderTeamWidgetOptions {
    *  header line ("● focused …" / "○ blur …") is prepended; when undefined
    *  the widget renders without any header (legacy behaviour). */
   focused?: boolean;
+  /** Optional theme handle for ANSI colouring. Default plain pass-through
+   *  preserves existing tests/callers. Production callers pass the Pi
+   *  `Theme` (which exposes `theme.fg(name, text)`). */
+  theme?: TeamWidgetRenderTheme;
 }
 
 const DEFAULT_WIDTH = 80;
@@ -70,15 +85,30 @@ export function renderTeamWidget(
 ): string[] {
   if (teams.length === 0) return [];
   const width = options.width ?? DEFAULT_WIDTH;
+  const theme = options.theme ?? PLAIN_THEME;
   const lines: string[] = [];
 
   // Optional focus header (only when focused option is explicitly passed).
+  // Truncate the plain-text composition first so ANSI escape sequences
+  // emitted by `theme.fg(...)` never count toward the width budget. When
+  // truncation kicks in we fall back to painting the whole truncated string
+  // with a single colour — colouring per-segment of an already-clipped
+  // string risks slicing through an escape boundary.
   if (options.focused !== undefined) {
     const icon = options.focused ? "●" : "○";
     const hint = options.focused
       ? "↑↓ move · Enter open · Esc back · k kill · Ctrl+G blur"
       : "Ctrl+G to focus";
-    lines.push(truncate(`${icon} ${TITLE}  ${hint}`, width));
+    const headerColor = options.focused ? "accent" : "dim";
+    const plain = `${icon} ${TITLE}  ${hint}`;
+    const clipped = truncate(plain, width);
+    if (clipped === plain) {
+      lines.push(
+        `${theme.fg(headerColor, icon)} ${theme.fg(headerColor, TITLE)}  ${theme.fg("dim", hint)}`,
+      );
+    } else {
+      lines.push(theme.fg(headerColor, clipped));
+    }
   }
 
   // Index teammates by agentId for O(1) lookup per member.
@@ -91,12 +121,19 @@ export function renderTeamWidget(
     if (idx > 0) lines.push("");
 
     const memberCount = team.memberAgentIds.length;
-    lines.push(
-      truncate(
-        `▶ ${team.teamName} (${memberCount} ${memberCount === 1 ? "member" : "members"})`,
-        width,
-      ),
-    );
+    const memberSuffix = `(${memberCount} ${memberCount === 1 ? "member" : "members"})`;
+    const teamPlain = `▶ ${team.teamName} ${memberSuffix}`;
+    const teamClipped = truncate(teamPlain, width);
+    // Team-name header: ▶ uses accent (or dim when blurred), name uses
+    // default text colour, member count is dim.
+    const teamHeaderColor = options.focused === false ? "dim" : "accent";
+    if (teamClipped === teamPlain) {
+      lines.push(
+        `${theme.fg(teamHeaderColor, "▶")} ${theme.fg("text", team.teamName)} ${theme.fg("dim", memberSuffix)}`,
+      );
+    } else {
+      lines.push(theme.fg(teamHeaderColor, teamClipped));
+    }
 
     for (const agentId of team.memberAgentIds) {
       const task = byAgentId.get(agentId);
@@ -104,31 +141,65 @@ export function renderTeamWidget(
       const agentName =
         task?.identity.agentName ?? agentId.split("@")[0] ?? agentId;
 
-      const indent = options.selectedAgentId === agentId ? "▶ " : "  ";
+      const isSelected = options.selectedAgentId === agentId;
+      const indent = isSelected ? "▶ " : "  ";
 
       if (!task) {
-        lines.push(truncate(`${indent}✗ ${agentName}    missing`, width));
+        const plain = `${indent}✗ ${agentName}    missing`;
+        const clipped = truncate(plain, width);
+        if (clipped === plain) {
+          const prefix = isSelected ? theme.fg("accent", "▶ ") : "  ";
+          const nameColor = isSelected ? "accent" : "text";
+          lines.push(
+            `${prefix}${theme.fg("error", "✗")} ${theme.fg(nameColor, agentName)}    ${theme.fg("error", "missing")}`,
+          );
+        } else {
+          lines.push(clipped);
+        }
         continue;
       }
 
       if (isTerminalTaskStatus(task.status)) {
-        lines.push(truncate(`${indent}✗ ${agentName}    ${task.status}`, width));
+        const plain = `${indent}✗ ${agentName}    ${task.status}`;
+        const clipped = truncate(plain, width);
+        if (clipped === plain) {
+          const prefix = isSelected ? theme.fg("accent", "▶ ") : "  ";
+          const nameColor = isSelected ? "accent" : "text";
+          lines.push(
+            `${prefix}${theme.fg("error", "✗")} ${theme.fg(nameColor, agentName)}    ${theme.fg("error", task.status)}`,
+          );
+        } else {
+          lines.push(clipped);
+        }
         continue;
       }
 
       const glyph = task.isIdle ? "◌" : "●";
+      const glyphColor = task.isIdle ? "muted" : "success";
       let state: string;
+      let stateColor: string;
       if (task.isIdle) {
         state = "idle";
+        stateColor = "muted";
       } else if (task.lastTool) {
         state = `→ ${task.lastTool}`;
+        stateColor = "accent";
       } else {
         state = "working";
+        stateColor = "success";
       }
       const stats = `[${formatTurns(task.turnCount)}, ${formatTokens(task.tokenCount)}]`;
-      lines.push(
-        truncate(`${indent}${glyph} ${agentName}    ${state}    ${stats}`, width),
-      );
+      const plain = `${indent}${glyph} ${agentName}    ${state}    ${stats}`;
+      const clipped = truncate(plain, width);
+      if (clipped === plain) {
+        const prefix = isSelected ? theme.fg("accent", "▶ ") : "  ";
+        const nameColor = isSelected ? "accent" : "text";
+        lines.push(
+          `${prefix}${theme.fg(glyphColor, glyph)} ${theme.fg(nameColor, agentName)}    ${theme.fg(stateColor, state)}    ${theme.fg("dim", stats)}`,
+        );
+      } else {
+        lines.push(clipped);
+      }
     }
   });
 
@@ -150,12 +221,27 @@ export interface TeamWidgetDeps {
  * surface live updates, host code subscribes to teamStore / taskStore /
  * viewState and calls `tui.requestRender()` on change.
  *
- * `theme` is intentionally unused for now — the existing renderer is plain
- * text without ANSI so we don't need theme-aware coloring. Once we adopt
- * `theme.fg(...)` we'll wire it in via PanelRenderTheme.
+ * `theme` is the Pi `Theme` passed by `setWidget`. We forward it to
+ * `renderTeamWidget` so the resulting string[] carries ANSI colour codes
+ * matching the Pi colour scheme (accent / muted / dim / success / error /
+ * text). Tests that don't care about colour omit the theme argument and
+ * fall back to the no-op plain theme.
  */
 export function buildTeamWidget(deps: TeamWidgetDeps) {
-  return (_tui: TUI, _theme: Theme): Component & { dispose?(): void } => {
+  return (_tui: TUI, theme: Theme): Component & { dispose?(): void } => {
+    // Pi Theme exposes more methods than we need; narrow to the minimal
+    // `fg`-only surface so renderTeamWidget stays decoupled from Pi types.
+    // Some tests pass an empty stub for theme — guard against a missing
+    // `fg` member by falling back to a no-op pass-through so render output
+    // stays plain-text instead of throwing on undefined.
+    const themeFg = (theme as unknown as Partial<TeamWidgetRenderTheme>).fg;
+    const renderTheme: TeamWidgetRenderTheme =
+      typeof themeFg === "function"
+        ? {
+            fg: (color: string, text: string) =>
+              themeFg.call(theme, color, text),
+          }
+        : { fg: (_c, t) => t };
     return {
       render(width: number): string[] {
         const teams = deps.teamStore.list();
@@ -174,6 +260,7 @@ export function buildTeamWidget(deps: TeamWidgetDeps) {
           width,
           selectedAgentId,
           focused,
+          theme: renderTheme,
         });
       },
       invalidate(): void {

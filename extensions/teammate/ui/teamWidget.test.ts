@@ -287,6 +287,117 @@ describe("renderTeamWidget", () => {
     expect(lines[0]).not.toContain("○");
     expect(lines[0]).not.toContain("Ctrl+G");
   });
+
+  // ── theme colour application ──
+  // Mock theme wraps each segment with `[<color>]<text>[/<color>]` so we
+  // can assert exactly which colour token painted which segment without
+  // depending on real ANSI escape codes.
+  const mockTheme = {
+    fg: (color: string, text: string) => `[${color}]${text}[/${color}]`,
+  };
+
+  it("theme: focused header paints icon/title accent and hint dim", () => {
+    const team: TeamState = {
+      teamName: "research",
+      createdAt: 1,
+      memberAgentIds: ["alice@research"],
+    };
+    const tasks = [buildTask("alice", "research")];
+    const lines = renderTeamWidget([team], tasks, {
+      focused: true,
+      theme: mockTheme,
+    });
+    expect(lines[0]).toContain("[accent]●[/accent]");
+    expect(lines[0]).toContain("[accent]Team[/accent]");
+    expect(lines[0]).toMatch(/\[dim\][^[]*Ctrl\+G[^[]*\[\/dim\]|\[dim\][^[]*↑↓[^[]*\[\/dim\]/);
+  });
+
+  it("theme: blurred header paints icon/title dim", () => {
+    const team: TeamState = {
+      teamName: "research",
+      createdAt: 1,
+      memberAgentIds: ["alice@research"],
+    };
+    const tasks = [buildTask("alice", "research")];
+    const lines = renderTeamWidget([team], tasks, {
+      focused: false,
+      theme: mockTheme,
+    });
+    expect(lines[0]).toContain("[dim]○[/dim]");
+    expect(lines[0]).toContain("[dim]Team[/dim]");
+  });
+
+  it("theme: idle teammate paints ◌ muted, name text, idle muted, stats dim", () => {
+    const team: TeamState = {
+      teamName: "research",
+      createdAt: 1,
+      memberAgentIds: ["alice@research"],
+    };
+    const tasks = [
+      buildTask("alice", "research", { isIdle: true, turnCount: 2, tokenCount: 850 }),
+    ];
+    const lines = renderTeamWidget([team], tasks, { theme: mockTheme });
+    // Team-name row: ▶ accent + name text + member-count dim.
+    expect(lines[0]).toContain("[accent]▶[/accent]");
+    expect(lines[0]).toContain("[text]research[/text]");
+    expect(lines[0]).toContain("[dim](1 member)[/dim]");
+    // Member row.
+    expect(lines[1]).toContain("[muted]◌[/muted]");
+    expect(lines[1]).toContain("[text]alice[/text]");
+    expect(lines[1]).toContain("[muted]idle[/muted]");
+    expect(lines[1]).toContain("[dim][2 turns, 850 tokens][/dim]");
+  });
+
+  it("theme: active teammate with lastTool paints ● success, → bash accent", () => {
+    const team: TeamState = {
+      teamName: "engineering",
+      createdAt: 1,
+      memberAgentIds: ["coder@engineering"],
+    };
+    const tasks = [
+      buildTask("coder", "engineering", {
+        isIdle: false,
+        lastTool: "bash",
+        turnCount: 5,
+        tokenCount: 2400,
+      }),
+    ];
+    const lines = renderTeamWidget([team], tasks, { theme: mockTheme });
+    expect(lines[1]).toContain("[success]●[/success]");
+    expect(lines[1]).toContain("[accent]→ bash[/accent]");
+  });
+
+  it("theme: terminal/missing teammate paints ✗ error and status error", () => {
+    const team: TeamState = {
+      teamName: "broken",
+      createdAt: 1,
+      memberAgentIds: ["ghost@broken", "dead@broken"],
+    };
+    const tasks = [buildTask("dead", "broken", { status: "killed" })];
+    const lines = renderTeamWidget([team], tasks, { theme: mockTheme });
+    // ghost is missing, dead is terminal.
+    const missingLine = lines.find((l) => l.includes("ghost"))!;
+    const deadLine = lines.find((l) => l.includes("dead"))!;
+    expect(missingLine).toContain("[error]✗[/error]");
+    expect(missingLine).toContain("[error]missing[/error]");
+    expect(deadLine).toContain("[error]✗[/error]");
+    expect(deadLine).toContain("[error]killed[/error]");
+  });
+
+  it("theme: selected row paints ▶ prefix and agent name with accent", () => {
+    const team: TeamState = {
+      teamName: "research",
+      createdAt: 1,
+      memberAgentIds: ["alice@research"],
+    };
+    const tasks = [buildTask("alice", "research", { isIdle: true })];
+    const lines = renderTeamWidget([team], tasks, {
+      selectedAgentId: "alice@research",
+      theme: mockTheme,
+    });
+    expect(lines[1]).toContain("[accent]▶ [/accent]");
+    expect(lines[1]).toContain("[accent]alice[/accent]");
+  });
 });
 
 // ──────────────────────────────────────────────────────────────────────
@@ -418,5 +529,48 @@ describe("buildTeamWidget (factory)", () => {
     const component = factory(fakeTui, fakeTheme);
     const lines = component.render(80);
     expect(lines[0]).toContain("○");
+  });
+
+  it("forwards a real theme.fg into renderTeamWidget so output carries colour tokens", () => {
+    const deps = makeDeps();
+    deps.teamStore.createTeam("research", undefined, 1);
+    const aliceState: InProcessTeammateTaskState = {
+      ...createTaskStateBase({
+        id: "alice-t",
+        type: "in_process_teammate",
+        description: "alice@research",
+        outputFile: "/tmp/alice.out",
+      }),
+      type: "in_process_teammate",
+      status: "running",
+      identity: {
+        agentId: "alice@research",
+        agentName: "alice",
+        teamName: "research",
+        agentType: "general-purpose",
+      },
+      prompt: "go",
+      sessionFile: "/tmp/alice.jsonl",
+      isIdle: true,
+      pendingMessages: [],
+      shutdownRequested: false,
+      shutdownAcknowledged: false,
+      toolCallCount: 0,
+      tokenCount: 0,
+      turnCount: 0,
+    };
+    registerTask(aliceState, deps.taskStore);
+    deps.teamStore.addMember("research", "alice@research");
+
+    const themeWithFg = {
+      fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+    } as unknown as Theme;
+    const factory = buildTeamWidget(deps);
+    const component = factory(fakeTui, themeWithFg);
+    const lines = component.render(80);
+    // Header should be coloured (blurred default → dim).
+    expect(lines.some((l) => l.includes("<dim>"))).toBe(true);
+    // Idle teammate row should carry muted + dim tokens.
+    expect(lines.some((l) => l.includes("<muted>◌</muted>"))).toBe(true);
   });
 });

@@ -247,4 +247,74 @@ describe("renderTeammateOverlay", () => {
     const lines = renderTeammateOverlay(HEADER, [userEntry("hi")], 80, 0);
     expect(lines).toEqual([]);
   });
+
+  // ── theme colour application ──
+  // Mock theme wraps each segment with `<color>text</color>` so we can
+  // assert exactly which colour token painted which segment without
+  // depending on real ANSI escape codes.
+  const mockTheme = {
+    fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+  };
+
+  it("theme: header carries accent label, text agentId, success stats, dim hint", () => {
+    const lines = renderTeammateOverlay(HEADER, [], 80, 24, {
+      theme: mockTheme,
+    });
+    expect(lines[0]).toContain("<accent>▶ teammate:</accent>");
+    expect(lines[0]).toContain("<text>alice@team1</text>");
+    expect(lines[0]).toContain("<success>[3 turns, active]</success>");
+    expect(lines[0]).toContain("<dim>Esc to exit teammate view</dim>");
+  });
+
+  it("theme: idle header paints stats with muted colour", () => {
+    const lines = renderTeammateOverlay(
+      { ...HEADER, isIdle: true },
+      [],
+      80,
+      24,
+      { theme: mockTheme },
+    );
+    expect(lines[0]).toContain("<muted>[3 turns, idle]</muted>");
+  });
+
+  it("theme: separator is dim-coloured", () => {
+    const lines = renderTeammateOverlay(HEADER, [], 20, 24, {
+      theme: mockTheme,
+    });
+    expect(lines[1]).toMatch(/^<dim>─+<\/dim>$/);
+  });
+
+  it("theme: body role prefixes ([USER]/[ASSISTANT]/[TOOL ...]/[TOOL_RESULT]) carry semantic colours", () => {
+    const lines = renderTeammateOverlay(
+      HEADER,
+      [
+        userEntry("hi"),
+        assistantEntry("hello"),
+        toolUseEntry("bash", { cmd: "ls" }),
+        toolResultEntry("done"),
+      ],
+      80,
+      24,
+      { theme: mockTheme },
+    );
+    expect(lines.some((l) => l.includes("<accent>[USER]</accent>"))).toBe(true);
+    expect(
+      lines.some((l) => l.includes("<success>[ASSISTANT]</success>")),
+    ).toBe(true);
+    expect(lines.some((l) => l.includes("<text>[TOOL bash]</text>"))).toBe(
+      true,
+    );
+    expect(
+      lines.some((l) => l.includes("<muted>[TOOL_RESULT]</muted>")),
+    ).toBe(true);
+  });
+
+  it('theme: "(no messages yet)" placeholder is dimmed', () => {
+    const lines = renderTeammateOverlay(HEADER, [], 80, 24, {
+      theme: mockTheme,
+    });
+    expect(
+      lines.some((l) => l.includes("<dim>(no messages yet)</dim>")),
+    ).toBe(true);
+  });
 });

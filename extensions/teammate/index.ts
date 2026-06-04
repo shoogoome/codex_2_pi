@@ -243,8 +243,25 @@ export default function teammateExtension(pi: ExtensionAPI): void {
               const sessionFile = target.sessionFile;
               const identity = target.identity;
               const overlayPromise = ctx.ui.custom<void>(
-                (_tui, _theme, _kb, done) => {
+                (_tui, theme, _kb, done) => {
                   overlayDone = done;
+                  // Narrow Pi `Theme` to the minimal `fg`-only surface
+                  // expected by renderTeammateOverlay so the overlay
+                  // adopts the same accent/dim/success/muted vocabulary
+                  // as the panel widget. Tests pass an empty stub for
+                  // theme — guard against a missing `fg` member.
+                  const themeFg = (
+                    theme as unknown as {
+                      fg?: (color: string, text: string) => string;
+                    }
+                  ).fg;
+                  const overlayTheme =
+                    typeof themeFg === "function"
+                      ? {
+                          fg: (color: string, text: string) =>
+                            themeFg.call(theme, color, text),
+                        }
+                      : undefined;
                   return buildTeammateOverlayComponent({
                     identity,
                     sessionFile,
@@ -261,6 +278,7 @@ export default function teammateExtension(pi: ExtensionAPI): void {
                       return { taskCount: 0, isIdle: true };
                     },
                     openSession: (path) => SessionManager.open(path),
+                    theme: overlayTheme,
                   });
                 },
                 {
