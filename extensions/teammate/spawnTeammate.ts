@@ -41,6 +41,7 @@ import { postLeaderNotification } from "./leaderNotification.js";
 import { startTeammateLoop } from "./teammateLoop.js";
 import { filterTeammateTools } from "./teammateToolPool.js";
 import { prependBoilerplate } from "./teammatePromptBoilerplate.js";
+import { subscribeTeammateProgress } from "./sessionProgress.js";
 import { buildTeammateSendMessageTool } from "./tools/teammateSendMessage.js";
 import {
   buildRequestPlanApprovalTool,
@@ -157,12 +158,19 @@ export async function spawnTeammate(
     throw new Error("SessionManager.create did not produce a session file");
   }
 
-  // 3. Tool pool — all active tools minus self-spawning ones (recursion
-  //    guard, D1) and write-class tools (D2 Module C / Path B). See
-  //    teammateToolPool.ts for the full blocklist.
+  // 3. Tool pool — all *registered* tools (not just the leader's currently
+  //    active set) minus self-spawning ones (recursion guard, D1). We use
+  //    `getAllTools()` here because the leader's localshell extension hides
+  //    Pi's built-in `bash` from the active set (replacing it with task_bash);
+  //    if we used `getActiveTools()` the teammate would inherit that hidden
+  //    state and end up without `bash`, which then makes the LLM hallucinate
+  //    an `mcp` tool to find it. claudecode sub-agents always have plain
+  //    `bash`, so we mirror that. See teammateToolPool.ts for the full
+  //    blocklist.
   const services = await _sdk.createAgentSessionServices({ cwd: opts.cwd });
-  const allTools = pi.getActiveTools();
-  const tools = filterTeammateTools(allTools);
+  const allToolInfos = pi.getAllTools();
+  const allToolNames = allToolInfos.map((t) => t.name);
+  const tools = filterTeammateTools(allToolNames);
 
   // Identity is needed BEFORE session creation so we can inject an
   // identity-bound send_message as a customTool. The generic extension-
@@ -271,6 +279,20 @@ export async function spawnTeammate(
     abortController,
   }));
 
+  // 6.5 Subscribe to session events so the panel widget gets live
+  //     tokenCount / toolCallCount / lastTool updates. The teammateLoop
+  //     only fires onTurnStart / onIdle, which is enough for turnCount,
+  //     but the SDK's session.subscribe stream carries `message_end`
+  //     (with assistant `usage.totalTokens`) and `tool_execution_start`
+  //     (with `toolName`) — exactly what the widget surfaces. Without
+  //     this listener tokenCount / toolCallCount stay 0 forever even
+  //     though the teammate is clearly working.
+  const unsubscribeSession = subscribeTeammateProgress(
+    session,
+    taskId,
+    taskStore,
+  );
+
   // 7. start the teammateLoop. Prepend the D2/Path-B boilerplate so the
   //    teammate LLM understands why bash/write/edit are absent and uses
   //    send_message{to:"leader"} to request them. See spec §4.2.
@@ -283,12 +305,15 @@ export async function spawnTeammate(
     mailbox: handle.mailbox,
     pendingApprovals,
     abortSignal: abortController.signal,
-    onTurnStart: (cause) => {
+    onTurnStart: () => {
+      // Every turn counts — including the initial one (boilerplate +
+      // initialPrompt). Previously we skipped `cause.kind === "initial"`,
+      // which left turnCount stuck at 0 for any teammate that runs to
+      // completion in a single LLM cycle.
       updateTaskState<InProcessTeammateTaskState>(taskId, taskStore, (t) => ({
         ...t,
         isIdle: false,
-        turnCount:
-          cause.kind === "initial" ? t.turnCount : t.turnCount + 1,
+        turnCount: t.turnCount + 1,
       }));
     },
     onIdle: () => {
@@ -330,6 +355,11 @@ export async function spawnTeammate(
       }));
     },
     onTerminal: (reason) => {
+      // Drop the session-event listener regardless of whether killTeammate
+      // already handled the rest of the cleanup — we own this subscription
+      // and must release it to avoid a leak. The unsubscribe is idempotent.
+      unsubscribeSession();
+
       // If killTeammate already handled this (notified=true), it has flipped
       // status, emitted teammate_terminal, removed the member, disposed the
       // session, and evicted output. Nothing left to do — skip to avoid

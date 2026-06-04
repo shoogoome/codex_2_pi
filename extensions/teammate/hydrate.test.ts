@@ -137,22 +137,23 @@ interface FakePi {
   events: Record<string, unknown>;
   sendMessage: ReturnType<typeof vi.fn>;
   getActiveTools: ReturnType<typeof vi.fn>;
+  getAllTools: ReturnType<typeof vi.fn>;
 }
 
 function buildPi(): FakePi {
+  const names = [
+    "read",
+    "grep",
+    "task_agent",
+    "team_create",
+    "team_delete",
+    "send_message",
+  ];
   return {
     events: {},
     sendMessage: vi.fn(),
-    getActiveTools: vi
-      .fn()
-      .mockReturnValue([
-        "read",
-        "grep",
-        "task_agent",
-        "team_create",
-        "team_delete",
-        "send_message",
-      ]),
+    getActiveTools: vi.fn().mockReturnValue([...names]),
+    getAllTools: vi.fn().mockReturnValue(names.map((name) => ({ name }))),
   };
 }
 

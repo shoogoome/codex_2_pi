@@ -13,12 +13,20 @@ interface FakePi {
   events: Record<string, unknown>;
   sendMessage: ReturnType<typeof vi.fn>;
   getActiveTools: ReturnType<typeof vi.fn>;
+  getAllTools: ReturnType<typeof vi.fn>;
+}
+
+function toolInfos(names: readonly string[]): { name: string }[] {
+  return names.map((name) => ({ name }));
 }
 
 const fakePi: FakePi = {
   events: {},
   sendMessage: vi.fn(),
   getActiveTools: vi.fn().mockReturnValue(["read", "grep", "task_agent", "team_create"]),
+  getAllTools: vi
+    .fn()
+    .mockReturnValue(toolInfos(["read", "grep", "task_agent", "team_create"])),
 };
 
 beforeEach(() => {
@@ -97,6 +105,64 @@ describe("spawnTeammate — happy path", () => {
     ).toBe("alice@research");
   });
 
+  it("counts the initial turn as turnCount=1 (no special-casing of cause.kind=\"initial\")", async () => {
+    const promptFn = vi.fn().mockResolvedValue(undefined);
+    _setSdkForTest({
+      createAgentSessionFromServices: vi.fn(async () => ({
+        session: {
+          prompt: promptFn,
+          abort: vi.fn().mockResolvedValue(undefined),
+          dispose: vi.fn(),
+          subscribe: vi.fn(() => () => {}),
+        },
+      })),
+    });
+    const taskStore = createTaskStore();
+    _setDefaultTaskStoreForTest(taskStore);
+    const handle = buildHandle();
+    handle.teamStore.createTeam("research", undefined, 100);
+    const result = await spawnTeammate(fakePi as never, taskStore, handle, {
+      teamName: "research",
+      agentName: "alice",
+      agentType: "general-purpose",
+      prompt: "go",
+      cwd: "/tmp",
+    });
+    // Wait microtasks for the loop to fire onTurnStart({kind:"initial"}).
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    const task = taskStore.getTask(result.taskId) as
+      | InProcessTeammateTaskState
+      | undefined;
+    expect(task!.turnCount).toBe(1);
+  });
+
+  it("subscribes to AgentSession events on spawn and cleans up on terminal", async () => {
+    const subscribeSpy = vi.fn(() => () => {});
+    _setSdkForTest({
+      createAgentSessionFromServices: vi.fn(async () => ({
+        session: {
+          prompt: vi.fn().mockResolvedValue(undefined),
+          abort: vi.fn().mockResolvedValue(undefined),
+          dispose: vi.fn(),
+          subscribe: subscribeSpy,
+        },
+      })),
+    });
+    const taskStore = createTaskStore();
+    _setDefaultTaskStoreForTest(taskStore);
+    const handle = buildHandle();
+    handle.teamStore.createTeam("research", undefined, 100);
+    await spawnTeammate(fakePi as never, taskStore, handle, {
+      teamName: "research",
+      agentName: "alice",
+      agentType: "general-purpose",
+      prompt: "go",
+      cwd: "/tmp",
+    });
+    expect(subscribeSpy).toHaveBeenCalled();
+  });
+
   it("starts teammateLoop with initial prompt → session.prompt called", async () => {
     const promptFn = vi.fn().mockResolvedValue(undefined);
     _setSdkForTest({
@@ -150,22 +216,24 @@ describe("spawnTeammate — happy path", () => {
         },
       }),
     );
-    fakePi.getActiveTools.mockReturnValue([
-      "read",
-      "grep",
-      "task_agent",
-      "team_create",
-      "team_delete",
-      "send_message",
-      // Write-class tools — post-D2 reversal: these MUST remain in
-      // teammate's pool (full execution access, gated by
-      // request_plan_approval). Only recursion guards are stripped.
-      "bash",
-      "write",
-      "edit",
-      "task_bash",
-      "task_kill",
-    ]);
+    fakePi.getAllTools.mockReturnValue(
+      toolInfos([
+        "read",
+        "grep",
+        "task_agent",
+        "team_create",
+        "team_delete",
+        "send_message",
+        // Write-class tools — post-D2 reversal: these MUST remain in
+        // teammate's pool (full execution access, gated by
+        // request_plan_approval). Only recursion guards are stripped.
+        "bash",
+        "write",
+        "edit",
+        "task_bash",
+        "task_kill",
+      ]),
+    );
     _setSdkForTest({
       createAgentSessionFromServices: createSessionMock,
     });
@@ -214,7 +282,7 @@ describe("spawnTeammate — happy path", () => {
         },
       }),
     );
-    fakePi.getActiveTools.mockReturnValue(["read", "send_message"]);
+    fakePi.getAllTools.mockReturnValue(toolInfos(["read", "send_message"]));
     _setSdkForTest({
       createAgentSessionFromServices: createSessionMock,
     });

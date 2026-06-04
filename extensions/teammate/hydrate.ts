@@ -35,6 +35,7 @@ import {
 import type { TeammateHandle } from "./handle.js";
 import { startTeammateLoop } from "./teammateLoop.js";
 import { filterTeammateTools } from "./teammateToolPool.js";
+import { subscribeTeammateProgress } from "./sessionProgress.js";
 import {
   isInProcessTeammateTask,
   type InProcessTeammateTaskState,
@@ -164,8 +165,12 @@ export async function respawnTeammates(
     // Open the persisted session and wire up an AgentSession on top of it.
     const sm = _hydrateSdk.SessionManagerOpen(replayed.sessionFile);
     const services = await _hydrateSdk.createAgentSessionServices({ cwd: ctx.cwd });
-    const allTools = ctx.pi.getActiveTools();
-    const tools = filterTeammateTools(allTools);
+    // Use getAllTools (registered tools, not just currently-active set) so
+    // the teammate gets bash even when the leader's localshell extension
+    // hides it. See spawnTeammate.ts for the full rationale.
+    const allToolInfos = ctx.pi.getAllTools();
+    const allToolNames = allToolInfos.map((t) => t.name);
+    const tools = filterTeammateTools(allToolNames);
     const { session: sessionUnknown } =
       await _hydrateSdk.createAgentSessionFromServices({
         services,
@@ -224,6 +229,16 @@ export async function respawnTeammates(
       }),
     );
 
+    // Subscribe to session events so the panel widget shows live progress
+    // (token / tool / lastTool) on resume too. Without this a reloaded
+    // teammate would show "0 tokens / 0 tools" forever even while running.
+    // See sessionProgress.ts for the event mapping.
+    const unsubscribeSession = subscribeTeammateProgress(
+      session,
+      taskId,
+      ctx.taskStore,
+    );
+
     // Capture refs so closures don't reach back into ctx after the loop returns.
     const teamName = replayed.identity.teamName;
     const piRef = ctx.pi;
@@ -236,15 +251,17 @@ export async function respawnTeammates(
       session,
       mailbox: ctx.handle.mailbox,
       abortSignal: abortController.signal,
-      onTurnStart: (cause) => {
+      onTurnStart: () => {
+        // Every turn counts on resume too — see spawnTeammate.ts for the
+        // rationale (the initial-cause exclusion left turnCount at 0
+        // forever for single-cycle teammates).
         updateTaskState<InProcessTeammateTaskState>(
           taskId,
           taskStoreRef,
           (t) => ({
             ...t,
             isIdle: false,
-            turnCount:
-              cause.kind === "initial" ? t.turnCount : t.turnCount + 1,
+            turnCount: t.turnCount + 1,
           }),
         );
       },
@@ -288,6 +305,10 @@ export async function respawnTeammates(
         );
       },
       onTerminal: (reason) => {
+        // Drop the session-event listener regardless of whether killTeammate
+        // already handled the rest of the cleanup. Idempotent.
+        unsubscribeSession();
+
         const cur = taskStoreRef.getTask(taskId) as
           | InProcessTeammateTaskState
           | undefined;
