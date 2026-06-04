@@ -1,8 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
-  processTeammateEditorKey,
   buildTeammateEditorFactory,
-  TeammateInputEditor,
+  handleTeammateSubmit,
   type TeammateEditorDeps,
 } from "./teammateEditorFactory.js";
 import { createMailbox } from "../mailbox.js";
@@ -12,191 +11,219 @@ function makeDeps(overrides?: Partial<TeammateEditorDeps>): {
   deps: TeammateEditorDeps;
   mailbox: Mailbox;
   onExit: ReturnType<typeof vi.fn>;
+  onSent: ReturnType<typeof vi.fn>;
 } {
   const mailbox = overrides?.mailbox ?? createMailbox();
   const onExit = vi.fn();
+  const onSent = vi.fn();
   return {
     deps: {
       agentId: "alpha@team1",
       agentName: "alpha",
       mailbox,
       onExit,
+      onSent,
       ...overrides,
     },
     mailbox,
     onExit,
+    onSent,
   };
 }
 
-describe("processTeammateEditorKey", () => {
-  it("printable char appends to buffer", () => {
-    expect(processTeammateEditorKey("", "h")).toEqual({
-      buf: "h",
-      action: "noop",
-    });
-    expect(processTeammateEditorKey("hi", " ")).toEqual({
-      buf: "hi ",
-      action: "noop",
-    });
+/**
+ * Minimal editor stub matching the surface used by handleTeammateSubmit.
+ * We don't need to spin up base Editor / CustomEditor — that requires a real
+ * TUI / theme / keybindings — and the only behavior we depend on is setText.
+ */
+function makeEditorStub(): {
+  setText: ReturnType<typeof vi.fn>;
+  text: () => string;
+} {
+  let buf = "";
+  const setText = vi.fn((s: string) => {
+    buf = s;
   });
+  return {
+    setText,
+    text: () => buf,
+  };
+}
 
-  it("Backspace pops last char", () => {
-    expect(processTeammateEditorKey("abc", "\x7f")).toEqual({
-      buf: "ab",
-      action: "noop",
-    });
-    expect(processTeammateEditorKey("a", "\b")).toEqual({
-      buf: "",
-      action: "noop",
-    });
-    expect(processTeammateEditorKey("", "\x7f")).toEqual({
-      buf: "",
-      action: "noop",
-    });
-  });
-
-  it("Enter with non-empty buf → send action with trimmed text + clears buf", () => {
-    expect(processTeammateEditorKey("hello", "\r")).toEqual({
-      buf: "",
-      action: "send",
-      text: "hello",
-    });
-    expect(processTeammateEditorKey("  pad  ", "\n")).toEqual({
-      buf: "",
-      action: "send",
-      text: "pad",
-    });
-  });
-
-  it("Enter with empty/whitespace buf → exit + clears buf", () => {
-    expect(processTeammateEditorKey("", "\r")).toEqual({
-      buf: "",
-      action: "exit",
-    });
-    expect(processTeammateEditorKey("   ", "\r")).toEqual({
-      buf: "",
-      action: "exit",
-    });
-  });
-
-  it("Esc → exit, preserves current buffer", () => {
-    expect(processTeammateEditorKey("draft", "\x1b")).toEqual({
-      buf: "draft",
-      action: "exit",
-    });
-  });
-
-  it("ignores control chars (non-printable, non-recognised)", () => {
-    // \x01 (Ctrl-A) — not in recognised set, charCode < 32 → noop, no append
-    expect(processTeammateEditorKey("a", "\x01")).toEqual({
-      buf: "a",
-      action: "noop",
-    });
-    // multi-byte sequence (e.g. arrow ↑ "\x1b[A") — length > 1 → noop
-    expect(processTeammateEditorKey("a", "\x1b[A")).toEqual({
-      buf: "a",
-      action: "noop",
-    });
-  });
-});
-
-describe("TeammateInputEditor (handleInput integration)", () => {
-  // CustomEditor base requires real TUI / theme / keybindings; we cast minimal
-  // mocks because our subclass only ever touches `this.myBuf`/`this.deps`.
-  function buildEditor(deps: TeammateEditorDeps): TeammateInputEditor {
-    const tui = {} as never;
-    const theme = {} as never;
-    const keybindings = {} as never;
-    return new TeammateInputEditor(tui, theme, keybindings, deps);
-  }
-
-  it("typing characters then Enter → mailbox.send with trimmed body, from leader, to agentName", () => {
-    const { deps, mailbox } = makeDeps();
+describe("handleTeammateSubmit", () => {
+  it("non-empty text → mailbox.send routed to agentName, clears editor, fires onSent", () => {
+    const { deps, mailbox, onSent, onExit } = makeDeps();
     const sendSpy = vi.spyOn(mailbox, "send");
-    const ed = buildEditor(deps);
-    ed.handleInput("h");
-    ed.handleInput("i");
-    ed.handleInput(" ");
-    ed.handleInput("\r");
+    const editor = makeEditorStub();
+
+    handleTeammateSubmit(deps, "hello world", editor);
+
     expect(sendSpy).toHaveBeenCalledTimes(1);
     const msg = sendSpy.mock.calls[0]![0];
     expect(msg.from).toBe("leader");
     expect(msg.to).toBe("alpha");
-    expect(msg.body).toBe("hi");
+    expect(msg.body).toBe("hello world");
     expect(msg.isProtocol).toBe(false);
     expect(typeof msg.id).toBe("string");
     expect(msg.id.length).toBeGreaterThan(0);
+    expect(typeof msg.timestamp).toBe("number");
+
+    expect(editor.setText).toHaveBeenCalledWith("");
+    expect(onSent).toHaveBeenCalledWith("hello world");
+    expect(onExit).not.toHaveBeenCalled();
   });
 
-  it("empty Enter → onExit called, no send", () => {
-    const { deps, mailbox, onExit } = makeDeps();
-    const sendSpy = vi.spyOn(mailbox, "send");
-    const ed = buildEditor(deps);
-    ed.handleInput("\r");
-    expect(onExit).toHaveBeenCalledTimes(1);
-    expect(sendSpy).not.toHaveBeenCalled();
-  });
-
-  it("Esc → onExit called, no send", () => {
-    const { deps, mailbox, onExit } = makeDeps();
-    const sendSpy = vi.spyOn(mailbox, "send");
-    const ed = buildEditor(deps);
-    ed.handleInput("a");
-    ed.handleInput("\x1b");
-    expect(onExit).toHaveBeenCalledTimes(1);
-    expect(sendSpy).not.toHaveBeenCalled();
-  });
-
-  it("Backspace shrinks buffer between sends", () => {
+  it("trims whitespace before sending", () => {
     const { deps, mailbox } = makeDeps();
     const sendSpy = vi.spyOn(mailbox, "send");
-    const ed = buildEditor(deps);
-    ed.handleInput("a");
-    ed.handleInput("b");
-    ed.handleInput("\x7f"); // backspace -> "a"
-    ed.handleInput("c");
-    ed.handleInput("\r");
-    expect(sendSpy.mock.calls[0]![0].body).toBe("ac");
+    const editor = makeEditorStub();
+
+    handleTeammateSubmit(deps, "  pad  ", editor);
+
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(sendSpy.mock.calls[0]![0].body).toBe("pad");
   });
 
-  it("two consecutive sends — buffer reset between them", () => {
+  it("empty text → onExit, no send, no onSent", () => {
+    const { deps, mailbox, onExit, onSent } = makeDeps();
+    const sendSpy = vi.spyOn(mailbox, "send");
+    const editor = makeEditorStub();
+
+    handleTeammateSubmit(deps, "", editor);
+
+    expect(onExit).toHaveBeenCalledTimes(1);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(onSent).not.toHaveBeenCalled();
+    expect(editor.setText).not.toHaveBeenCalled();
+  });
+
+  it("whitespace-only text → onExit, no send", () => {
+    const { deps, mailbox, onExit, onSent } = makeDeps();
+    const sendSpy = vi.spyOn(mailbox, "send");
+    const editor = makeEditorStub();
+
+    handleTeammateSubmit(deps, "   \t\n  ", editor);
+
+    expect(onExit).toHaveBeenCalledTimes(1);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(onSent).not.toHaveBeenCalled();
+  });
+
+  it("works without optional onSent — no throw", () => {
+    const mailbox = createMailbox();
+    const sendSpy = vi.spyOn(mailbox, "send");
+    const onExit = vi.fn();
+    const deps: TeammateEditorDeps = {
+      agentId: "alpha@team1",
+      agentName: "alpha",
+      mailbox,
+      onExit,
+    };
+    const editor = makeEditorStub();
+
+    expect(() => handleTeammateSubmit(deps, "ping", editor)).not.toThrow();
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(sendSpy.mock.calls[0]![0].body).toBe("ping");
+  });
+
+  it("two consecutive sends — each clears editor and routes to mailbox", () => {
     const { deps, mailbox } = makeDeps();
     const sendSpy = vi.spyOn(mailbox, "send");
-    const ed = buildEditor(deps);
-    ed.handleInput("o");
-    ed.handleInput("k");
-    ed.handleInput("\r");
-    ed.handleInput("g");
-    ed.handleInput("o");
-    ed.handleInput("\r");
+    const editor = makeEditorStub();
+
+    handleTeammateSubmit(deps, "ok", editor);
+    handleTeammateSubmit(deps, "go", editor);
+
     expect(sendSpy).toHaveBeenCalledTimes(2);
     expect(sendSpy.mock.calls[0]![0].body).toBe("ok");
     expect(sendSpy.mock.calls[1]![0].body).toBe("go");
+    expect(editor.setText).toHaveBeenCalledTimes(2);
+    expect(editor.setText).toHaveBeenLastCalledWith("");
   });
 });
 
 describe("buildTeammateEditorFactory", () => {
-  it("returns a factory that produces a TeammateInputEditor instance", () => {
+  // CustomEditor's constructor reaches into the live TUI (registering focus
+  // handlers, etc.) — instantiating it from a unit test isn't reliable. We
+  // therefore probe the factory with a recording shim that exposes the same
+  // onSubmit / onEscape / setText surface as the real editor, swapped in via
+  // the optional `_editorFactory` test seam. Production code paths still
+  // build a real CustomEditor.
+  function recordingEditor(): {
+    onSubmit?: (text: string) => void;
+    onEscape?: () => void;
+    setText: ReturnType<typeof vi.fn>;
+  } {
+    return {
+      onSubmit: undefined,
+      onEscape: undefined,
+      setText: vi.fn(),
+    };
+  }
+
+  it("returns a function (factory) of (tui, theme, keybindings) → editor", () => {
     const { deps } = makeDeps();
     const factory = buildTeammateEditorFactory(deps);
     expect(typeof factory).toBe("function");
-    const tui = {} as never;
-    const theme = {} as never;
-    const keybindings = {} as never;
-    const editor = factory(tui, theme, keybindings);
-    expect(editor).toBeInstanceOf(TeammateInputEditor);
+    expect(factory.length).toBe(3);
   });
 
-  it("factory-produced editor delivers messages routed to the supplied mailbox", () => {
-    const { deps, mailbox } = makeDeps();
+  it("installs onSubmit that routes through handleTeammateSubmit (send path)", () => {
+    const { deps, mailbox, onSent } = makeDeps();
     const sendSpy = vi.spyOn(mailbox, "send");
-    const factory = buildTeammateEditorFactory(deps);
-    const editor = factory({} as never, {} as never, {} as never);
-    // Cast back through unknown — handleInput is in the EditorComponent surface.
-    const ed = editor as unknown as TeammateInputEditor;
-    ed.handleInput("x");
-    ed.handleInput("\r");
+    const fakeEditor = recordingEditor();
+
+    const factory = buildTeammateEditorFactory(deps, {
+      _editorFactory: () => fakeEditor as never,
+    });
+    factory({} as never, {} as never, {} as never);
+
+    expect(typeof fakeEditor.onSubmit).toBe("function");
+    fakeEditor.onSubmit!("hi there");
+
     expect(sendSpy).toHaveBeenCalledTimes(1);
-    expect(sendSpy.mock.calls[0]![0].body).toBe("x");
+    expect(sendSpy.mock.calls[0]![0].body).toBe("hi there");
+    expect(fakeEditor.setText).toHaveBeenCalledWith("");
+    expect(onSent).toHaveBeenCalledWith("hi there");
+  });
+
+  it("installs onSubmit that exits on empty submit (no send)", () => {
+    const { deps, mailbox, onExit } = makeDeps();
+    const sendSpy = vi.spyOn(mailbox, "send");
+    const fakeEditor = recordingEditor();
+
+    const factory = buildTeammateEditorFactory(deps, {
+      _editorFactory: () => fakeEditor as never,
+    });
+    factory({} as never, {} as never, {} as never);
+
+    fakeEditor.onSubmit!("");
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(onExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("installs onEscape that triggers onExit", () => {
+    const { deps, onExit } = makeDeps();
+    const fakeEditor = recordingEditor();
+
+    const factory = buildTeammateEditorFactory(deps, {
+      _editorFactory: () => fakeEditor as never,
+    });
+    factory({} as never, {} as never, {} as never);
+
+    expect(typeof fakeEditor.onEscape).toBe("function");
+    fakeEditor.onEscape!();
+    expect(onExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns the editor produced by the underlying factory", () => {
+    const { deps } = makeDeps();
+    const fakeEditor = recordingEditor();
+
+    const factory = buildTeammateEditorFactory(deps, {
+      _editorFactory: () => fakeEditor as never,
+    });
+    const result = factory({} as never, {} as never, {} as never);
+    expect(result).toBe(fakeEditor);
   });
 });

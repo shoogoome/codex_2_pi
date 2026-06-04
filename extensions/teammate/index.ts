@@ -232,6 +232,17 @@ export default function teammateExtension(pi: ExtensionAPI): void {
                 agentName: target.identity.agentName,
                 mailbox: handle.mailbox,
                 onExit: () => viewState.exitTeammateView(),
+                onSent: (text) => {
+                  // Best-effort toast so the leader sees confirmation that
+                  // the message landed in the teammate's mailbox. Truncated
+                  // to 60 chars to keep the notification line readable.
+                  const preview =
+                    text.length > 60 ? `${text.slice(0, 60)}…` : text;
+                  ctx.ui.notify(
+                    `已发送给 ${target.identity.agentName}: ${preview}`,
+                    "info",
+                  );
+                },
               }),
             );
 
