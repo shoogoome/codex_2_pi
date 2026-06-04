@@ -6,14 +6,13 @@
 //   1. 进程内创建并设置 default TaskStore — 让其它扩展通过 `getDefaultTaskStore` 拿到。
 //   2. 注册 task-notification TUI renderer — Pi UI 收到本扩展发的 sendMessage 时正确渲染。
 //   3. 在 session_start hook 中:latch sessionId 到 store + 重置 outputPath latch + 启动 polling。
-//   4. 在 session_shutdown hook 中:停 polling + flush all disk outputs + 重置 store。
-//
-// 不做(留给后续期):
-//   - session reload 时从 JSONL 重建 task store(留 hydrateFromSessionEntries hook)。
-//   - 任何具体 task type 的 spawn / kill 逻辑。
-//   - panel UI / status pill widget。
+//   4. session_start hasUI=true 时:挂背景 agents panel widget(对齐 claudecode 的
+//      "Waiting for N background agents to finish")+ Ctrl+T 焦点切换 + Enter 进
+//      task output overlay。Esc 退出 overlay。仅显示 local_agent 任务。
+//   5. 在 session_shutdown hook 中:停 polling + flush all disk outputs + 重置 store。
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
 import {
   createTaskStore,
   setDefaultTaskStore,
@@ -37,6 +36,21 @@ import {
   unregisterTaskType,
 } from "./taskTypeRegistry.js";
 import { attachTasksHandle, type TasksHandle } from "./handle.js";
+import { logError } from "./logging.js";
+import { buildTaskPanel } from "./ui/taskPanel.js";
+import { createTaskPanelViewStateStore } from "./ui/viewState.js";
+import { registerTaskPanelKeybindings } from "./ui/taskPanelKeybindings.js";
+import { buildTaskOutputOverlayComponent } from "./ui/taskOutputOverlayComponent.js";
+import type { TaskPanelEntry } from "./ui/taskPanelRender.js";
+import type { TaskOutputOverlayTheme } from "./ui/taskOutputOverlayRender.js";
+import type { LocalAgentTaskState } from "../localagent/types.js";
+import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
+
+const WIDGET_KEY = "tasks-bg-agents";
+/** 读 task output 文件时的尾部字节预算 — 限制 v1 渲染开销。 */
+const OUTPUT_TAIL_BYTES = 64 * 1024;
+/** 渲染时保留的最大行数(头/尾不计)。 */
+const OUTPUT_TAIL_LINES = 200;
 
 export interface TasksExtensionDeps {
   /** 测试可注入自定义 store。生产环境留空。 */
@@ -69,6 +83,11 @@ export default function tasksExtension(
   installProgressContextFilter(pi);
   installProgressContextFilter(pi);
 
+  // Module-scoped — survives across session_start / session_shutdown
+  // reload cycles so we can clean up subscribers from a previous cycle
+  // before re-subscribing.
+  let unsubPanel: (() => void) | undefined;
+
   pi.on("session_start", (_event, ctx) => {
     // sessionManager 是 ReadonlySessionManager —— 取 sessionId 即可,不要 mutate。
     store._setSessionId(ctx.sessionManager.getSessionId());
@@ -77,15 +96,193 @@ export default function tasksExtension(
     pi.registerTool(buildTaskKillTool(store));
     pi.registerTool(buildTaskStatusTool(store));
     pi.registerTool(buildTaskListTool(store));
+
+    if (!ctx.hasUI) return;
+
+    // Defensive: clean up any subs leaked from a previous cycle.
+    unsubPanel?.();
+
+    const viewState = createTaskPanelViewStateStore();
+    let tuiHandle: TUI | undefined;
+    const innerFactory = buildTaskPanel({ taskStore: store, viewState });
+    const componentFactory = (
+      t: TUI,
+      theme: Theme,
+    ): Component & { dispose?(): void } => {
+      tuiHandle = t;
+      const component = innerFactory(t, theme);
+      const origDispose = component.dispose;
+      return {
+        ...component,
+        render: (width: number) => component.render(width),
+        dispose: () => {
+          tuiHandle = undefined;
+          origDispose?.();
+        },
+      };
+    };
+    ctx.ui.setWidget(WIDGET_KEY, componentFactory, {
+      placement: "aboveEditor",
+    });
+
+    const requestRender = (): void => {
+      tuiHandle?.requestRender();
+    };
+
+    const u1 = store.subscribe(requestRender);
+
+    const unsubKeybindings = registerTaskPanelKeybindings({
+      ui: ctx.ui,
+      taskStore: store,
+      viewState,
+    });
+
+    // task_output overlay reactor — open a full-screen ctx.ui.custom overlay
+    // when the user enters task_output mode, dismiss when leaving. Mirrors
+    // the teammate overlay pattern (commit 725e268). nonCapturing:true so
+    // the editor keeps focus and Esc still routes through onTerminalInput.
+    let overlayHandle: OverlayHandle | undefined;
+    let overlayDone: ((value: void) => void) | undefined;
+    function dismissOverlay(): void {
+      if (overlayDone) {
+        try {
+          overlayDone();
+        } catch (e) {
+          logError(e, "task panel overlay done");
+        }
+        overlayDone = undefined;
+      }
+      if (overlayHandle) {
+        try {
+          overlayHandle.hide();
+        } catch (e) {
+          logError(e, "task panel overlay hide");
+        }
+        overlayHandle = undefined;
+      }
+    }
+
+    const unsubViewState = viewState.subscribe((state) => {
+      requestRender();
+      if (state.kind === "task_output") {
+        if (overlayHandle || overlayDone) return;
+        const taskId = state.taskId;
+        const overlayPromise = ctx.ui.custom<void>(
+          (_tui, theme, _kb, done) => {
+            overlayDone = done;
+            const themeFg = (
+              theme as unknown as {
+                fg?: (color: string, text: string) => string;
+              }
+            ).fg;
+            const overlayTheme: TaskOutputOverlayTheme | undefined =
+              typeof themeFg === "function"
+                ? {
+                    fg: (color: string, text: string) =>
+                      themeFg.call(theme, color, text),
+                  }
+                : undefined;
+            return buildTaskOutputOverlayComponent({
+              taskId,
+              getTask: () => snapshotEntry(store, taskId),
+              getOutputContent: () => readTaskOutputTail(store, taskId),
+              theme: overlayTheme,
+            });
+          },
+          {
+            overlay: true,
+            overlayOptions: () => ({
+              width: "100%",
+              maxHeight: "100%",
+              anchor: "top-left",
+              margin: 0,
+              // nonCapturing:true so the editor keeps focus and Esc routes
+              // through onTerminalInput → exitTaskView (mirrors commit
+              // 725e268's teammate-overlay fix).
+              nonCapturing: true,
+            }),
+            onHandle: (h) => {
+              overlayHandle = h;
+            },
+          },
+        );
+        if (overlayPromise && typeof overlayPromise.then === "function") {
+          overlayPromise.then(
+            () => {
+              overlayHandle = undefined;
+              overlayDone = undefined;
+            },
+            (e: unknown) => {
+              overlayHandle = undefined;
+              overlayDone = undefined;
+              logError(e, "task panel overlay promise");
+            },
+          );
+        }
+      } else {
+        dismissOverlay();
+      }
+    });
+
+    unsubPanel = (): void => {
+      u1();
+      unsubKeybindings();
+      unsubViewState();
+      dismissOverlay();
+      ctx.ui.setWidget(WIDGET_KEY, undefined);
+    };
   });
 
   pi.on("session_shutdown", async () => {
+    unsubPanel?.();
+    unsubPanel = undefined;
     stopTaskFrameworkPolling();
     // 等待所有 in-flight 写盘 settle,避免 async-ENOENT-after-teardown。
     await _clearOutputsForTest();
     store._resetForTest();
     _resetTaskTypeRegistryForTest();
   });
+}
+
+function snapshotEntry(store: TaskStore, taskId: string): TaskPanelEntry | undefined {
+  const t = store.getTask(taskId);
+  if (!t || t.type !== "local_agent") return undefined;
+  const la = t as LocalAgentTaskState;
+  return {
+    id: la.id,
+    type: la.type,
+    description: la.description,
+    status: la.status,
+    startTime: la.startTime,
+    tokenCount: la.progress?.tokenCount ?? 0,
+    toolCallCount: la.progress?.toolCallCount ?? 0,
+  };
+}
+
+function readTaskOutputTail(store: TaskStore, taskId: string): string {
+  const task = store.getTask(taskId);
+  if (!task) return "";
+  try {
+    // readFileSync with no length arg reads the whole file; we keep it
+    // simple for v1 and rely on diskOutput's own size cap (5GB) plus our
+    // own line truncation below. If perf becomes an issue we can switch
+    // to a stat + tail-byte read pattern.
+    const buf = readFileSync(task.outputFile);
+    // Prefer the LAST OUTPUT_TAIL_BYTES bytes — avoids loading 100 MB into
+    // a string when the file is large.
+    const slice =
+      buf.length > OUTPUT_TAIL_BYTES
+        ? buf.subarray(buf.length - OUTPUT_TAIL_BYTES)
+        : buf;
+    const text = slice.toString("utf8");
+    const lines = text.split("\n");
+    if (lines.length <= OUTPUT_TAIL_LINES) return text;
+    return lines.slice(lines.length - OUTPUT_TAIL_LINES).join("\n");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return "";
+    logError(e, "task panel readTaskOutputTail");
+    return "";
+  }
 }
 
 // ---------- 公共 API re-export(供其它扩展直接 import 自 'pi-tasks-extension') ----------

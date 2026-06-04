@@ -322,3 +322,146 @@ describe("registers cross-type tools at session_start", () => {
     expect(getTaskType("local_bash")).toBeUndefined();
   });
 });
+
+// ---------- background-agent panel widget ----------
+
+interface FakeUI {
+  setWidget: ReturnType<typeof vi.fn>;
+  onTerminalInput: ReturnType<typeof vi.fn>;
+  custom: ReturnType<typeof vi.fn>;
+}
+
+function buildFakeUI(): FakeUI {
+  return {
+    setWidget: vi.fn(),
+    onTerminalInput: vi.fn(() => () => {}),
+    custom: vi.fn(() => Promise.resolve()),
+  };
+}
+
+describe("background-agent panel widget", () => {
+  it("session_start with hasUI=true registers the panel widget", () => {
+    const pi = createFakePi();
+    tasksExtension(pi as unknown as Parameters<typeof tasksExtension>[0]);
+    const fakeUI = buildFakeUI();
+    fireEvent(
+      pi,
+      "session_start",
+      {},
+      {
+        sessionManager: { getSessionId: () => "ui-panel-1" },
+        hasUI: true,
+        ui: fakeUI,
+      },
+    );
+    // setWidget should be called with the panel key + factory + aboveEditor
+    expect(fakeUI.setWidget).toHaveBeenCalled();
+    const call = fakeUI.setWidget.mock.calls[0]!;
+    expect(call[0]).toBe("tasks-bg-agents");
+    expect(typeof call[1]).toBe("function");
+    expect(call[2]).toEqual({ placement: "aboveEditor" });
+    // keybindings handler installed
+    expect(fakeUI.onTerminalInput).toHaveBeenCalledTimes(1);
+  });
+
+  it("session_start with hasUI=false skips panel registration", () => {
+    const pi = createFakePi();
+    tasksExtension(pi as unknown as Parameters<typeof tasksExtension>[0]);
+    const fakeUI = buildFakeUI();
+    fireEvent(
+      pi,
+      "session_start",
+      {},
+      {
+        sessionManager: { getSessionId: () => "ui-panel-2" },
+        hasUI: false,
+        ui: fakeUI,
+      },
+    );
+    expect(fakeUI.setWidget).not.toHaveBeenCalled();
+    expect(fakeUI.onTerminalInput).not.toHaveBeenCalled();
+  });
+
+  it("entering task_output viewState opens ui.custom with nonCapturing:true", async () => {
+    const pi = createFakePi();
+    tasksExtension(pi as unknown as Parameters<typeof tasksExtension>[0]);
+    const fakeUI = buildFakeUI();
+    fireEvent(
+      pi,
+      "session_start",
+      {},
+      {
+        sessionManager: { getSessionId: () => "ui-panel-3" },
+        hasUI: true,
+        ui: fakeUI,
+      },
+    );
+
+    // Recover the keybindings handler so we can simulate Ctrl+T then Enter.
+    const handler = fakeUI.onTerminalInput.mock.calls[0]![0] as (
+      data: string,
+    ) => unknown;
+
+    // Register a fake local_agent task in the store (matching task_id).
+    const store = getDefaultTaskStore();
+    const taskId = "atest1234";
+    store.set((prev) => ({
+      ...prev,
+      [taskId]: {
+        id: taskId,
+        type: "local_agent",
+        status: "running",
+        description: "fix #2",
+        startTime: 0,
+        outputFile: "/nonexistent/out",
+        outputOffset: 0,
+        notified: false,
+        prompt: "go",
+        agentType: "general-purpose",
+        isBackgrounded: true,
+        isFork: false,
+      } as never,
+    }));
+
+    // Ctrl+T → focus
+    handler("\x14");
+    // ↓ to select first
+    handler("\x1b[B");
+    // Enter → enterTaskView → triggers ui.custom
+    handler("\r");
+
+    expect(fakeUI.custom).toHaveBeenCalledTimes(1);
+    const customArgs = fakeUI.custom.mock.calls[0]!;
+    const opts = customArgs[1] as {
+      overlay: boolean;
+      overlayOptions: () => { nonCapturing: boolean };
+    };
+    expect(opts.overlay).toBe(true);
+    expect(opts.overlayOptions().nonCapturing).toBe(true);
+  });
+
+  it("session_shutdown clears the panel widget", async () => {
+    const pi = createFakePi();
+    tasksExtension(pi as unknown as Parameters<typeof tasksExtension>[0]);
+    const fakeUI = buildFakeUI();
+    fireEvent(
+      pi,
+      "session_start",
+      {},
+      {
+        sessionManager: { getSessionId: () => "ui-panel-4" },
+        hasUI: true,
+        ui: fakeUI,
+      },
+    );
+    const callsBefore = fakeUI.setWidget.mock.calls.length;
+    const shutdownResults = fireEvent(pi, "session_shutdown", {}, {});
+    await Promise.all(shutdownResults as Promise<unknown>[]);
+    const callsAfter = fakeUI.setWidget.mock.calls.length;
+    expect(callsAfter).toBeGreaterThan(callsBefore);
+    // last call should clear the widget by passing undefined
+    const last = fakeUI.setWidget.mock.calls[callsAfter - 1]!;
+    expect(last[0]).toBe("tasks-bg-agents");
+    expect(last[1]).toBeUndefined();
+  });
+});
