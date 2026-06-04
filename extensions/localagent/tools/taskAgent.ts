@@ -133,33 +133,113 @@ export function buildTaskAgentTool(
     .join("\n");
 
   const description =
-    "Dispatch an in-process sub-agent (LLM) to perform a focused task.\n" +
+    "Launch a new agent to handle complex, multi-step tasks. Each agent type has " +
+    "specific capabilities and tools available to it.\n" +
     "\n" +
-    "subagent_type — pick one of:\n" +
+    "Available `subagent_type` values:\n" +
     builtInLines +
-    "\n  - (omit) → fork: inherits the full parent conversation context (forces background).\n" +
+    "\n  - (omit) → fork: inherits the full parent conversation context (forces background; only available with persistent session).\n" +
     "User and project agents loaded from `~/.pi/agents/*.md` and `<cwd>/.pi/agents/*.md` " +
-    "are ALSO valid values; if you pass an unknown type the error response lists every " +
-    "type currently available.\n" +
+    "are ALSO valid; passing an unknown type returns an error listing every available type.\n" +
     "\n" +
-    "Long-running tasks auto-background after 120s. Pass run_in_background:true to send " +
-    "to background immediately.\n" +
+    "## When not to use\n" +
+    "\n" +
+    "If the target is already known, use the direct tool: `read` for a known path, " +
+    "`grep` via the bash tool for a specific symbol or string. Reserve this tool for " +
+    "open-ended questions that span the codebase, or tasks that match an available " +
+    "agent type.\n" +
+    "\n" +
+    "## Usage notes\n" +
+    "\n" +
+    "- Always include a short `description` summarizing what the agent will do.\n" +
+    "- **When you launch multiple agents for independent work, send them in a single " +
+    "message with multiple `task_agent` tool uses so they run concurrently.** This is " +
+    "the primary way to parallelize: investigation, multi-file refactors, scattered " +
+    "tests, or any work that decomposes into independent subtasks.\n" +
+    "- When the agent is done, it returns a single message back to you. The result is " +
+    "NOT shown to the user — relay the relevant findings as plain text.\n" +
+    "- Trust but verify: an agent's summary describes what it intended to do, not " +
+    "necessarily what it did. When an agent writes or edits code, verify the actual " +
+    "changes before reporting the work as done.\n" +
+    "- **Foreground vs background**: foreground (default) when you need the agent's " +
+    "results before you can proceed — e.g. research agents whose findings inform your " +
+    "next steps. Use `run_in_background: true` when you have genuinely independent work " +
+    "to do in parallel and you'll check the result later via `task_status`.\n" +
+    "- Long-running tasks auto-background after 120s.\n" +
+    "- If the user specifies that they want you to run agents \"in parallel\", you MUST " +
+    "send a single message with multiple `task_agent` tool use content blocks.\n" +
+    "\n" +
+    "## Writing the prompt\n" +
+    "\n" +
+    "Brief the agent like a smart colleague who just walked into the room — it hasn't " +
+    "seen this conversation, doesn't know what you've tried, doesn't understand why " +
+    "this task matters.\n" +
+    "- Explain what you're trying to accomplish and why.\n" +
+    "- Describe what you've already learned or ruled out.\n" +
+    "- Give enough context about the surrounding problem that the agent can make " +
+    "judgment calls rather than just following a narrow instruction.\n" +
+    "- If you need a short response, say so (\"report in under 200 words\").\n" +
+    "- Lookups: hand over the exact command. Investigations: hand over the question — " +
+    "prescribed steps become dead weight when the premise is wrong.\n" +
+    "\n" +
+    "Terse command-style prompts produce shallow, generic work.\n" +
+    "\n" +
+    "**Never delegate understanding.** Don't write \"based on your findings, fix the " +
+    "bug\" or \"based on the research, implement it.\" Those phrases push synthesis onto " +
+    "the agent instead of doing it yourself. Write prompts that prove you understood: " +
+    "include file paths, line numbers, what specifically to change.\n" +
+    "\n" +
+    "## Examples\n" +
+    "\n" +
+    "<example>\n" +
+    "user: \"What's left on this branch before we can ship?\"\n" +
+    "assistant: <thinking>A survey question across git state, tests, and config. " +
+    "I'll delegate it and ask for a short report so the raw command output stays out " +
+    "of my context.</thinking>\n" +
+    "task_agent({\n" +
+    "  description: \"Branch ship-readiness audit\",\n" +
+    "  prompt: \"Audit what's left before this branch can ship. Check: uncommitted " +
+    "changes, commits ahead of main, whether tests exist, whether the feature gate " +
+    "is wired up. Report a punch list — done vs. missing. Under 200 words.\",\n" +
+    "  subagent_type: \"general-purpose\"\n" +
+    "})\n" +
+    "</example>\n" +
+    "\n" +
+    "<example>\n" +
+    "user: \"Find all places that call the deprecated `oldAuth()` and propose a " +
+    "migration plan.\"\n" +
+    "assistant: <thinking>Independent work that splits naturally: one agent maps " +
+    "callers, one drafts the migration. Run them concurrently.</thinking>\n" +
+    "[Single message with TWO task_agent tool calls]\n" +
+    "task_agent({description: \"Map oldAuth callers\", prompt: \"Find every call site " +
+    "of oldAuth() in src/. List file:line and the surrounding 2 lines of context.\", " +
+    "subagent_type: \"explore\"})\n" +
+    "task_agent({description: \"Draft oldAuth migration\", prompt: \"Read src/auth/" +
+    "newAuth.ts and propose a step-by-step migration from oldAuth to newAuth. " +
+    "Note any API differences callers will need to adapt to.\", subagent_type: " +
+    "\"general-purpose\"})\n" +
+    "</example>\n" +
     "\n" +
     "## Two modes\n" +
     "\n" +
-    "1. **One-shot sub-agent (default)**: Omit `team_name` and `name`. The agent runs the " +
-    "prompt to completion and the tool returns the final text. (See subagent_type list above.)\n" +
+    "1. **One-shot sub-agent (default)**: Omit `team_name` and `name`. The agent runs " +
+    "the prompt to completion and the tool returns the final text. This is what you " +
+    "want for most parallel-investigation / parallel-refactor work.\n" +
     "\n" +
-    "2. **Long-lived teammate**: Pass BOTH `team_name` AND `name`. The agent joins the team " +
-    "as an in-process teammate, runs the initial prompt, then enters idle waiting for " +
-    "messages via send_message. The tool returns immediately with the teammate's identity. " +
-    "To message it: `send_message {to: \"<name>\", message: \"...\"}`. To shut it down: " +
-    "`send_message` with a shutdown_request body, or call `team_delete` to cascade-kill the " +
-    "whole team. Requires `team_create` first." +
-    "\n\n## Long-lived teammate workflow\n\n" +
-    "When using the long-lived teammate mode (mode 2 above):\n\n" +
-    "- Messages from teammates arrive AUTOMATICALLY in your context as new conversation turns. You do not need to poll `task_status`.\n" +
-    "- After spawning a teammate or sending a message, continue with other work or wait. Do not immediately call `task_status` to check teammate progress.\n" +
+    "2. **Long-lived teammate**: Pass BOTH `team_name` AND `name`. The agent joins " +
+    "the team as an in-process teammate, runs the initial prompt, then enters idle " +
+    "waiting for messages via `send_message`. The tool returns immediately with the " +
+    "teammate's identity. To message it: `send_message {to: \"<name>\", message: " +
+    "\"...\"}`. To shut it down: `send_message` with a shutdown_request body, or call " +
+    "`team_delete` to cascade-kill the whole team. Requires `team_create` first.\n" +
+    "\n" +
+    "## Long-lived teammate workflow\n" +
+    "\n" +
+    "When using mode 2:\n" +
+    "- Messages from teammates arrive AUTOMATICALLY in your context as new turns. You " +
+    "do not need to poll `task_status`.\n" +
+    "- After spawning a teammate or sending a message, continue with other work or " +
+    "wait. Do not immediately call `task_status` to check teammate progress.\n" +
     "- A teammate going idle is the normal end-of-turn state, not a failure.";
 
   return {

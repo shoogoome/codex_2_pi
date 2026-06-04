@@ -30,6 +30,50 @@ describe("task_agent tool", () => {
     expect(tool.parameters).toBeDefined();
   });
 
+  it("description 含 claudecode 对齐的关键引导句(并发提示 + prompt 写作教学 + 例子)", () => {
+    // Regression guard: the description was rewritten (commit chasing the
+    // claudecode Task tool) so the LLM proactively dispatches sub-agents
+    // for parallel investigation. If anyone shrinks the prompt back to a
+    // routing-only blurb, these key sentences disappear and the LLM
+    // reverts to "I'll just grep myself" behavior. Keep the strings short
+    // enough that minor wording tweaks don't break the test, but specific
+    // enough that the load-bearing intent is preserved.
+    const tool = buildTaskAgentTool(fakePi, createTaskStore());
+    const desc = tool.description ?? "";
+    // Concurrency directive — the single most important behavioral nudge.
+    expect(desc).toMatch(/single message with multiple/i);
+    // Foreground vs background decision.
+    expect(desc).toMatch(/foreground/i);
+    expect(desc).toMatch(/background/i);
+    // Prompt-writing guidance.
+    expect(desc).toMatch(/Brief the agent like/i);
+    expect(desc).toMatch(/Never delegate understanding/i);
+    // At least one example block to prime the format.
+    expect(desc).toMatch(/<example>/);
+  });
+
+  it("description 含 claudecode 对齐的关键引导句(并发提示 + prompt 写作教学 + 例子)", () => {
+    // Regression guard: the description was rewritten (commit chasing the
+    // claudecode Task tool) so the LLM proactively dispatches sub-agents
+    // for parallel investigation. If anyone shrinks the prompt back to a
+    // routing-only blurb, these key sentences disappear and the LLM
+    // reverts to "I'll just grep myself" behavior. Keep the strings short
+    // enough that minor wording tweaks don't break the test, but specific
+    // enough that the load-bearing intent is preserved.
+    const tool = buildTaskAgentTool(fakePi, createTaskStore());
+    const desc = tool.description ?? "";
+    // Concurrency directive — the single most important behavioral nudge.
+    expect(desc).toMatch(/single message with multiple/i);
+    // Foreground vs background decision.
+    expect(desc).toMatch(/foreground/i);
+    expect(desc).toMatch(/background/i);
+    // Prompt-writing guidance.
+    expect(desc).toMatch(/Brief the agent like/i);
+    expect(desc).toMatch(/Never delegate understanding/i);
+    // At least one example block to prime the format.
+    expect(desc).toMatch(/<example>/);
+  });
+
   it("subagent_type 不存在 → isError + 列出可用名", async () => {
     const tool = buildTaskAgentTool(fakePi, createTaskStore());
     const r = await callTool(tool, { description: "x", prompt: "y", subagent_type: "no_such" });
