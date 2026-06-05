@@ -351,5 +351,59 @@ describe("localshellExtension", () => {
       expect(out).toContain("completed (exit 0)");
       expect(out).not.toMatch(/lines? hidden/);
     });
+
+    it("renderResult collapsed: status glyph colored, tool name bold (claudecode palette)", () => {
+      // Color-token regression — task_bash result was previously painted
+      // entirely in dim; users complained "everything looks the same". The
+      // status glyph now colors by outcome and the tool name uses the
+      // toolTitle accent slot.
+      const tagTheme = {
+        fg: (color: string, text: string) => `[${color}]${text}`,
+        bold: (text: string) => `<b>${text}</b>`,
+        bg: (_color: string, text: string) => text,
+      };
+      const tool = registerAndGetTaskBash();
+      const text = [
+        "completed (exit 0) taskId=t1",
+        "stdout-line-1",
+        "stdout-line-2",
+        "stdout-line-3",
+      ].join("\n");
+      const comp = tool.renderResult!(
+        {
+          content: [{ type: "text", text }],
+          details: { status: "completed", exitCode: 0, taskId: "t1" },
+        },
+        { expanded: false, isPartial: false },
+        tagTheme,
+        {},
+      );
+      const out = renderToString(comp);
+      expect(out).toContain("[success]✓");
+      expect(out).toContain("[toolTitle]task_bash");
+      expect(out).toContain("<b>");
+      expect(out).toContain("Ctrl+O");
+    });
+
+    it("renderResult collapsed: failed exit code paints the glyph in error color", () => {
+      const tagTheme = {
+        fg: (color: string, text: string) => `[${color}]${text}`,
+        bold: (text: string) => `<b>${text}</b>`,
+        bg: (_color: string, text: string) => text,
+      };
+      const tool = registerAndGetTaskBash();
+      const text = ["failed (exit 1) taskId=t2", "boom1", "boom2"].join("\n");
+      const comp = tool.renderResult!(
+        {
+          content: [{ type: "text", text }],
+          details: { status: "failed", exitCode: 1, taskId: "t2" },
+        },
+        { expanded: false, isPartial: false },
+        tagTheme,
+        {},
+      );
+      const out = renderToString(comp);
+      expect(out).toContain("[error]✗");
+    });
   });
 });

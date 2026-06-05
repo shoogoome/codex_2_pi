@@ -17,7 +17,6 @@ import { updateTaskState } from "../tasks/framework.js";
 import { evictTaskOutput, flushTaskOutput } from "../tasks/diskOutput.js";
 import { notifyTaskTerminal } from "../tasks/notifications.js";
 import { emitTaskProgress } from "../tasks/progress.js";
-import { emitTaskSummary } from "../tasks/summary.js";
 import { logError } from "../tasks/logging.js";
 import type { LocalAgentTaskState } from "./types.js";
 import { getProgress, removeProgress } from "./progress.js";
@@ -77,21 +76,11 @@ export async function killLocalAgentTask(
     description: t.description,
     agentType: t.agentType,
   });
-  // Surface terminal status as a one-line summary in the main chat stream.
-  // Kill is initiated externally so we don't have access to the spawn closure's
-  // timeline here — emit with empty timeline (renderer falls back to head-only).
-  const p = getProgress(taskId);
-  emitTaskSummary(pi, {
-    taskId,
-    taskType: "local_agent",
-    status: "killed",
-    description: t.description,
-    agentType: t.agentType,
-    toolCallCount: p?.toolCallCount ?? 0,
-    tokenCount: p?.tokenCount ?? 0,
-    durationMs: t.startTime ? Date.now() - t.startTime : 0,
-    timeline: [],
-  });
+  // NOTE (terminal-summary removal): a `tasks/summary` customMessage used to
+  // be emitted here. The task_agent tool's renderResult now owns the
+  // user-visible "this task is done" line in the TUI, so the redundant
+  // second main-stream row was dropped. Kill state still flows via
+  // `tasks/notification` (jsonl + LLM context) above.
   removeProgress(taskId);
   void evictTaskOutput(taskId);
 }

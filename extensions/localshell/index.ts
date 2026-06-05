@@ -201,20 +201,40 @@ export default function localshellExtension(pi: ExtensionAPI): void {
           return new Text(t.fg("dim", "task_bash running…"), 0, 0);
         }
 
-        // Foreground / blocking finished.
+        const status = details.status;
+        const exitCode = details.exitCode;
+        const { glyph, color } = bashStatusGlyph(status, exitCode);
+
+        const lines = text.split(/\r?\n/);
+        const headRaw = lines[0] ?? "";
+        // Compose a claudecode-style head row:
+        //   [glyph] task_bash · [headRaw]
+        // glyph is colored by outcome, tool name is bold accent, the actual
+        // status text (e.g. "completed (exit 0) taskId=...") stays dim.
+        const headColored =
+          `${t.fg(color, glyph)} ` +
+          `${t.bold(t.fg("toolTitle", "task_bash"))} ` +
+          `${t.fg("dim", "·")} ` +
+          `${t.fg("dim", headRaw)}`;
+
+        // Foreground / blocking finished, expanded.
         if (options.expanded) {
-          return new Text(t.fg("dim", text), 0, 0);
+          if (lines.length <= 1) {
+            return new Text(headColored, 0, 0);
+          }
+          const body = lines.slice(1).join("\n");
+          return new Text(`${headColored}\n${t.fg("dim", body)}`, 0, 0);
         }
 
         const summary = summarizeTaskBashOutput(text);
         if (!summary.hasMore) {
-          return new Text(t.fg("dim", summary.head), 0, 0);
+          return new Text(headColored, 0, 0);
         }
         const hidden = t.fg(
           "dim",
           `… (${summary.hiddenCount} lines hidden · Ctrl+O to expand)`,
         );
-        return new Text(`${t.fg("dim", summary.head)}\n${hidden}`, 0, 0);
+        return new Text(`${headColored}\n${hidden}`, 0, 0);
       },
     });
 
@@ -232,4 +252,17 @@ export default function localshellExtension(pi: ExtensionAPI): void {
     handle.unregisterTaskType("local_bash");
     _unbindPi();
   });
+}
+
+function bashStatusGlyph(
+  status: string | undefined,
+  exitCode: number | undefined,
+): { glyph: string; color: string } {
+  if (status === "killed") return { glyph: "■", color: "warning" };
+  if (status === "failed" || (typeof exitCode === "number" && exitCode !== 0)) {
+    return { glyph: "✗", color: "error" };
+  }
+  if (status === "completed") return { glyph: "✓", color: "success" };
+  if (status === "running") return { glyph: "◐", color: "warning" };
+  return { glyph: "○", color: "muted" };
 }

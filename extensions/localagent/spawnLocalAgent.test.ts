@@ -415,8 +415,8 @@ describe("spawnLocalAgent — progress mirroring to LocalAgentTaskState", () => 
   });
 });
 
-describe("spawnLocalAgent — tasks/summary emission on terminal", () => {
-  it("emits tasks/summary once when sync completion finalizes", async () => {
+describe("spawnLocalAgent — terminal behavior", () => {
+  it("does NOT emit tasks/summary on sync completion (renderResult owns terminal row)", async () => {
     const fake = makeFakeSession();
     _setSdkForTest({
       createAgentSessionServices: vi.fn().mockResolvedValue({}),
@@ -447,25 +447,23 @@ describe("spawnLocalAgent — tasks/summary emission on terminal", () => {
       },
     });
     fake.emit({ type: "agent_end", messages: [] });
-    await promise;
+    const result = await promise;
 
     const summaryCalls = fakePi.sendMessage.mock.calls.filter(
       ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/summary",
     );
-    expect(summaryCalls).toHaveLength(1);
-    const details = (summaryCalls[0]![0] as { details: { status: string; timeline: unknown[]; tokenCount: number; agentType: string } }).details;
-    expect(details.status).toBe("completed");
-    expect(details.tokenCount).toBe(100);
-    expect(details.agentType).toBe("general-purpose");
-    // timeline should contain at least task_start, tool_start, tool_end, task_end
-    const kinds = details.timeline.map((e) => (e as { kind: string }).kind);
+    expect(summaryCalls).toHaveLength(0);
+    // The result now carries the timeline so task_agent's renderResult can
+    // build an expanded view (Ctrl+O) without going back to disk.
+    expect(result.timeline).toBeDefined();
+    const kinds = (result.timeline ?? []).map((e) => e.kind);
     expect(kinds).toContain("task_start");
     expect(kinds).toContain("tool_start");
     expect(kinds).toContain("tool_end");
     expect(kinds).toContain("task_end");
   });
 
-  it("emits tasks/summary once when background finalizer completes", async () => {
+  it("does NOT emit tasks/summary when background finalizer completes", async () => {
     const fake = makeFakeSession();
     _setSdkForTest({
       createAgentSessionServices: vi.fn().mockResolvedValue({}),
@@ -492,8 +490,6 @@ describe("spawnLocalAgent — tasks/summary emission on terminal", () => {
     const summaryCalls = fakePi.sendMessage.mock.calls.filter(
       ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/summary",
     );
-    expect(summaryCalls.length).toBe(1);
-    const details = (summaryCalls[0]![0] as { details: { status: string } }).details;
-    expect(details.status).toBe("completed");
+    expect(summaryCalls.length).toBe(0);
   });
 });

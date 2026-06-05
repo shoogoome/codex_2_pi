@@ -312,3 +312,281 @@ describe("task_agent — teammate route", () => {
     expect(fakeLocalSpawner).toHaveBeenCalled();
   });
 });
+
+describe("task_agent renderResult", () => {
+  // Plain mock theme: fg/bold pass-through with a tag prefix so we can
+  // assert which color tokens are used. e.g. theme.fg("success", "✓") →
+  // "[success]✓" — matching `[success]` confirms the renderer asked for
+  // the success color, regardless of the underlying ANSI palette.
+  function tagTheme() {
+    return {
+      fg: (color: string, text: string) => `[${color}]${text}`,
+      bold: (text: string) => `<b>${text}</b>`,
+      bg: (_color: string, text: string) => text,
+    };
+  }
+
+  function renderToString(component: unknown): string {
+    const c = component as { render?: (w: number) => string[] };
+    if (typeof c.render === "function") {
+      return c.render(200).join("\n");
+    }
+    return JSON.stringify(component);
+  }
+
+  function getRenderResult(): NonNullable<ReturnType<typeof buildTaskAgentTool>["renderResult"]> {
+    const tool = buildTaskAgentTool(fakePi, createTaskStore());
+    expect(typeof tool.renderResult).toBe("function");
+    return tool.renderResult!;
+  }
+
+  it("isPartial → dim 'task_agent running…' line with agent type and event count", () => {
+    const renderResult = getRenderResult();
+    const out = renderResult(
+      {
+        content: [{ type: "text", text: "running…" }],
+        details: {
+          action: "task_agent",
+          agentType: "general-purpose",
+          description: "do work",
+          status: "running",
+          timeline: [
+            { kind: "task_start", ts: 0, summary: "start" },
+            { kind: "tool_start", ts: 1, summary: "bash(...)" },
+          ],
+        },
+      } as never,
+      { isPartial: true, expanded: false },
+      tagTheme() as never,
+      {} as never,
+    );
+    const blob = renderToString(out);
+    expect(blob).toContain("running");
+    expect(blob).toContain("general-purpose");
+    expect(blob).toContain("do work");
+    expect(blob).toContain("2 events");
+    expect(blob).toContain("[dim]");
+  });
+
+  it("backgrounded → 'task_agent backgrounded' line with taskId", () => {
+    const renderResult = getRenderResult();
+    const out = renderResult(
+      {
+        content: [{ type: "text", text: "Backgrounded" }],
+        details: {
+          action: "task_agent",
+          isBackgrounded: true,
+          taskId: "ax42abcd",
+          agentType: "general-purpose",
+        },
+      } as never,
+      { isPartial: false, expanded: false },
+      tagTheme() as never,
+      {} as never,
+    );
+    const blob = renderToString(out);
+    expect(blob).toContain("backgrounded");
+    expect(blob).toContain("ax42abcd");
+  });
+
+  it("collapsed terminal: head + (N events · Ctrl+O) hint", () => {
+    const renderResult = getRenderResult();
+    const out = renderResult(
+      {
+        content: [{ type: "text", text: "全部找到了" }],
+        details: {
+          action: "task_agent",
+          status: "completed",
+          agentType: "general-purpose",
+          description: "find auth bugs",
+          toolCallCount: 3,
+          tokenCount: 12300,
+          durationMs: 83000,
+          timeline: [
+            { kind: "task_start", ts: 0, summary: "start" },
+            { kind: "tool_start", ts: 1, summary: "bash(...)" },
+            { kind: "tool_end", ts: 2, summary: "bash → 3 hits", isError: false },
+          ],
+        },
+      } as never,
+      { isPartial: false, expanded: false },
+      tagTheme() as never,
+      {} as never,
+    );
+    const blob = renderToString(out);
+    // Head row carries the success glyph, agent type, and stats.
+    expect(blob).toContain("✓");
+    expect(blob).toContain("[success]");
+    expect(blob).toContain("general-purpose");
+    expect(blob).toContain("find auth bugs");
+    expect(blob).toContain("3 tools");
+    expect(blob).toContain("12.3k tokens");
+    expect(blob).toContain("1m 23s");
+    // Hint is dim and references Ctrl+O.
+    expect(blob).toContain("3 events");
+    expect(blob).toContain("Ctrl+O");
+    // Final text is NOT painted in collapsed mode.
+    expect(blob).not.toContain("全部找到了");
+  });
+
+  it("collapsed with empty timeline → head only (no Ctrl+O hint)", () => {
+    const renderResult = getRenderResult();
+    const out = renderResult(
+      {
+        content: [{ type: "text", text: "" }],
+        details: {
+          action: "task_agent",
+          status: "completed",
+          agentType: "general-purpose",
+          toolCallCount: 0,
+          tokenCount: 0,
+          durationMs: 0,
+          timeline: [],
+        },
+      } as never,
+      { isPartial: false, expanded: false },
+      tagTheme() as never,
+      {} as never,
+    );
+    const blob = renderToString(out);
+    expect(blob).toContain("general-purpose");
+    expect(blob).not.toContain("Ctrl+O");
+    expect(blob).not.toContain("events");
+  });
+
+  it("expanded: head + timeline rows + ── final ── + finalText", () => {
+    const renderResult = getRenderResult();
+    const out = renderResult(
+      {
+        content: [{ type: "text", text: "完成报告:三处修复" }],
+        details: {
+          action: "task_agent",
+          status: "completed",
+          agentType: "general-purpose",
+          description: "audit",
+          toolCallCount: 1,
+          tokenCount: 100,
+          durationMs: 1000,
+          timeline: [
+            { kind: "task_start", ts: 0, summary: "general-purpose → audit" },
+            { kind: "tool_start", ts: 1, summary: "grep(\"oldAuth\")" },
+            { kind: "tool_end", ts: 2, summary: "grep → 5 hits", isError: false },
+            { kind: "task_end", ts: 3, summary: "done (turns=2, tools=1)" },
+          ],
+        },
+      } as never,
+      { isPartial: false, expanded: true },
+      tagTheme() as never,
+      {} as never,
+    );
+    const blob = renderToString(out);
+    expect(blob).toContain("general-purpose → audit");
+    expect(blob).toContain("grep(\"oldAuth\")");
+    expect(blob).toContain("grep → 5 hits");
+    expect(blob).toContain("done (turns=2, tools=1)");
+    expect(blob).toContain("── final ──");
+    expect(blob).toContain("完成报告:三处修复");
+    // Expanded mode should NOT show the Ctrl+O hint.
+    expect(blob).not.toContain("Ctrl+O");
+  });
+
+  it("status=killed → ■ glyph painted with warning color", () => {
+    const renderResult = getRenderResult();
+    const out = renderResult(
+      {
+        content: [{ type: "text", text: "" }],
+        details: {
+          action: "task_agent",
+          status: "killed",
+          agentType: "general-purpose",
+          toolCallCount: 0,
+          tokenCount: 0,
+          durationMs: 0,
+          timeline: [],
+        },
+      } as never,
+      { isPartial: false, expanded: false },
+      tagTheme() as never,
+      {} as never,
+    );
+    const blob = renderToString(out);
+    expect(blob).toContain("■");
+    expect(blob).toContain("[warning]");
+  });
+
+  it("status=failed → ✗ glyph painted with error color", () => {
+    const renderResult = getRenderResult();
+    const out = renderResult(
+      {
+        content: [{ type: "text", text: "" }],
+        details: {
+          action: "task_agent",
+          status: "failed",
+          agentType: "general-purpose",
+          toolCallCount: 0,
+          tokenCount: 0,
+          durationMs: 0,
+          timeline: [],
+        },
+      } as never,
+      { isPartial: false, expanded: false },
+      tagTheme() as never,
+      {} as never,
+    );
+    const blob = renderToString(out);
+    expect(blob).toContain("✗");
+    expect(blob).toContain("[error]");
+  });
+
+  it("renderCall paints task_agent + bold accent label + dim description", () => {
+    const tool = buildTaskAgentTool(fakePi, createTaskStore());
+    expect(typeof tool.renderCall).toBe("function");
+    const out = tool.renderCall!(
+      { description: "audit", subagent_type: "general-purpose", prompt: "x" } as never,
+      tagTheme() as never,
+      {} as never,
+    );
+    const blob = renderToString(out);
+    expect(blob).toContain("task_agent");
+    expect(blob).toContain("[toolTitle]");
+    expect(blob).toContain("[accent]general-purpose");
+    expect(blob).toContain("[dim]audit");
+  });
+});
+
+describe("task_agent — sync result.timeline forwarded to details", () => {
+  it("sync completion → details.timeline + details.durationMs forwarded from spawner", async () => {
+    _setSpawnerForTest(
+      vi.fn().mockResolvedValue({
+        taskId: "a1",
+        status: "completed",
+        backgrounded: false,
+        agentType: "general-purpose",
+        finalText: "done",
+        toolCallCount: 2,
+        tokenCount: 100,
+        outputFile: "/tmp/a1.out",
+        durationMs: 5000,
+        timeline: [
+          { kind: "task_start", ts: 0, summary: "start" },
+          { kind: "tool_end", ts: 1, summary: "ok", isError: false },
+        ],
+      }),
+    );
+    const tool = buildTaskAgentTool(fakePi, createTaskStore());
+    const r = await callTool(tool, {
+      description: "test",
+      prompt: "y",
+      subagent_type: "general-purpose",
+    });
+    const details = r.details as {
+      timeline?: Array<{ kind: string }>;
+      durationMs?: number;
+      description?: string;
+    };
+    expect(details.timeline).toBeDefined();
+    expect(details.timeline).toHaveLength(2);
+    expect(details.durationMs).toBe(5000);
+    expect(details.description).toBe("test");
+  });
+});

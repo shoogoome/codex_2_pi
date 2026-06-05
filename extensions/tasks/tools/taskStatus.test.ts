@@ -96,4 +96,67 @@ describe("buildTaskStatusTool", () => {
     expect(tool.parameters).toBeDefined();
     expect(typeof tool.execute).toBe("function");
   });
+
+  describe("renderResult coloring", () => {
+    function tagTheme() {
+      return {
+        fg: (color: string, text: string) => `[${color}]${text}`,
+        bold: (text: string) => `<b>${text}</b>`,
+      };
+    }
+    function renderToString(component: unknown): string {
+      const c = component as { render?: (w: number) => string[] };
+      if (typeof c.render === "function") return c.render(200).join("\n");
+      return JSON.stringify(component);
+    }
+
+    it("isPartial → 'task_status running…' dim line", () => {
+      const tool = buildTaskStatusTool(createTaskStore());
+      const out = tool.renderResult!(
+        { content: [{ type: "text", text: "x" }], details: { action: "status", output_delta: "", next_offset: 0, total_size: 0 } },
+        { isPartial: true, expanded: false },
+        tagTheme() as never,
+        {} as never,
+      );
+      const blob = renderToString(out);
+      expect(blob).toContain("running");
+      expect(blob).toContain("[dim]");
+    });
+
+    it("collapsed status header colors the glyph by outcome and bolds the tool name", () => {
+      const tool = buildTaskStatusTool(createTaskStore());
+      // Long body to trigger the hidden-hint code path.
+      const text = ["completed (local_bash) — task done", "line2", "line3", "line4"].join("\n");
+      const out = tool.renderResult!(
+        {
+          content: [{ type: "text", text }],
+          details: { action: "status", status: "completed", output_delta: "", next_offset: 0, total_size: 0 },
+        },
+        { isPartial: false, expanded: false },
+        tagTheme() as never,
+        {} as never,
+      );
+      const blob = renderToString(out);
+      expect(blob).toContain("[success]✓");
+      expect(blob).toContain("[toolTitle]task_status");
+      expect(blob).toContain("Ctrl+O");
+      expect(blob).not.toContain("line3");
+    });
+
+    it("status=killed → ■ glyph painted with warning color", () => {
+      const tool = buildTaskStatusTool(createTaskStore());
+      const text = ["killed (local_bash) — bye", "line2", "line3"].join("\n");
+      const out = tool.renderResult!(
+        {
+          content: [{ type: "text", text }],
+          details: { action: "status", status: "killed", output_delta: "", next_offset: 0, total_size: 0 },
+        },
+        { isPartial: false, expanded: false },
+        tagTheme() as never,
+        {} as never,
+      );
+      const blob = renderToString(out);
+      expect(blob).toContain("[warning]■");
+    });
+  });
 });

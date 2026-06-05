@@ -38,6 +38,7 @@ export interface TaskPanelEntry {
 
 export interface TaskPanelTheme {
   fg(color: string, text: string): string;
+  bold?(text: string): string;
 }
 
 export interface TaskPanelRenderOptions {
@@ -118,6 +119,7 @@ export function renderTaskPanel(
     const elapsed = formatDuration(now - task.startTime);
     const tokens = formatTokens(task.tokenCount ?? 0);
     const typeBadge = task.type;
+    const bold = theme.bold ?? ((x: string) => x);
     // Only surface lastTool while running — on terminal status the row already
     // says completed/failed/killed; appending "→ bash" would imply still working.
     const showLastTool = task.lastTool && task.status === "running";
@@ -130,12 +132,18 @@ export function renderTaskPanel(
       const prefixSel = isSelected
         ? theme.fg("accent", "▶ ")
         : "  ";
+      // Selected row puts agent type in toolTitle bold + accent; description
+      // gets accent color. Unselected rows: type in dim toolTitle, description
+      // in default text color. Aligns with claudecode tool-call rendering.
+      const typeBadgeColored = isSelected
+        ? bold(theme.fg("toolTitle", typeBadge))
+        : theme.fg("muted", typeBadge);
       const nameColor = isSelected ? "accent" : "text";
       const toolPartColored = showLastTool
         ? `  ${theme.fg("accent", `→ ${task.lastTool}`)}`
         : "";
       lines.push(
-        `${prefixSel}${theme.fg(glyphColor, glyph)}  ${theme.fg("muted", typeBadge)}  ${theme.fg(nameColor, task.description)}${toolPartColored}  ${theme.fg("dim", elapsed)}  ${theme.fg("dim", `↓ ${tokens}`)}`,
+        `${prefixSel}${theme.fg(glyphColor, glyph)}  ${typeBadgeColored}  ${theme.fg(nameColor, task.description)}${toolPartColored}  ${theme.fg("dim", elapsed)}  ${theme.fg("dim", `↓ ${tokens}`)}`,
       );
       continue;
     }

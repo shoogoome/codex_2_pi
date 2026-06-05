@@ -305,4 +305,53 @@ describe("renderTaskPanel", () => {
       lines.some((l) => l.includes("→") && l.includes("搜索文件")),
     ).toBe(true);
   });
+
+  it("selected row: type badge uses bold + toolTitle color, description uses accent", () => {
+    // Color-token regression — the panel widget was previously painted in
+    // dim across the board which tipped users toward "everything looks the
+    // same". Selected rows now bold-accent the type badge + accent-color
+    // the description so the focus row stands out.
+    const tagTheme = {
+      fg: (color: string, text: string) => `[${color}]${text}`,
+      bold: (text: string) => `<b>${text}</b>`,
+    };
+    const lines = renderTaskPanel(
+      [
+        makeEntry({ id: "a", description: "alpha", startTime: 0 }),
+        makeEntry({ id: "b", description: "beta", startTime: 1 }),
+      ],
+      {
+        width: 200,
+        focused: true,
+        selectedTaskId: "b",
+        theme: tagTheme,
+        now: 1000,
+      },
+    );
+    const betaRow = lines.find((l) => l.includes("beta"))!;
+    const alphaRow = lines.find((l) => l.includes("alpha"))!;
+    expect(betaRow).toContain("[toolTitle]local_agent");
+    expect(betaRow).toContain("<b>");
+    expect(betaRow).toContain("[accent]beta");
+    // Unselected row keeps the muted type badge + default text description.
+    expect(alphaRow).toContain("[muted]local_agent");
+    expect(alphaRow).toContain("[text]alpha");
+  });
+
+  it("status glyphs colored by outcome (running=muted, completed=success, failed=error)", () => {
+    const tagTheme = {
+      fg: (color: string, text: string) => `[${color}]${text}`,
+    };
+    const lines = renderTaskPanel(
+      [
+        makeEntry({ id: "a", description: "running task", status: "running", startTime: 0 }),
+        makeEntry({ id: "b", description: "done task", status: "completed", startTime: 1 }),
+        makeEntry({ id: "c", description: "boom task", status: "failed", startTime: 2 }),
+      ],
+      { width: 200, theme: tagTheme, now: 1000 },
+    );
+    expect(lines.find((l) => l.includes("running task"))).toContain("[muted]○");
+    expect(lines.find((l) => l.includes("done task"))).toContain("[success]●");
+    expect(lines.find((l) => l.includes("boom task"))).toContain("[error]✗");
+  });
 });

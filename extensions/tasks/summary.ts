@@ -58,16 +58,12 @@ export function emitTaskSummary(
       {
         customType: TASK_SUMMARY_CUSTOM_TYPE,
         content: details.description ?? details.agentType ?? details.taskType,
-        // display:false — main-stream noise removal. The terminal status
-        // is already conveyed by the task_agent / task_bash tool result
-        // (sub-agent finalText / shell output head) which Pi paints in
-        // the same conversation slot. A second "completed" line was
-        // strictly redundant per user feedback.
-        //
-        // The customMessage still hits the session jsonl so future tooling
-        // (debug, hydrate, RPC consumers that want structured event logs)
-        // can read it. Only the main-stream paint is suppressed.
-        display: false,
+        // display:true — the summary IS the user-visible "this task is
+        // done" line in the TUI. The renderer collapses to a head line
+        // with Ctrl+O to expand into the full timeline. The leader LLM
+        // does NOT see this entry (installTaskSummaryContextFilter
+        // strips it from the provider request payload).
+        display: true,
         details,
       } as never,
       { triggerTurn: false },

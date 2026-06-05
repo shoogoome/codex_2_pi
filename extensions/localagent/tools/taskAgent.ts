@@ -1,12 +1,21 @@
-import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentToolResult,
+  ExtensionAPI,
+  ExtensionContext,
+  Theme,
+  ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
+import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { TaskStore } from "../../tasks/taskStore.js";
+import { formatDuration, formatTokens } from "../../tasks/format-utils.js";
 import { killLocalAgentTask } from "../kill.js";
 import {
   spawnLocalAgent as _spawn,
   type SpawnLocalAgentOptions,
   type SpawnLocalAgentProgressSnapshot,
   type SpawnLocalAgentResult,
+  type SpawnLocalAgentTimelineEntry,
 } from "../spawnLocalAgent.js";
 import { getBuiltInAgents, FORK_AGENT } from "../agentDefinitions/builtIn.js";
 import { mergeAgentDefinitions, getAgentDefinition } from "../agentDefinitions/resolve.js";
@@ -88,6 +97,8 @@ interface TaskAgentDetails {
    */
   timeline?: SpawnLocalAgentProgressSnapshot["timeline"];
   description?: string;
+  /** End-of-run wall-clock duration (sync path / background finalizer). */
+  durationMs?: number;
   /** teammate-mode only: stable agent identity (`<name>@<team>`). */
   agentId?: string;
   /** teammate-mode only: persisted JSONL session file for the teammate. */
@@ -444,6 +455,12 @@ export function buildTaskAgentTool(
             isBackgrounded: false,
             toolCallCount: result.toolCallCount,
             tokenCount: result.tokenCount,
+            // Carry the timeline + duration from the spawn result so
+            // renderResult can paint a head + Ctrl+O expanded view without
+            // round-tripping back through the disk output file.
+            timeline: result.timeline,
+            durationMs: result.durationMs,
+            description: params.description,
           },
         };
       } catch (e) {
@@ -455,7 +472,155 @@ export function buildTaskAgentTool(
         if (signal) signal.removeEventListener("abort", onAbort);
       }
     },
+    /**
+     * Compact rendering — same head + Ctrl+O expand pattern as task_bash /
+     * task_status. Without this Pi paints the FULL finalText (often a
+     * many-paragraph sub-agent report) as one massive tool-result block in
+     * the main stream. The leader LLM still receives the complete finalText
+     * via `result.content[0].text`; this only changes the TUI surface.
+     */
+    renderCall(args, theme) {
+      const t = isThemeWithFg(theme) ? theme : { fg: (_c: string, x: string) => x, bold: (x: string) => x };
+      const a = args as { description?: unknown; subagent_type?: unknown };
+      const desc = typeof a.description === "string" ? a.description : "";
+      const sub = typeof a.subagent_type === "string" ? a.subagent_type : "agent";
+      const label = (t.bold ?? ((x: string) => x))(t.fg("toolTitle", "task_agent"));
+      const tail = ` ${t.fg("accent", sub)}${desc ? ` ${t.fg("dim", "·")} ${t.fg("dim", desc)}` : ""}`;
+      return new Text(`${label}${tail}`, 0, 0);
+    },
+    renderResult(result, options, theme) {
+      return renderTaskAgentResult(result as AgentToolResult<TaskAgentDetails>, options, theme);
+    },
   };
+}
+
+interface RenderTheme {
+  fg(color: string, text: string): string;
+  bold?(text: string): string;
+}
+
+function isThemeWithFg(t: unknown): t is RenderTheme {
+  return typeof (t as { fg?: unknown } | null)?.fg === "function";
+}
+
+function statusGlyph(status: string | undefined): { glyph: string; color: string } {
+  if (status === "completed") return { glyph: "✓", color: "success" };
+  if (status === "killed") return { glyph: "■", color: "warning" };
+  if (status === "failed") return { glyph: "✗", color: "error" };
+  if (status === "running") return { glyph: "◐", color: "warning" };
+  return { glyph: "?", color: "muted" };
+}
+
+function timelineGlyph(e: SpawnLocalAgentTimelineEntry): { glyph: string; color: string } {
+  switch (e.kind) {
+    case "task_start":
+      return { glyph: "▶", color: "accent" };
+    case "tool_start":
+      return { glyph: "●", color: "accent" };
+    case "tool_end":
+      return e.isError ? { glyph: "✗", color: "error" } : { glyph: "✓", color: "success" };
+    case "task_end":
+      return { glyph: "✓", color: "success" };
+    case "kill":
+      return { glyph: "■", color: "warning" };
+    default:
+      return { glyph: "·", color: "dim" };
+  }
+}
+
+function buildHead(d: TaskAgentDetails, theme: RenderTheme): string {
+  const { glyph, color } = statusGlyph(d.status);
+  const agentLabel = d.agentType ?? "agent";
+  const desc = d.description ?? "";
+  const stats: string[] = [];
+  if ((d.toolCallCount ?? 0) > 0) {
+    const n = d.toolCallCount ?? 0;
+    stats.push(`${n} tool${n === 1 ? "" : "s"}`);
+  }
+  if ((d.tokenCount ?? 0) > 0) stats.push(formatTokens(d.tokenCount ?? 0));
+  if ((d.durationMs ?? 0) > 0) stats.push(formatDuration(d.durationMs ?? 0));
+  const dot = ` ${theme.fg("dim", "·")} `;
+  const bold = theme.bold ?? ((x: string) => x);
+  const head = `${theme.fg(color, glyph)} ${bold(theme.fg(color, agentLabel))}`;
+  const subtitle = desc ? `${dot}${theme.fg("dim", desc)}` : "";
+  const statsLine = stats.length > 0
+    ? `${dot}${stats.map((s) => theme.fg("dim", s)).join(dot)}`
+    : "";
+  return `${head}${subtitle}${statsLine}`;
+}
+
+/**
+ * Render the task_agent tool result in claudecode style: a single colored head
+ * line with status glyph + agent type + description + stats; collapsed mode
+ * adds a "(N events · Ctrl+O to expand)" hint; expanded mode renders the full
+ * timeline + the sub-agent's final text below a `── final ──` separator. The
+ * leader LLM still consumes the full finalText via `result.content[0].text`;
+ * this function only affects the TUI surface.
+ */
+function renderTaskAgentResult(
+  result: AgentToolResult<TaskAgentDetails>,
+  options: { isPartial: boolean; expanded: boolean },
+  theme: Theme,
+) {
+  const t: RenderTheme = isThemeWithFg(theme)
+    ? (theme as unknown as RenderTheme)
+    : { fg: (_c, x) => x };
+  const details = (result.details ?? { action: "task_agent" }) as TaskAgentDetails;
+
+  // Streaming partial — single dim line; the panel widget already shows
+  // live status (lastTool / token count) so we don't repaint the timeline here.
+  if (options.isPartial) {
+    const agent = details.agentType ?? "agent";
+    const desc = details.description ?? "";
+    const events = details.timeline?.length ?? 0;
+    const tail = desc ? ` ${desc}` : "";
+    return new Text(t.fg("dim", `task_agent running… ${agent}${tail} · ${events} events`), 0, 0);
+  }
+
+  // Backgrounded — anchor with a single dim line; output lives on disk and is
+  // surfaced via task_status.
+  if (details.isBackgrounded === true) {
+    const tid = details.taskId ?? "?";
+    return new Text(t.fg("dim", `task_agent backgrounded (taskId=${tid})`), 0, 0);
+  }
+
+  const head = buildHead(details, t);
+  const finalText = (result.content?.[0] as { text?: string } | undefined)?.text ?? "";
+  const timeline = details.timeline ?? [];
+
+  if (options.expanded) {
+    const box = new Box(0, 0);
+    box.addChild(new Text(head, 0, 0));
+    for (const e of timeline) {
+      const { glyph, color } = timelineGlyph(e);
+      box.addChild(
+        new Text(
+          `  ${t.fg("dim", "⎿")} ${t.fg(color, glyph)} ${t.fg("dim", e.summary)}`,
+          0,
+          0,
+        ),
+      );
+    }
+    if (finalText) {
+      box.addChild(new Text("", 0, 0));
+      box.addChild(new Text(t.fg("dim", "── final ──"), 0, 0));
+      box.addChild(new Text(finalText, 0, 0));
+    }
+    return box;
+  }
+
+  // Collapsed — head + (optional) Ctrl+O hint.
+  if (timeline.length === 0 && !finalText) {
+    return new Text(head, 0, 0);
+  }
+  const eventCount = timeline.length;
+  const hint = eventCount > 0
+    ? t.fg("dim", `(${eventCount} events · Ctrl+O to expand)`)
+    : t.fg("dim", "(Ctrl+O to expand)");
+  const box = new Box(0, 0);
+  box.addChild(new Text(head, 0, 0));
+  box.addChild(new Text(`  ${hint}`, 0, 0));
+  return box;
 }
 
 function errResult(message: string) {

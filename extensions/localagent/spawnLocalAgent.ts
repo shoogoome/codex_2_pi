@@ -42,7 +42,6 @@ import {
 } from "../tasks/Task.js";
 import { notifyTaskTerminal } from "../tasks/notifications.js";
 import { emitTaskProgress } from "../tasks/progress.js";
-import { emitTaskSummary, type TaskSummaryDetails } from "../tasks/summary.js";
 import { logError } from "../tasks/logging.js";
 
 import type { AgentDefinition, LocalAgentTaskState } from "./types.js";
@@ -122,6 +121,12 @@ export interface SpawnLocalAgentResult {
   agentType: string;
   outputFile: string;
   durationMs?: number;
+  /**
+   * Full progress timeline captured during the run. Present on completed/failed
+   * sync + background-finalizer results so the task_agent renderResult can paint
+   * an expanded timeline view (Ctrl+O) without round-tripping back to disk.
+   */
+  timeline?: SpawnLocalAgentTimelineEntry[];
 }
 
 // ---------- SDK injection ----------
@@ -436,7 +441,12 @@ export async function spawnLocalAgent(
       extra: { agentType: opts.agentDef.agentType, ...getProgress(taskId) },
     });
     const tokenCount = getProgress(taskId)?.tokenCount ?? 0;
-    emitSummaryFor(statusVal, tokenCount);
+    // NOTE (terminal-summary removal): a `tasks/summary` customMessage used to
+    // be emitted here. The task_agent tool's renderResult now owns the
+    // user-visible "this task is done" line in the TUI (head + Ctrl+O expand
+    // timeline), so a second main-stream row was redundant. The summary
+    // module is kept (no caller is active) for future task types that want
+    // to surface a structured terminal entry of their own.
     try {
       session.dispose();
     } catch (e) {
@@ -454,6 +464,7 @@ export async function spawnLocalAgent(
       agentType: opts.agentDef.agentType,
       outputFile,
       durationMs: Date.now() - initial.startTime,
+      timeline: timeline.slice(),
     };
   };
 
@@ -484,7 +495,7 @@ export async function spawnLocalAgent(
       triggerTurn: true,
       extra: { agentType: opts.agentDef.agentType, ...getProgress(taskId) },
     });
-    emitSummaryFor("completed", getProgress(taskId)?.tokenCount ?? 0);
+    // NOTE: see note in finalize() — `tasks/summary` is no longer emitted here.
     try {
       session.dispose();
     } catch (e) {
@@ -494,32 +505,11 @@ export async function spawnLocalAgent(
     void evictTaskOutput(taskId);
   };
 
-  // One-shot summary writer for terminal transitions reachable from this closure
-  // (completed/failed). Killed transitions are emitted from kill.ts because
-  // kill is initiated externally and cannot see this closure's timeline.
-  function emitSummaryFor(
-    status: "completed" | "failed",
-    tokenCount: number,
-  ): void {
-    const summary: TaskSummaryDetails = {
-      taskId,
-      taskType: "local_agent",
-      status,
-      description,
-      agentType: opts.agentDef.agentType,
-      toolCallCount: toolCount,
-      tokenCount,
-      durationMs: Date.now() - initial.startTime,
-      timeline: timeline.map((e) => ({
-        kind: e.kind,
-        summary: e.summary,
-        isError: e.isError,
-        ts: e.ts,
-      })),
-      ts: Date.now(),
-    };
-    emitTaskSummary(pi, summary);
-  }
+  // (terminal-summary removal): emitSummaryFor used to publish a `tasks/summary`
+  // customMessage for completed/failed transitions. The task_agent tool's
+  // renderResult now owns the user-visible terminal row in the TUI, so a second
+  // main-stream entry was redundant. Killed transitions previously emitted from
+  // kill.ts are also gone for the same reason.
 
   // 6. forced background path: return immediately, sub keeps running.
   if (forceBg) {

@@ -94,6 +94,10 @@ export function buildTaskStatusTool(store: TaskStore): ToolDefinition<typeof Tas
      * file) as one massive tool-result block per task_status call. Showing
      * only the status header keeps the main stream readable; users (and
      * the LLM, when it's actually debugging) can hit Ctrl+O to expand.
+     *
+     * Coloring follows the claudecode palette: status glyph (✓/✗/■/◐) is
+     * colored by outcome, the tool-name label is bold accent, and the
+     * trailing "lines hidden / Ctrl+O" hint stays dim.
      */
     renderResult(
       result: AgentToolResult<TaskStatusDetails>,
@@ -103,26 +107,45 @@ export function buildTaskStatusTool(store: TaskStore): ToolDefinition<typeof Tas
       const t: RenderTheme = isThemeWithFg(theme)
         ? (theme as unknown as RenderTheme)
         : { fg: (_c, x) => x };
+      const bold = t.bold ?? ((x: string) => x);
       if (options.isPartial) {
         return new Text(t.fg("dim", "task_status running…"), 0, 0);
       }
       const text = (result.content?.[0] as { text?: string } | undefined)?.text ?? "";
       const lines = text.split(/\r?\n/);
+      const status = result.details?.status;
+      const { glyph, color } = statusGlyph(status);
+      const headRaw = lines[0] ?? "";
+      // Pre-compose a colored head line: [glyph] [task_status] — [headRaw].
+      const headColored =
+        `${t.fg(color, glyph)} ` +
+        `${bold(t.fg("toolTitle", "task_status"))} ` +
+        `${t.fg("dim", "·")} ` +
+        `${t.fg("dim", headRaw)}`;
       // Short result (just the status header line, no output_delta) — render
       // inline as-is so users still see what the LLM saw without an extra
       // expand keystroke.
       if (lines.length <= HEAD_LINES + 1) {
-        return new Text(t.fg("dim", text), 0, 0);
+        return new Text(headColored, 0, 0);
       }
       if (options.expanded) {
-        return new Text(t.fg("dim", text), 0, 0);
+        // Head colored; body kept dim so it visually nests under the head.
+        const body = lines.slice(HEAD_LINES).join("\n");
+        return new Text(`${headColored}\n${t.fg("dim", body)}`, 0, 0);
       }
-      const head = lines.slice(0, HEAD_LINES).join("\n");
       const hidden = lines.length - HEAD_LINES;
       const summary =
-        `${t.fg("dim", head)}\n` +
+        `${headColored}\n` +
         t.fg("dim", `… (${hidden} lines hidden · Ctrl+O to expand)`);
       return new Text(summary, 0, 0);
     },
   };
+}
+
+function statusGlyph(status: string | undefined): { glyph: string; color: string } {
+  if (status === "completed") return { glyph: "✓", color: "success" };
+  if (status === "killed") return { glyph: "■", color: "warning" };
+  if (status === "failed") return { glyph: "✗", color: "error" };
+  if (status === "running") return { glyph: "◐", color: "warning" };
+  return { glyph: "○", color: "muted" };
 }
