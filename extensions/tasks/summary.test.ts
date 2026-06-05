@@ -40,7 +40,7 @@ describe("emitTaskSummary", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
     const [msg, opts] = sendMessage.mock.calls[0]!;
     expect(msg.customType).toBe(TASK_SUMMARY_CUSTOM_TYPE);
-    expect(msg.display).toBe(true);
+    expect(msg.display).toBe(false);
     expect(msg.details.taskId).toBe("ax12abcd");
     expect(msg.details.status).toBe("completed");
     expect(msg.details.toolCallCount).toBe(3);
@@ -123,7 +123,7 @@ describe("registerTaskSummaryRenderer", () => {
       ts: 1,
     };
     const out = renderer(
-      { customType: TASK_SUMMARY_CUSTOM_TYPE, content: "do work", display: true, details },
+      { customType: TASK_SUMMARY_CUSTOM_TYPE, content: "do work", display: false, details },
       { expanded: false },
       buildFakeTheme(),
     );
@@ -153,7 +153,7 @@ describe("registerTaskSummaryRenderer", () => {
       ts: 1,
     };
     const out = renderer(
-      { customType: TASK_SUMMARY_CUSTOM_TYPE, content: "x", display: true, details },
+      { customType: TASK_SUMMARY_CUSTOM_TYPE, content: "x", display: false, details },
       { expanded: false },
       buildFakeTheme(),
     );
@@ -178,7 +178,7 @@ describe("registerTaskSummaryRenderer", () => {
       ts: 1,
     };
     const out = renderer(
-      { customType: TASK_SUMMARY_CUSTOM_TYPE, content: "do work", display: true, details },
+      { customType: TASK_SUMMARY_CUSTOM_TYPE, content: "do work", display: false, details },
       { expanded: true },
       buildFakeTheme(),
     );
@@ -201,7 +201,7 @@ describe("registerTaskSummaryRenderer", () => {
       {
         customType: TASK_SUMMARY_CUSTOM_TYPE,
         content: "boom",
-        display: true,
+        display: false,
         details: {
           taskId: "ax12",
           taskType: "local_agent",
@@ -224,7 +224,7 @@ describe("registerTaskSummaryRenderer", () => {
       {
         customType: TASK_SUMMARY_CUSTOM_TYPE,
         content: "stop",
-        display: true,
+        display: false,
         details: {
           taskId: "ax12",
           taskType: "local_agent",
@@ -247,7 +247,7 @@ describe("registerTaskSummaryRenderer", () => {
   it("renderer returns undefined when message has no details", () => {
     const renderer = captureRenderer();
     const out = renderer(
-      { customType: TASK_SUMMARY_CUSTOM_TYPE, content: "no details", display: true },
+      { customType: TASK_SUMMARY_CUSTOM_TYPE, content: "no details", display: false },
       { expanded: false },
       buildFakeTheme(),
     );

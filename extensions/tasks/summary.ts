@@ -58,7 +58,16 @@ export function emitTaskSummary(
       {
         customType: TASK_SUMMARY_CUSTOM_TYPE,
         content: details.description ?? details.agentType ?? details.taskType,
-        display: true,
+        // display:false — main-stream noise removal. The terminal status
+        // is already conveyed by the task_agent / task_bash tool result
+        // (sub-agent finalText / shell output head) which Pi paints in
+        // the same conversation slot. A second "completed" line was
+        // strictly redundant per user feedback.
+        //
+        // The customMessage still hits the session jsonl so future tooling
+        // (debug, hydrate, RPC consumers that want structured event logs)
+        // can read it. Only the main-stream paint is suppressed.
+        display: false,
         details,
       } as never,
       { triggerTurn: false },

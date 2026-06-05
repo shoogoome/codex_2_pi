@@ -344,6 +344,15 @@ export function buildTaskAgentTool(
       //
       // We also use the first snapshot to capture `runningTaskId` so that an
       // abort signal arriving mid-run can target the right LocalAgent task.
+      //
+      // Note (UX): we deliberately push a SHORT one-liner as the partial
+      // text — NOT the full timeline. Sub-agent tool calls already surface
+      // live in the task panel widget (lastTool / token count) and the
+      // tasks/summary customMessage covers terminal state. Dumping the full
+      // timeline here would re-create the very main-stream-spam we removed
+      // when we set tasks/progress display:false. The verbose timeline is
+      // still kept in `details.timeline` so callers (RPC consumers, JSON
+      // mode, debug tooling) can inspect the structured event log.
       let runningTaskId: string | undefined;
       const onProgress = (snap: SpawnLocalAgentProgressSnapshot): void => {
         if (runningTaskId === undefined) {
@@ -351,8 +360,14 @@ export function buildTaskAgentTool(
           if (signal?.aborted) onAbort();
         }
         try {
+          // Compact running-status line — same shape as the panel widget
+          // shows (agent type · description · current tool / count). Pi's
+          // default tool-result rendering will paint exactly this one line
+          // while running, replaced by the final result when the agent
+          // completes.
+          const partialText = `${snap.agentType} — ${snap.description} · ${snap.timeline.length} events`;
           onUpdate?.({
-            content: [{ type: "text", text: renderTimeline(snap) }],
+            content: [{ type: "text", text: partialText }],
             details: {
               action: "task_agent",
               taskId: snap.taskId,
