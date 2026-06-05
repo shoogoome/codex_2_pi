@@ -21,7 +21,7 @@ describe("emitTaskProgress", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
     const [msg, opts] = sendMessage.mock.calls[0]!;
     expect(msg.customType).toBe(TASK_PROGRESS_CUSTOM_TYPE);
-    expect(msg.display).toBe(true);
+    expect(msg.display).toBe(false);
     expect(msg.content).toBe("grep(\"foo\")");
     expect(msg.details.taskId).toBe("ax12abcd");
     expect(msg.details.kind).toBe("tool_start");
@@ -95,7 +95,7 @@ describe("registerTaskProgressRenderer", () => {
       ts: 1,
     };
     const out = capturedRenderer!(
-      { customType: TASK_PROGRESS_CUSTOM_TYPE, content: "grep(\"foo\")", display: true, details },
+      { customType: TASK_PROGRESS_CUSTOM_TYPE, content: "grep(\"foo\")", display: false, details },
       { expanded: false },
       buildFakeTheme(),
     );
@@ -121,7 +121,7 @@ describe("registerTaskProgressRenderer", () => {
       ts: 1,
     };
     const out = capturedRenderer!(
-      { customType: TASK_PROGRESS_CUSTOM_TYPE, content: "done", display: true, details },
+      { customType: TASK_PROGRESS_CUSTOM_TYPE, content: "done", display: false, details },
       { expanded: true },
       buildFakeTheme(),
     );
@@ -137,7 +137,7 @@ describe("registerTaskProgressRenderer", () => {
     } as never;
     registerTaskProgressRenderer(pi);
     const out = capturedRenderer!(
-      { customType: TASK_PROGRESS_CUSTOM_TYPE, content: "fallback", display: true },
+      { customType: TASK_PROGRESS_CUSTOM_TYPE, content: "fallback", display: false },
       { expanded: false },
       buildFakeTheme(),
     );

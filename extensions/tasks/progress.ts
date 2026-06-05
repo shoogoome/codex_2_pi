@@ -73,7 +73,19 @@ export function emitTaskProgress(
       {
         customType: TASK_PROGRESS_CUSTOM_TYPE,
         content: details.summary,
-        display: true,
+        // display:false — the data plane only. Pi's interactive mode skips
+        // chatContainer.addChild for custom messages whose `display` is false,
+        // so this never paints to the main stream — even though the entry
+        // still hits the session jsonl (used by hydrate / debug). Live
+        // progress surfaces via the task panel widget; terminal status
+        // surfaces via the `tasks/summary` customType.
+        //
+        // Returning `undefined` from the message renderer is NOT enough —
+        // Pi's CustomMessageComponent has its own fallback rendering that
+        // shows the orange "[tasks/progress]" label + content text when the
+        // renderer hands back undefined. Setting display:false is the only
+        // way to truly suppress the visual.
+        display: false,
         details,
       } as never,
       { triggerTurn: false },
