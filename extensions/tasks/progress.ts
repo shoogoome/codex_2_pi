@@ -14,6 +14,7 @@
 // `tasks/summary` customType (one compact line + Ctrl+O to expand).
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { installCustomTypeContextFilter } from "./contextFilter.js";
 import { logError } from "./logging.js";
 import type { TaskType } from "./Task.js";
 
@@ -87,20 +88,14 @@ export function emitTaskProgress(
  * provider request payload. Pair with `emitTaskProgress` — if you emit but don't
  * install the filter, the LLM will see the progress entries.
  *
- * AgentMessage shape for custom messages: `{role:"custom", customType, content, ...}`.
- * This filter drops any message with `role==="custom"` and our customType.
+ * Thin wrapper over `installCustomTypeContextFilter` — kept as a named export so
+ * existing callers / tests don't have to change. The shared primitive is reused
+ * by `tasks/summary` (and any future debug-only customType).
  */
 export function installProgressContextFilter(
   pi: Pick<ExtensionAPI, "on">,
 ): void {
-  pi.on("context", (event) => {
-    const e = event as { messages: unknown[] };
-    const filtered = e.messages.filter((m: unknown) => {
-      const msg = m as { role?: string; customType?: string };
-      return !(msg.role === "custom" && msg.customType === TASK_PROGRESS_CUSTOM_TYPE);
-    });
-    return { messages: filtered as never };
-  });
+  installCustomTypeContextFilter(pi, TASK_PROGRESS_CUSTOM_TYPE);
 }
 
 // ---------- TUI Renderer ----------

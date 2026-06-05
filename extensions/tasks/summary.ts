@@ -14,6 +14,8 @@
 
 import type { ExtensionAPI, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { Box, Text, type Component } from "@earendil-works/pi-tui";
+import { installCustomTypeContextFilter } from "./contextFilter.js";
+import { formatDuration, formatTokens } from "./format-utils.js";
 import { logError } from "./logging.js";
 import type { TaskType } from "./Task.js";
 import type { TaskProgressKind } from "./progress.js";
@@ -75,25 +77,6 @@ function statusGlyph(status: TaskSummaryDetails["status"]): {
   if (status === "completed") return { glyph: "✓", color: "success" };
   if (status === "killed") return { glyph: "■", color: "warning" };
   return { glyph: "✗", color: "error" };
-}
-
-function formatTokens(n: number): string {
-  if (n <= 0) return "0 tokens";
-  if (n < 1000) return `${n} tokens`;
-  return `${(n / 1000).toFixed(1)}k tokens`;
-}
-
-function formatDuration(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  if (total < 60) return `${total}s`;
-  if (total < 3600) {
-    const m = Math.floor(total / 60);
-    const s = total % 60;
-    return `${m}m ${s}s`;
-  }
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  return `${h}h ${m}m`;
 }
 
 function themeBold(theme: Theme, value: string): string {
@@ -189,16 +172,12 @@ export function registerTaskSummaryRenderer(
  * Strip `tasks/summary` entries from the LLM context — leader doesn't need to re-read its
  * own task summaries; the sub-agent's `finalText` already returned via `task_agent`'s tool
  * result and the `tasks/notification` already carries the structured terminal status.
+ *
+ * Thin wrapper over `installCustomTypeContextFilter` — kept as a named export so existing
+ * callers / tests don't have to change.
  */
 export function installTaskSummaryContextFilter(
   pi: Pick<ExtensionAPI, "on">,
 ): void {
-  pi.on("context", (event) => {
-    const e = event as { messages: unknown[] };
-    const filtered = e.messages.filter((m: unknown) => {
-      const msg = m as { role?: string; customType?: string };
-      return !(msg.role === "custom" && msg.customType === TASK_SUMMARY_CUSTOM_TYPE);
-    });
-    return { messages: filtered as never };
-  });
+  installCustomTypeContextFilter(pi, TASK_SUMMARY_CUSTOM_TYPE);
 }

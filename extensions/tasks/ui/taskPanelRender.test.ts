@@ -274,4 +274,35 @@ describe("renderTaskPanel", () => {
     const row = lines.find((l) => l.includes("No tool yet"))!;
     expect(row).not.toContain("→");
   });
+
+  it("CJK lastTool — visibleWidth 内,不溢出", () => {
+    // Companion to the CJK description regression: lastTool is appended
+    // *after* truncation budget math, so a wide-glyph Chinese tool name
+    // ("搜索文件" → visibleWidth 8) must still leave the row within budget.
+    // Asserts the budget invariant AND that the arrow + tool name actually
+    // surface on the running row.
+    const tasks: TaskPanelEntry[] = [
+      makeEntry({
+        id: "t1",
+        type: "local_agent",
+        description: "短描述",
+        status: "running",
+        startTime: 1000,
+        toolCallCount: 0,
+        tokenCount: 0,
+        lastTool: "搜索文件",
+      }),
+    ];
+    const lines = renderTaskPanel(tasks, {
+      width: 80,
+      theme: NOOP_THEME,
+      now: 2000,
+    });
+    for (const line of lines) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(80);
+    }
+    expect(
+      lines.some((l) => l.includes("→") && l.includes("搜索文件")),
+    ).toBe(true);
+  });
 });

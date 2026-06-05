@@ -21,6 +21,7 @@
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { formatTokens } from "../../tasks/format-utils.js";
 import type { TeamStore } from "../teamStore.js";
 import type { TaskStore } from "../../tasks/taskStore.js";
 import type { ViewStateStore } from "./viewState.js";
@@ -61,13 +62,6 @@ export interface RenderTeamWidgetOptions {
 
 const DEFAULT_WIDTH = 80;
 const TITLE = "Team";
-
-function formatTokens(n: number): string {
-  if (n < 1000) {
-    return `${n} ${n === 1 ? "token" : "tokens"}`;
-  }
-  return `${(n / 1000).toFixed(1)}k tokens`;
-}
 
 function formatTurns(n: number): string {
   return `${n} ${n === 1 ? "turn" : "turns"}`;

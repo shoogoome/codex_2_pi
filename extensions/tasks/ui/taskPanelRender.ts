@@ -22,6 +22,7 @@
 // production callers leave it undefined and we use Date.now().
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { formatDuration, formatTokens } from "../format-utils.js";
 
 export interface TaskPanelEntry {
   id: string;
@@ -59,25 +60,6 @@ const TITLE = "Tasks";
 // ("Rendered line N exceeds terminal width").
 function truncate(s: string, width: number): string {
   return truncateToWidth(s, width, "…");
-}
-
-function formatTokens(n: number): string {
-  if (n <= 0) return "0 tokens";
-  if (n < 1000) return `${n} tokens`;
-  return `${(n / 1000).toFixed(1)}k tokens`;
-}
-
-function formatElapsed(elapsedMs: number): string {
-  const total = Math.max(0, Math.floor(elapsedMs / 1000));
-  if (total < 60) return `${total}s`;
-  if (total < 3600) {
-    const m = Math.floor(total / 60);
-    const s = total % 60;
-    return `${m}m ${s}s`;
-  }
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  return `${h}h ${m}m`;
 }
 
 function statusGlyph(status: string): { glyph: string; color: string } {
@@ -133,7 +115,7 @@ export function renderTaskPanel(
     const { glyph, color: glyphColor } = statusGlyph(task.status);
     const isSelected = options.selectedTaskId === task.id;
     const indent = isSelected ? "▶ " : "  ";
-    const elapsed = formatElapsed(now - task.startTime);
+    const elapsed = formatDuration(now - task.startTime);
     const tokens = formatTokens(task.tokenCount ?? 0);
     const typeBadge = task.type;
     // Only surface lastTool while running — on terminal status the row already
