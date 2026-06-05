@@ -272,4 +272,59 @@ describe("buildRequestPlanApprovalTool — validation + edge cases", () => {
     pending._store.get(parsed.request_id)!.resolve({ approve: true });
     await promise;
   });
+
+  it("AbortSignal already aborted: returns isError without delivering", async () => {
+    const localPending = makePending();
+    const localDelivered: DeliveredCall[] = [];
+    const localChannel = makeChannel(localDelivered);
+    const tool = buildRequestPlanApprovalTool({
+      identity,
+      pendingApprovals: localPending,
+      getLeaderChannel: () => localChannel,
+    });
+    const ac = new AbortController();
+    ac.abort();
+    const r = await tool.execute(
+      "c",
+      { plan: "do x" } as never,
+      ac.signal as never,
+      undefined,
+      {} as never,
+    );
+    expect((r as { isError?: boolean }).isError).toBe(true);
+    expect((r.content[0] as { text: string }).text).toMatch(/aborted/i);
+    expect(localDelivered).toHaveLength(0);
+    expect(localPending._store.size).toBe(0);
+  });
+
+  it("AbortSignal fires mid-wait: rejects pending entry and surfaces isError", async () => {
+    const localPending = makePending();
+    const localDelivered: DeliveredCall[] = [];
+    const localChannel = makeChannel(localDelivered);
+    const tool = buildRequestPlanApprovalTool({
+      identity,
+      pendingApprovals: localPending,
+      getLeaderChannel: () => localChannel,
+    });
+    const ac = new AbortController();
+    const promise = tool.execute(
+      "c",
+      { plan: "step 1" } as never,
+      ac.signal as never,
+      undefined,
+      {} as never,
+    );
+    // Allow microtask to register pending entry + deliver to leader.
+    await Promise.resolve();
+    expect(localDelivered).toHaveLength(1);
+    expect(localPending._store.size).toBe(1);
+    // User hits Esc — abort fires, listener rejects the pending promise.
+    ac.abort();
+    const r = await promise;
+    expect((r as { isError?: boolean }).isError).toBe(true);
+    expect((r.content[0] as { text: string }).text).toMatch(/aborted/i);
+    // Pending entry has been cleaned up — no leaked map entry that would
+    // leave the teammate's loop confused on a later plan_approval_response.
+    expect(localPending._store.size).toBe(0);
+  });
 });

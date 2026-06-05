@@ -52,26 +52,23 @@ describe("task_agent tool", () => {
     expect(desc).toMatch(/<example>/);
   });
 
-  it("description 含 claudecode 对齐的关键引导句(并发提示 + prompt 写作教学 + 例子)", () => {
-    // Regression guard: the description was rewritten (commit chasing the
-    // claudecode Task tool) so the LLM proactively dispatches sub-agents
-    // for parallel investigation. If anyone shrinks the prompt back to a
-    // routing-only blurb, these key sentences disappear and the LLM
-    // reverts to "I'll just grep myself" behavior. Keep the strings short
-    // enough that minor wording tweaks don't break the test, but specific
-    // enough that the load-bearing intent is preserved.
+  it("execute 在 signal 已 abort 时早返回 isError(Esc 在 task 启动前按)", async () => {
+    // Regression for the original bug where execute ignored its third arg
+    // (named _signal). The earliest-abort path is testable without
+    // spinning up a real LLM session.
     const tool = buildTaskAgentTool(fakePi, createTaskStore());
-    const desc = tool.description ?? "";
-    // Concurrency directive — the single most important behavioral nudge.
-    expect(desc).toMatch(/single message with multiple/i);
-    // Foreground vs background decision.
-    expect(desc).toMatch(/foreground/i);
-    expect(desc).toMatch(/background/i);
-    // Prompt-writing guidance.
-    expect(desc).toMatch(/Brief the agent like/i);
-    expect(desc).toMatch(/Never delegate understanding/i);
-    // At least one example block to prime the format.
-    expect(desc).toMatch(/<example>/);
+    const ac = new AbortController();
+    ac.abort();
+    const r = await tool.execute(
+      "call-1",
+      { description: "x", prompt: "y", subagent_type: "general-purpose" },
+      ac.signal,
+      undefined,
+      { cwd: process.cwd(), sessionManager: { getSessionFile: () => undefined } } as never,
+    );
+    expect((r as { isError?: boolean }).isError).toBe(true);
+    const text = (r.content[0] as { text: string }).text;
+    expect(text).toMatch(/aborted/i);
   });
 
   it("subagent_type 不存在 → isError + 列出可用名", async () => {

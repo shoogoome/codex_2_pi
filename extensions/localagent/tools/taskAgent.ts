@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { TaskStore } from "../../tasks/taskStore.js";
+import { killLocalAgentTask } from "../kill.js";
 import {
   spawnLocalAgent as _spawn,
   type SpawnLocalAgentOptions,
@@ -248,7 +249,7 @@ export function buildTaskAgentTool(
     description,
     parameters: TaskAgentParams,
     executionMode: "parallel",
-    async execute(_callId: unknown, raw: unknown, _signal, onUpdate, ctx: ExtensionContext) {
+    async execute(_callId: unknown, raw: unknown, signal: AbortSignal | undefined, onUpdate, ctx: ExtensionContext) {
       const params = raw as {
         description: string;
         prompt: string;
@@ -340,7 +341,15 @@ export function buildTaskAgentTool(
       // TUI / RPC renders these as live tool_execution_update events — every
       // sub-agent tool call appears in real time under THIS task_agent's tool
       // result block (no merging across parallel task_agent invocations).
+      //
+      // We also use the first snapshot to capture `runningTaskId` so that an
+      // abort signal arriving mid-run can target the right LocalAgent task.
+      let runningTaskId: string | undefined;
       const onProgress = (snap: SpawnLocalAgentProgressSnapshot): void => {
+        if (runningTaskId === undefined) {
+          runningTaskId = snap.taskId;
+          if (signal?.aborted) onAbort();
+        }
         try {
           onUpdate?.({
             content: [{ type: "text", text: renderTimeline(snap) }],
@@ -360,6 +369,25 @@ export function buildTaskAgentTool(
           // onUpdate failures must NOT propagate — they would kill the sub-agent.
         }
       };
+
+      // Honor Esc-driven cancellation: when the user aborts, route to the
+      // LocalAgent kill path (session.abort + dispose + flush) which is the
+      // same path task_kill uses. If the abort fires before the first
+      // onProgress snapshot reaches us, the listener is a no-op and the
+      // captured-taskId branch above runs instead once the snapshot arrives.
+      const onAbort = (): void => {
+        if (runningTaskId === undefined) return;
+        void killLocalAgentTask(pi, store, runningTaskId).catch(() => {
+          // killLocalAgentTask logs internally; tool result will surface
+          // the killed status via the spawn promise resolving.
+        });
+      };
+      if (signal) {
+        if (signal.aborted) {
+          return errResult("task_agent aborted before start");
+        }
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
 
       try {
         const result = await _spawner(pi, store, {
@@ -405,6 +433,11 @@ export function buildTaskAgentTool(
         };
       } catch (e) {
         return errResult(`task_agent failed: ${(e as Error).message ?? String(e)}`);
+      } finally {
+        // Detach the abort listener regardless of whether the agent finished
+        // naturally, was killed mid-run, or threw — avoids a leak if the
+        // signal is reused by Pi for another tool call later.
+        if (signal) signal.removeEventListener("abort", onAbort);
       }
     },
   };

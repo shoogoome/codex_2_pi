@@ -98,7 +98,7 @@ export function buildRequestPlanApprovalTool(
     description: DESCRIPTION,
     parameters: RequestPlanApprovalParams,
     executionMode: "parallel",
-    async execute(_callId: unknown, raw: unknown) {
+    async execute(_callId: unknown, raw: unknown, signal?: AbortSignal) {
       const params = raw as { plan?: string };
       const plan = (params.plan ?? "").trim();
       if (plan.length === 0) {
@@ -123,27 +123,65 @@ export function buildRequestPlanApprovalTool(
         };
       }
 
+      // Esc-pressed-before-execute fast path: don't even wait on leader.
+      if (signal?.aborted) {
+        return {
+          content: [
+            { type: "text" as const, text: "request_plan_approval aborted before start" },
+          ],
+          isError: true,
+          details: { action: "request_plan_approval" as const },
+        };
+      }
+
       const requestId = makeRequestId();
-      const decision = await new Promise<PlanApprovalDecision>((resolve, reject) => {
-        deps.pendingApprovals.set(requestId, { resolve, reject });
-        const body = buildPlanApprovalRequest(requestId, plan);
-        try {
-          channel.deliver(
-            {
-              kind: "message",
-              agentId: deps.identity.agentId,
-              to: "leader",
-              body,
-            },
-            /* triggerTurn */ true,
-          );
-        } catch (err) {
-          // If delivery throws synchronously, drop the pending entry and
-          // surface the error so the awaiter never hangs.
+      // onAbort needs to reach the pending entry to break the Promise out of
+      // its hang. We store a closure on the deps map and reject it from the
+      // signal handler. Without this an Esc on a teammate's blocked
+      // request_plan_approval would silently keep the teammate stalled.
+      const onAbort = (): void => {
+        const entry = deps.pendingApprovals.get(requestId);
+        if (entry) {
           deps.pendingApprovals.delete(requestId);
-          reject(err instanceof Error ? err : new Error(String(err)));
+          entry.reject(new Error("aborted by user"));
         }
-      });
+      };
+      if (signal) signal.addEventListener("abort", onAbort, { once: true });
+
+      let decision: PlanApprovalDecision;
+      try {
+        decision = await new Promise<PlanApprovalDecision>((resolve, reject) => {
+          deps.pendingApprovals.set(requestId, { resolve, reject });
+          const body = buildPlanApprovalRequest(requestId, plan);
+          try {
+            channel.deliver(
+              {
+                kind: "message",
+                agentId: deps.identity.agentId,
+                to: "leader",
+                body,
+              },
+              /* triggerTurn */ true,
+            );
+          } catch (err) {
+            // If delivery throws synchronously, drop the pending entry and
+            // surface the error so the awaiter never hangs.
+            deps.pendingApprovals.delete(requestId);
+            reject(err instanceof Error ? err : new Error(String(err)));
+          }
+        });
+      } catch (err) {
+        if (signal) signal.removeEventListener("abort", onAbort);
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          content: [
+            { type: "text" as const, text: `request_plan_approval failed: ${message}` },
+          ],
+          isError: true,
+          details: { action: "request_plan_approval" as const, request_id: requestId },
+        };
+      }
+      if (signal) signal.removeEventListener("abort", onAbort);
 
       const details: RequestPlanApprovalDetails = {
         action: "request_plan_approval",
