@@ -6,10 +6,12 @@
 // session_shutdown 内先 kill 自己的 running task,再 unregisterTaskType。
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { getTasksHandle } from "../tasks/handle.js";
 import { getRunningTasks } from "../tasks/framework.js";
 import { _bindPi, _unbindPi, LocalShellTask, spawnLocalShell } from "./localShellTask.js";
+import { summarizeTaskBashOutput } from "./taskBashDisplay.js";
 
 const TaskBashParams = Type.Object({
   command: Type.String({ description: "Shell command to execute." }),
@@ -18,6 +20,29 @@ const TaskBashParams = Type.Object({
     Type.Number({ description: "Auto-background after this many ms (default 60000)." }),
   ),
 });
+
+interface RenderTheme {
+  fg(color: string, text: string): string;
+  bold(text: string): string;
+}
+
+interface TaskBashResultDetails {
+  isBackgrounded?: boolean;
+  taskId?: string;
+  status?: string;
+  exitCode?: number;
+  backgrounded?: boolean;
+}
+
+interface MinimalToolResult {
+  content?: Array<{ type?: string; text?: string }>;
+  details?: unknown;
+}
+
+function extractText(result: MinimalToolResult): string {
+  const first = result.content?.[0];
+  return typeof first?.text === "string" ? first.text : "";
+}
 
 export default function localshellExtension(pi: ExtensionAPI): void {
   pi.registerFlag("keep-builtin-bash", {
@@ -97,6 +122,59 @@ export default function localshellExtension(pi: ExtensionAPI): void {
           content: [{ type: "text", text: head + result.output }],
           details: { action: "task_bash", ...result },
         };
+      },
+      renderCall(args, theme) {
+        // Compact one-liner replacing Pi's verbose default — claudecode style.
+        const description =
+          typeof (args as { description?: unknown }).description === "string"
+            ? ((args as { description: string }).description)
+            : "";
+        const command =
+          typeof (args as { command?: unknown }).command === "string"
+            ? ((args as { command: string }).command)
+            : "";
+        const summary =
+          (description || command.slice(0, 60) || "").trim();
+        const t = theme as unknown as RenderTheme;
+        const label = t.bold(t.fg("toolTitle", "task_bash"));
+        const tail = summary ? ` ${t.fg("dim", summary)}` : "";
+        return new Text(`${label}${tail}`, 0, 0);
+      },
+      renderResult(result, options, theme) {
+        const t = theme as unknown as RenderTheme;
+        const r = result as MinimalToolResult;
+        const details = (r.details ?? {}) as TaskBashResultDetails;
+        const text = extractText(r);
+
+        // Background mode — full stdout is on disk, anchor with one dim line.
+        if (details.isBackgrounded === true || details.backgrounded === true) {
+          const tid = details.taskId ?? "?";
+          return new Text(
+            t.fg("dim", `task_bash backgrounded (taskId=${tid})`),
+            0,
+            0,
+          );
+        }
+
+        // Streaming/in-progress.
+        if (options.isPartial) {
+          return new Text(t.fg("dim", "task_bash running…"), 0, 0);
+        }
+
+        // Foreground / blocking finished.
+        if (options.expanded) {
+          return new Text(t.fg("dim", text), 0, 0);
+        }
+
+        const summary = summarizeTaskBashOutput(text);
+        if (!summary.hasMore) {
+          return new Text(t.fg("dim", summary.head), 0, 0);
+        }
+        const hidden = t.fg(
+          "dim",
+          `… (${summary.hiddenCount} lines hidden · Ctrl+O to expand)`,
+        );
+        return new Text(`${t.fg("dim", summary.head)}\n${hidden}`, 0, 0);
       },
     });
 

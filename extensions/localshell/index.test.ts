@@ -156,4 +156,146 @@ describe("localshellExtension", () => {
     fireEvent("session_start", {}, { sessionManager: { getSessionId: () => "shadow-2" } });
     expect(pi.setActiveTools).not.toHaveBeenCalled();
   });
+
+  describe("task_bash render hooks", () => {
+    interface RegisteredTaskBash {
+      renderCall?: (args: unknown, theme: unknown, ctx: unknown) => unknown;
+      renderResult?: (
+        result: unknown,
+        options: { expanded: boolean; isPartial: boolean },
+        theme: unknown,
+        ctx: unknown,
+      ) => unknown;
+    }
+
+    function registerAndGetTaskBash(): RegisteredTaskBash {
+      localshellExtension(pi as never);
+      fireEvent("session_start", {}, { sessionManager: { getSessionId: () => "render-1" } });
+      const tool = pi.registerTool.mock.calls.find(
+        (c) => (c[0] as { name: string }).name === "task_bash",
+      )![0] as RegisteredTaskBash;
+      return tool;
+    }
+
+    // Plain mock theme: fg/bold/bg are pass-through so we can inspect raw text.
+    const mockTheme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+      bg: (_color: string, text: string) => text,
+    };
+
+    function renderToString(component: unknown): string {
+      const c = component as { render?: (w: number) => string[] };
+      if (typeof c.render === "function") {
+        return c.render(200).join("\n");
+      }
+      // Fallback: stringify any private text field for plain Text instances.
+      return JSON.stringify(component);
+    }
+
+    it("registers renderCall + renderResult on task_bash", () => {
+      const tool = registerAndGetTaskBash();
+      expect(typeof tool.renderCall).toBe("function");
+      expect(typeof tool.renderResult).toBe("function");
+    });
+
+    it("renderCall prints `task_bash <description>`", () => {
+      const tool = registerAndGetTaskBash();
+      const comp = tool.renderCall!(
+        { command: "echo hi", description: "smoke test" },
+        mockTheme,
+        {},
+      );
+      const out = renderToString(comp);
+      expect(out).toContain("task_bash");
+      expect(out).toContain("smoke test");
+    });
+
+    it("renderResult on backgrounded mode shows backgrounded line, no full text", () => {
+      const tool = registerAndGetTaskBash();
+      const comp = tool.renderResult!(
+        {
+          content: [{ type: "text", text: "Backgrounded ...\nLOTS OF STDOUT\nMORE" }],
+          details: { isBackgrounded: true, taskId: "tid-bg-1" },
+        },
+        { expanded: false, isPartial: false },
+        mockTheme,
+        {},
+      );
+      const out = renderToString(comp);
+      expect(out).toContain("backgrounded");
+      expect(out).toContain("tid-bg-1");
+      // Critically: no full-stdout dump.
+      expect(out).not.toContain("LOTS OF STDOUT");
+    });
+
+    it("renderResult on isPartial=true shows running line", () => {
+      const tool = registerAndGetTaskBash();
+      const comp = tool.renderResult!(
+        { content: [{ type: "text", text: "▶ doing..." }], details: {} },
+        { expanded: false, isPartial: true },
+        mockTheme,
+        {},
+      );
+      const out = renderToString(comp);
+      expect(out).toContain("running");
+    });
+
+    it("renderResult collapsed: head + lines hidden + Ctrl+O hint", () => {
+      const tool = registerAndGetTaskBash();
+      const text = [
+        "completed (exit 0) taskId=t1",
+        "stdout-line-1",
+        "stdout-line-2",
+        "stdout-line-3",
+      ].join("\n");
+      const comp = tool.renderResult!(
+        { content: [{ type: "text", text }], details: {} },
+        { expanded: false, isPartial: false },
+        mockTheme,
+        {},
+      );
+      const out = renderToString(comp);
+      expect(out).toContain("completed (exit 0)");
+      expect(out).toMatch(/lines? hidden/);
+      expect(out).toContain("Ctrl+O");
+      // Hidden lines should NOT appear when collapsed.
+      expect(out).not.toContain("stdout-line-2");
+    });
+
+    it("renderResult expanded: full text rendered", () => {
+      const tool = registerAndGetTaskBash();
+      const text = [
+        "completed (exit 0) taskId=t1",
+        "stdout-line-1",
+        "stdout-line-2",
+      ].join("\n");
+      const comp = tool.renderResult!(
+        { content: [{ type: "text", text }], details: {} },
+        { expanded: true, isPartial: false },
+        mockTheme,
+        {},
+      );
+      const out = renderToString(comp);
+      expect(out).toContain("completed (exit 0)");
+      expect(out).toContain("stdout-line-1");
+      expect(out).toContain("stdout-line-2");
+    });
+
+    it("renderResult on short output (<=2 lines) renders inline without hidden hint", () => {
+      const tool = registerAndGetTaskBash();
+      const comp = tool.renderResult!(
+        {
+          content: [{ type: "text", text: "completed (exit 0) taskId=t1" }],
+          details: {},
+        },
+        { expanded: false, isPartial: false },
+        mockTheme,
+        {},
+      );
+      const out = renderToString(comp);
+      expect(out).toContain("completed (exit 0)");
+      expect(out).not.toMatch(/lines? hidden/);
+    });
+  });
 });
