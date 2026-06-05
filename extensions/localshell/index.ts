@@ -64,12 +64,38 @@ export default function localshellExtension(pi: ExtensionAPI): void {
         "Run a shell command as a tracked task. Use ONLY for long-running, interactive, or backgroundable commands; for short one-shot commands use the regular `bash` tool. Auto-backgrounds after timeout_ms (default 60000).",
       parameters: TaskBashParams,
       executionMode: "parallel",
-      async execute(_callId: unknown, raw: unknown, _signal, onUpdate) {
+      async execute(_callId: unknown, raw: unknown, signal, onUpdate) {
         const { command, description, timeout_ms } = raw as {
           command: string;
           description: string;
           timeout_ms?: number;
         };
+
+        // Honor the abort signal: when the user hits Esc Pi raises this, and
+        // we must propagate the cancellation to the running shell process.
+        // We capture the running task id from the first onProgress snapshot
+        // and route to LocalShellTask.kill(taskId), which kills the spawned
+        // process and flips the task state to "killed".
+        let runningTaskId: string | undefined;
+        const onAbort = (): void => {
+          if (runningTaskId === undefined) return;
+          void LocalShellTask.kill(runningTaskId, handle.store).catch(
+            () => {
+              // killTeammate already logs internally via tasks/logging.
+            },
+          );
+        };
+        if (signal) {
+          if (signal.aborted) {
+            // Already aborted before we even started — return early.
+            return {
+              content: [{ type: "text", text: "task_bash aborted before start" }],
+              isError: true,
+              details: { action: "task_bash" as const, status: "killed" as const },
+            };
+          }
+          signal.addEventListener("abort", onAbort, { once: true });
+        }
 
         // Last-wins coalesce: at most one onUpdate flush per ~100ms keeps the
         // tool result block stable when bash spits hundreds of lines/sec.
@@ -112,9 +138,23 @@ export default function localshellExtension(pi: ExtensionAPI): void {
           command,
           description,
           timeoutMs: timeout_ms,
-          onProgress: (snap) => scheduleFlush(snap.cumulative),
+          onProgress: (snap) => {
+            // Capture the task id on the first snapshot so an abort that
+            // arrives mid-execution can target the right running task.
+            if (runningTaskId === undefined) {
+              runningTaskId = snap.taskId;
+              // If the abort fired *before* the first snapshot reached us
+              // (unlikely but possible), kill immediately now that we know
+              // the id.
+              if (signal?.aborted) {
+                onAbort();
+              }
+            }
+            scheduleFlush(snap.cumulative);
+          },
         });
         if (timer) clearTimeout(timer);
+        if (signal) signal.removeEventListener("abort", onAbort);
         const head = result.backgrounded
           ? `Backgrounded (taskId=${result.taskId}). Last ${result.output.length} bytes:\n`
           : `${result.status}${result.exitCode !== undefined ? ` (exit ${result.exitCode})` : ""} taskId=${result.taskId}\n`;
