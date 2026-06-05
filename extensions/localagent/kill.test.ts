@@ -81,13 +81,14 @@ describe("killLocalAgentTask", () => {
 
     await killLocalAgentTask(fakePi, store, "a2");
     expect(store.getTask("a2")?.status).toBe("killed");
-    // notify 是 tasks/notification 的 sendMessage,后面紧跟一次 tasks/progress kind=kill 的 sendMessage,
-    // 二者在 notifyTaskTerminal 之后顺序触发,sequence 上 sendMessage 各自计为一次。
-    expect(order).toEqual(["abort", "cleanup", "dispose", "notify", "notify"]);
+    // notify 是 tasks/notification 的 sendMessage,后面紧跟一次 tasks/progress kind=kill
+    // 的 sendMessage,再紧跟一次 tasks/summary 终态摘要 sendMessage。三者在 notifyTaskTerminal
+    // 之后顺序触发。
+    expect(order).toEqual(["abort", "cleanup", "dispose", "notify", "notify", "notify"]);
     const customTypes = fakePi.sendMessage.mock.calls.map(
       (c: unknown[]) => (c[0] as { customType?: string }).customType,
     );
-    expect(customTypes).toEqual(["tasks/notification", "tasks/progress"]);
+    expect(customTypes).toEqual(["tasks/notification", "tasks/progress", "tasks/summary"]);
   });
 
   it("abort throw 也不阻断后续清理", async () => {

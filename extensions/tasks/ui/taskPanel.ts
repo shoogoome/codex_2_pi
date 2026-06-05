@@ -37,6 +37,8 @@ function toEntry(t: LocalAgentTaskState): TaskPanelEntry {
   // registered, no progress emitted yet).
   const tokenCount = t.progress?.tokenCount ?? 0;
   const toolCallCount = t.progress?.toolCallCount ?? 0;
+  const recent = t.progress?.recentToolNames ?? [];
+  const lastTool = recent.length > 0 ? recent[recent.length - 1] : undefined;
   return {
     id: t.id,
     type: t.type,
@@ -45,6 +47,7 @@ function toEntry(t: LocalAgentTaskState): TaskPanelEntry {
     startTime: t.startTime,
     tokenCount,
     toolCallCount,
+    lastTool,
   };
 }
 

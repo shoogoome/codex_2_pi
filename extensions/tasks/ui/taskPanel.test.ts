@@ -108,4 +108,25 @@ describe("buildTaskPanel", () => {
     const component = factory(fakeTui(), fakeTheme());
     expect(() => component.dispose?.()).not.toThrow();
   });
+
+  it("toEntry surfaces last recentToolName as lastTool on the row", () => {
+    const taskStore = createTaskStore();
+    const viewState = createTaskPanelViewStateStore();
+    registerTask(
+      makeLocalAgent("a1", "Fix #2", {
+        progress: {
+          toolCallCount: 2,
+          tokenCount: 1234,
+          startTime: 0,
+          recentToolNames: ["read", "bash"],
+        },
+      }),
+      taskStore,
+    );
+    const factory = buildTaskPanel({ taskStore, viewState });
+    const component = factory(fakeTui(), fakeTheme());
+    const lines = component.render(200);
+    const row = lines.find((l) => l.includes("Fix #2"))!;
+    expect(row).toContain("→ bash");
+  });
 });

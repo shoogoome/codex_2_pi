@@ -15,6 +15,7 @@ import tasksExtension, {
   stopTaskFrameworkPolling,
   TASK_NOTIFICATION_CUSTOM_TYPE,
   TASK_PROGRESS_CUSTOM_TYPE,
+  TASK_SUMMARY_CUSTOM_TYPE,
   type Task,
   type TaskStateBase,
   type TaskStore,
@@ -125,10 +126,11 @@ describe("tasksExtension entrypoint", () => {
     // installProgressContextFilter wires a "context" event handler.
     expect(pi.handlers.has("context")).toBe(true);
 
-    expect(pi.registerMessageRenderer).toHaveBeenCalledTimes(2);
+    expect(pi.registerMessageRenderer).toHaveBeenCalledTimes(3);
     const customTypes = pi.registerMessageRenderer.mock.calls.map((c: unknown[]) => c[0]);
     expect(customTypes).toContain(TASK_NOTIFICATION_CUSTOM_TYPE);
     expect(customTypes).toContain(TASK_PROGRESS_CUSTOM_TYPE);
+    expect(customTypes).toContain(TASK_SUMMARY_CUSTOM_TYPE);
   });
 
   it("default TaskStore becomes available after extension load", () => {

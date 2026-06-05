@@ -31,6 +31,8 @@ export interface TaskPanelEntry {
   startTime: number;
   toolCallCount?: number;
   tokenCount?: number;
+  /** Most recent tool name (only rendered while status==="running"). */
+  lastTool?: string;
 }
 
 export interface TaskPanelTheme {
@@ -134,26 +136,33 @@ export function renderTaskPanel(
     const elapsed = formatElapsed(now - task.startTime);
     const tokens = formatTokens(task.tokenCount ?? 0);
     const typeBadge = task.type;
+    // Only surface lastTool while running — on terminal status the row already
+    // says completed/failed/killed; appending "→ bash" would imply still working.
+    const showLastTool = task.lastTool && task.status === "running";
+    const toolPart = showLastTool ? `  → ${task.lastTool}` : "";
 
     // Compose plain text first to compute truncation budget without
     // ANSI sequences messing up width math (mirrors teammate widget).
-    const plain = `${indent}${glyph}  ${typeBadge}  ${task.description}  ${elapsed}  ↓ ${tokens}`;
+    const plain = `${indent}${glyph}  ${typeBadge}  ${task.description}${toolPart}  ${elapsed}  ↓ ${tokens}`;
     if (visibleWidth(plain) <= width) {
       const prefixSel = isSelected
         ? theme.fg("accent", "▶ ")
         : "  ";
       const nameColor = isSelected ? "accent" : "text";
+      const toolPartColored = showLastTool
+        ? `  ${theme.fg("accent", `→ ${task.lastTool}`)}`
+        : "";
       lines.push(
-        `${prefixSel}${theme.fg(glyphColor, glyph)}  ${theme.fg("muted", typeBadge)}  ${theme.fg(nameColor, task.description)}  ${theme.fg("dim", elapsed)}  ${theme.fg("dim", `↓ ${tokens}`)}`,
+        `${prefixSel}${theme.fg(glyphColor, glyph)}  ${theme.fg("muted", typeBadge)}  ${theme.fg(nameColor, task.description)}${toolPartColored}  ${theme.fg("dim", elapsed)}  ${theme.fg("dim", `↓ ${tokens}`)}`,
       );
       continue;
     }
 
     // Width over budget — find the largest truncation of description that
     // still fits with the rest of the row preserved. Rest = indent + glyph
-    // + 2 spaces + typeBadge + 2 spaces + 2 spaces + elapsed + 2 spaces
-    // + "↓ " + tokens.
-    const fixed = `${indent}${glyph}  ${typeBadge}    ${elapsed}  ↓ ${tokens}`;
+    // + 2 spaces + typeBadge + 2 spaces + (toolPart) + 2 spaces + elapsed
+    // + 2 spaces + "↓ " + tokens.
+    const fixed = `${indent}${glyph}  ${typeBadge}  ${toolPart}  ${elapsed}  ↓ ${tokens}`;
     const budget = width - visibleWidth(fixed);
     let descShown: string;
     if (budget <= 1) {
@@ -163,7 +172,7 @@ export function renderTaskPanel(
       continue;
     }
     descShown = truncate(task.description, budget);
-    const final = `${indent}${glyph}  ${typeBadge}  ${descShown}  ${elapsed}  ↓ ${tokens}`;
+    const final = `${indent}${glyph}  ${typeBadge}  ${descShown}${toolPart}  ${elapsed}  ↓ ${tokens}`;
     lines.push(visibleWidth(final) > width ? truncate(final, width) : final);
   }
 

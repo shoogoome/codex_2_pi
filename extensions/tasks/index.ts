@@ -26,6 +26,10 @@ import {
   installProgressContextFilter,
   registerTaskProgressRenderer,
 } from "./progress.js";
+import {
+  installTaskSummaryContextFilter,
+  registerTaskSummaryRenderer,
+} from "./summary.js";
 import { buildTaskKillTool } from "./tools/taskKill.js";
 import { buildTaskStatusTool } from "./tools/taskStatus.js";
 import { buildTaskListTool } from "./tools/taskList.js";
@@ -81,7 +85,8 @@ export default function tasksExtension(
   registerTaskNotificationRenderer(pi);
   registerTaskProgressRenderer(pi);
   installProgressContextFilter(pi);
-  installProgressContextFilter(pi);
+  registerTaskSummaryRenderer(pi);
+  installTaskSummaryContextFilter(pi);
 
   // Module-scoped — survives across session_start / session_shutdown
   // reload cycles so we can clean up subscribers from a previous cycle
@@ -361,6 +366,17 @@ export {
   registerTaskProgressRenderer,
   TASK_PROGRESS_CUSTOM_TYPE,
 } from "./progress.js";
+
+export type {
+  TaskSummaryDetails,
+  TaskSummaryTimelineEntry,
+} from "./summary.js";
+export {
+  emitTaskSummary,
+  installTaskSummaryContextFilter,
+  registerTaskSummaryRenderer,
+  TASK_SUMMARY_CUSTOM_TYPE,
+} from "./summary.js";
 
 export {
   EXIT_CODE_TAG,

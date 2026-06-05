@@ -79,7 +79,7 @@ describe("registerTaskProgressRenderer", () => {
     expect(typeof registerMessageRenderer.mock.calls[0]![1]).toBe("function");
   });
 
-  it("collapsed render returns a Text-like component (smoke)", () => {
+  it("collapsed render returns undefined — progress no longer paints to main stream", () => {
     let capturedRenderer: ((m: unknown, o: unknown, t: unknown) => unknown) | undefined;
     const pi = {
       registerMessageRenderer: (_t: string, r: (m: unknown, o: unknown, t: unknown) => unknown) => {
@@ -99,10 +99,10 @@ describe("registerTaskProgressRenderer", () => {
       { expanded: false },
       buildFakeTheme(),
     );
-    expect(out).toBeDefined();
+    expect(out).toBeUndefined();
   });
 
-  it("expanded render returns a Box-like component (smoke)", () => {
+  it("expanded render also returns undefined — surface lives in panel widget + summary", () => {
     let capturedRenderer: ((m: unknown, o: unknown, t: unknown) => unknown) | undefined;
     const pi = {
       registerMessageRenderer: (_t: string, r: (m: unknown, o: unknown, t: unknown) => unknown) => {
@@ -125,10 +125,10 @@ describe("registerTaskProgressRenderer", () => {
       { expanded: true },
       buildFakeTheme(),
     );
-    expect(out).toBeDefined();
+    expect(out).toBeUndefined();
   });
 
-  it("renderer falls back to Text when message has no details", () => {
+  it("returns undefined even when message has no details", () => {
     let capturedRenderer: ((m: unknown, o: unknown, t: unknown) => unknown) | undefined;
     const pi = {
       registerMessageRenderer: (_t: string, r: (m: unknown, o: unknown, t: unknown) => unknown) => {
@@ -141,7 +141,7 @@ describe("registerTaskProgressRenderer", () => {
       { expanded: false },
       buildFakeTheme(),
     );
-    expect(out).toBeDefined();
+    expect(out).toBeUndefined();
   });
 });
 

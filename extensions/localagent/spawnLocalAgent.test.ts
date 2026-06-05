@@ -349,3 +349,151 @@ describe("spawnLocalAgent — agentDef.background=true", () => {
     expect(result.backgrounded).toBe(true);
   });
 });
+
+describe("spawnLocalAgent — progress mirroring to LocalAgentTaskState", () => {
+  it("after tool_execution_start, task.progress.recentToolNames includes the tool", async () => {
+    const fake = makeFakeSession();
+    _setSdkForTest({
+      createAgentSessionServices: vi.fn().mockResolvedValue({}),
+      SessionManagerInMemory: vi.fn(() => ({ getEntries: () => [], appendMessage: vi.fn() })),
+      SessionManagerForkFrom: vi.fn(),
+      createAgentSessionFromServices: vi.fn(async () => ({ session: fake })),
+    });
+    const store = createTaskStore();
+    const promise = spawnLocalAgent(fakePi, store, {
+      prompt: "do work",
+      agentDef: GENERAL_PURPOSE_AGENT,
+      ctxMessages: [],
+      cwd: "/tmp",
+      timeoutMs: 60_000,
+    });
+    while (Object.keys(store.get()).length === 0) {
+      await new Promise((r) => setImmediate(r));
+    }
+    fake.emit({ type: "tool_execution_start", toolName: "bash", args: { cmd: "ls" } });
+    // mirror happens synchronously inside the listener
+    const taskId = Object.keys(store.get())[0]!;
+    const t = store.getTask(taskId) as LocalAgentTaskState;
+    expect(t.progress?.recentToolNames).toContain("bash");
+    expect(t.progress?.toolCallCount).toBe(1);
+    fake.emit({ type: "agent_end", messages: [] });
+    await promise;
+  });
+
+  it("after message_end with usage.totalTokens, task.progress.tokenCount equals total", async () => {
+    const fake = makeFakeSession();
+    _setSdkForTest({
+      createAgentSessionServices: vi.fn().mockResolvedValue({}),
+      SessionManagerInMemory: vi.fn(() => ({ getEntries: () => [], appendMessage: vi.fn() })),
+      SessionManagerForkFrom: vi.fn(),
+      createAgentSessionFromServices: vi.fn(async () => ({ session: fake })),
+    });
+    const store = createTaskStore();
+    const promise = spawnLocalAgent(fakePi, store, {
+      prompt: "do work",
+      agentDef: GENERAL_PURPOSE_AGENT,
+      ctxMessages: [],
+      cwd: "/tmp",
+      timeoutMs: 60_000,
+    });
+    while (Object.keys(store.get()).length === 0) {
+      await new Promise((r) => setImmediate(r));
+    }
+    fake.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+        usage: { totalTokens: 4321 },
+      },
+    });
+    const taskId = Object.keys(store.get())[0]!;
+    const t = store.getTask(taskId) as LocalAgentTaskState;
+    expect(t.progress?.tokenCount).toBe(4321);
+    fake.emit({ type: "agent_end", messages: [] });
+    await promise;
+  });
+});
+
+describe("spawnLocalAgent — tasks/summary emission on terminal", () => {
+  it("emits tasks/summary once when sync completion finalizes", async () => {
+    const fake = makeFakeSession();
+    _setSdkForTest({
+      createAgentSessionServices: vi.fn().mockResolvedValue({}),
+      SessionManagerInMemory: vi.fn(() => ({ getEntries: () => [], appendMessage: vi.fn() })),
+      SessionManagerForkFrom: vi.fn(),
+      createAgentSessionFromServices: vi.fn(async () => ({ session: fake })),
+    });
+    const store = createTaskStore();
+    fakePi.sendMessage.mockClear();
+    const promise = spawnLocalAgent(fakePi, store, {
+      prompt: "say hi",
+      agentDef: GENERAL_PURPOSE_AGENT,
+      ctxMessages: [],
+      cwd: "/tmp",
+      timeoutMs: 60_000,
+    });
+    while (Object.keys(store.get()).length === 0) {
+      await new Promise((r) => setImmediate(r));
+    }
+    fake.emit({ type: "tool_execution_start", toolName: "bash", args: { cmd: "ls" } });
+    fake.emit({ type: "tool_execution_end", toolName: "bash", result: { ok: true }, isError: false });
+    fake.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "hi" }],
+        usage: { totalTokens: 100 },
+      },
+    });
+    fake.emit({ type: "agent_end", messages: [] });
+    await promise;
+
+    const summaryCalls = fakePi.sendMessage.mock.calls.filter(
+      ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/summary",
+    );
+    expect(summaryCalls).toHaveLength(1);
+    const details = (summaryCalls[0]![0] as { details: { status: string; timeline: unknown[]; tokenCount: number; agentType: string } }).details;
+    expect(details.status).toBe("completed");
+    expect(details.tokenCount).toBe(100);
+    expect(details.agentType).toBe("general-purpose");
+    // timeline should contain at least task_start, tool_start, tool_end, task_end
+    const kinds = details.timeline.map((e) => (e as { kind: string }).kind);
+    expect(kinds).toContain("task_start");
+    expect(kinds).toContain("tool_start");
+    expect(kinds).toContain("tool_end");
+    expect(kinds).toContain("task_end");
+  });
+
+  it("emits tasks/summary once when background finalizer completes", async () => {
+    const fake = makeFakeSession();
+    _setSdkForTest({
+      createAgentSessionServices: vi.fn().mockResolvedValue({}),
+      SessionManagerInMemory: vi.fn(() => ({ getEntries: () => [], appendMessage: vi.fn() })),
+      SessionManagerForkFrom: vi.fn(),
+      createAgentSessionFromServices: vi.fn(async () => ({ session: fake })),
+    });
+    const store = createTaskStore();
+    fakePi.sendMessage.mockClear();
+    const result = await spawnLocalAgent(fakePi, store, {
+      prompt: "bg work",
+      agentDef: { ...GENERAL_PURPOSE_AGENT, background: true },
+      ctxMessages: [],
+      cwd: "/tmp",
+    });
+    expect(result.backgrounded).toBe(true);
+
+    fake.emit({ type: "agent_end", messages: [] });
+    // Drain microtasks so the runBackgroundFinalizer settles.
+    for (let i = 0; i < 10; i++) {
+      await new Promise((r) => setImmediate(r));
+    }
+
+    const summaryCalls = fakePi.sendMessage.mock.calls.filter(
+      ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/summary",
+    );
+    expect(summaryCalls.length).toBe(1);
+    const details = (summaryCalls[0]![0] as { details: { status: string } }).details;
+    expect(details.status).toBe("completed");
+  });
+});

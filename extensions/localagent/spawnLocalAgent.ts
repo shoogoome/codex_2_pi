@@ -42,6 +42,7 @@ import {
 } from "../tasks/Task.js";
 import { notifyTaskTerminal } from "../tasks/notifications.js";
 import { emitTaskProgress } from "../tasks/progress.js";
+import { emitTaskSummary, type TaskSummaryDetails } from "../tasks/summary.js";
 import { logError } from "../tasks/logging.js";
 
 import type { AgentDefinition, LocalAgentTaskState } from "./types.js";
@@ -284,6 +285,24 @@ export async function spawnLocalAgent(
     summary: `${opts.agentDef.agentType} → ${opts.prompt.slice(0, 60)}`,
   });
 
+  // Mirror the in-memory progress.ts store onto LocalAgentTaskState.progress so the
+  // task panel widget (read-only consumer) sees live tokenCount + recentToolNames
+  // without subscribing to progress.ts directly. Called after every progress mutation.
+  const syncProgressToState = (): void => {
+    const p = getProgress(taskId);
+    if (!p) return;
+    updateTaskState<LocalAgentTaskState>(taskId, store, (cur) => ({
+      ...cur,
+      progress: {
+        toolCallCount: p.toolCallCount,
+        tokenCount: p.tokenCount,
+        startTime: p.startTime,
+        recentToolNames: [...p.recentToolNames],
+      },
+    }));
+  };
+  syncProgressToState();
+
   void initTaskOutput(taskId).catch((e) => {
     if (typeof e === "object" && e && "code" in e && (e as { code: unknown }).code === "EEXIST") {
       return;
@@ -318,6 +337,7 @@ export async function spawnLocalAgent(
           toolName: e.toolName,
           summary: previewToolStart(e.toolName, e.args),
         });
+        syncProgressToState();
       }
     }
     if (e.type === "tool_execution_end" && e.toolName) {
@@ -346,6 +366,7 @@ export async function spawnLocalAgent(
           .join("");
         if (txt) lastFinalText = txt;
       }
+      syncProgressToState();
     }
     try {
       translateAgentEvent(
@@ -414,12 +435,13 @@ export async function spawnLocalAgent(
       triggerTurn: triggerTurn ? true : undefined,
       extra: { agentType: opts.agentDef.agentType, ...getProgress(taskId) },
     });
+    const tokenCount = getProgress(taskId)?.tokenCount ?? 0;
+    emitSummaryFor(statusVal, tokenCount);
     try {
       session.dispose();
     } catch (e) {
       logError(e, "session.dispose");
     }
-    const tokenCount = getProgress(taskId)?.tokenCount ?? 0;
     removeProgress(taskId);
     void evictTaskOutput(taskId);
     return {
@@ -462,6 +484,7 @@ export async function spawnLocalAgent(
       triggerTurn: true,
       extra: { agentType: opts.agentDef.agentType, ...getProgress(taskId) },
     });
+    emitSummaryFor("completed", getProgress(taskId)?.tokenCount ?? 0);
     try {
       session.dispose();
     } catch (e) {
@@ -470,6 +493,33 @@ export async function spawnLocalAgent(
     removeProgress(taskId);
     void evictTaskOutput(taskId);
   };
+
+  // One-shot summary writer for terminal transitions reachable from this closure
+  // (completed/failed). Killed transitions are emitted from kill.ts because
+  // kill is initiated externally and cannot see this closure's timeline.
+  function emitSummaryFor(
+    status: "completed" | "failed",
+    tokenCount: number,
+  ): void {
+    const summary: TaskSummaryDetails = {
+      taskId,
+      taskType: "local_agent",
+      status,
+      description,
+      agentType: opts.agentDef.agentType,
+      toolCallCount: toolCount,
+      tokenCount,
+      durationMs: Date.now() - initial.startTime,
+      timeline: timeline.map((e) => ({
+        kind: e.kind,
+        summary: e.summary,
+        isError: e.isError,
+        ts: e.ts,
+      })),
+      ts: Date.now(),
+    };
+    emitTaskSummary(pi, summary);
+  }
 
   // 6. forced background path: return immediately, sub keeps running.
   if (forceBg) {

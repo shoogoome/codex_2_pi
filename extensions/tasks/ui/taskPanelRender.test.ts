@@ -224,4 +224,54 @@ describe("renderTaskPanel", () => {
       }
     }
   });
+
+  it("running task with lastTool renders `→ <tool>` arrow", () => {
+    const lines = renderTaskPanel(
+      [
+        makeEntry({
+          id: "ax",
+          description: "Fix #2",
+          status: "running",
+          startTime: 0,
+          lastTool: "bash",
+        }),
+      ],
+      { width: 200, theme: NOOP_THEME, now: 1000 },
+    );
+    const row = lines.find((l) => l.includes("Fix #2"))!;
+    expect(row).toContain("→ bash");
+  });
+
+  it("completed task does NOT render the `→` arrow even with lastTool", () => {
+    const lines = renderTaskPanel(
+      [
+        makeEntry({
+          id: "ax",
+          description: "Done #2",
+          status: "completed",
+          startTime: 0,
+          lastTool: "bash",
+        }),
+      ],
+      { width: 200, theme: NOOP_THEME, now: 1000 },
+    );
+    const row = lines.find((l) => l.includes("Done #2"))!;
+    expect(row).not.toContain("→");
+  });
+
+  it("running task without lastTool does not render the arrow", () => {
+    const lines = renderTaskPanel(
+      [
+        makeEntry({
+          id: "ax",
+          description: "No tool yet",
+          status: "running",
+          startTime: 0,
+        }),
+      ],
+      { width: 200, theme: NOOP_THEME, now: 1000 },
+    );
+    const row = lines.find((l) => l.includes("No tool yet"))!;
+    expect(row).not.toContain("→");
+  });
 });
