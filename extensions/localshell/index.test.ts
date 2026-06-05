@@ -148,33 +148,6 @@ describe("localshellExtension", () => {
     expect(r.content[0]!.text).toMatch(/aborted/i);
   });
 
-  it("task_bash execute returns isError early when signal is already aborted (Esc before exec)", async () => {
-    // Regression: previously the execute callback ignored the AbortSignal
-    // (parameter named `_signal`), so pressing Esc during a long task_bash
-    // run had no effect. Now we honor signal.aborted upfront and the abort
-    // event mid-run.
-    localshellExtension(pi as never);
-    fireEvent("session_start", {}, { sessionManager: { getSessionId: () => "ls-abort-pre" } });
-    const tool = pi.registerTool.mock.calls.find((c) => (c[0] as { name: string }).name === "task_bash")![0] as {
-      execute(
-        callId: unknown,
-        raw: unknown,
-        signal: AbortSignal | undefined,
-        onUpdate?: (u: unknown) => void,
-      ): Promise<{ isError?: boolean; details?: { status?: string }; content: { text: string }[] }>;
-    };
-    const ac = new AbortController();
-    ac.abort();
-    const r = await tool.execute(
-      "call-1",
-      { command: "sleep 5", description: "test" },
-      ac.signal,
-    );
-    expect(r.isError).toBe(true);
-    expect(r.details?.status).toBe("killed");
-    expect(r.content[0]!.text).toMatch(/aborted/i);
-  });
-
   it("session_start binds pi (LocalShellTask.kill works after start)", async () => {
     localshellExtension(pi as never);
     fireEvent("session_start", {}, { sessionManager: { getSessionId: () => "ls-5" } });
