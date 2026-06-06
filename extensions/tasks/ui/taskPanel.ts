@@ -69,8 +69,19 @@ export function buildTaskPanel(deps: TaskPanelDeps) {
 
     return {
       render(width: number): string[] {
+        // Filter to running tasks only — once a local_agent task flips
+        // to a terminal status (completed / killed / failed) the
+        // task_agent tool's renderResult paints the head + Ctrl+O hint
+        // into the main stream in the same conversation slot. Keeping
+        // the row in the panel as well would double-render the same
+        // completion (the bug the user reported as "三块 task_agent
+        // 信息同时显示"). Filtering here makes the panel row vanish at
+        // the exact moment the main-stream head appears, producing the
+        // claudecode-style "panel row slides up into the main stream"
+        // effect.
         const tasks = Object.values(deps.taskStore.get())
           .filter(isLocalAgentTask)
+          .filter((t) => t.status === "running")
           .map(toEntry);
         const vs = deps.viewState.get();
         const selectedTaskId =

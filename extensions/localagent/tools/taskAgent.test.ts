@@ -340,7 +340,11 @@ describe("task_agent renderResult", () => {
     return tool.renderResult!;
   }
 
-  it("isPartial → dim 'task_agent running…' line with agent type and event count", () => {
+  it("isPartial → empty Text (main stream stays blank; panel widget is the running surface)", () => {
+    // Claudecode-style: while a task_agent is running, the main stream
+    // shows nothing — only the task panel widget surfaces live status.
+    // The main stream picks up the completion line via the terminal
+    // renderResult call once the spawn promise resolves.
     const renderResult = getRenderResult();
     const out = renderResult(
       {
@@ -361,11 +365,34 @@ describe("task_agent renderResult", () => {
       {} as never,
     );
     const blob = renderToString(out);
-    expect(blob).toContain("running");
-    expect(blob).toContain("general-purpose");
-    expect(blob).toContain("do work");
-    expect(blob).toContain("2 events");
-    expect(blob).toContain("[dim]");
+    // Empty Text — no agent type / description / event count painted.
+    expect(blob).toBe("");
+  });
+
+  it("non-partial running (status=running, isPartial=false) → also empty Text", () => {
+    // Defensive: even outside the partial-update path, a still-running
+    // task should not paint head + Ctrl+O hint into the main stream.
+    // The terminal head only appears once status flips to completed /
+    // killed / failed (covered by the existing 'collapsed terminal' test).
+    const renderResult = getRenderResult();
+    const out = renderResult(
+      {
+        content: [{ type: "text", text: "" }],
+        details: {
+          action: "task_agent",
+          status: "running",
+          agentType: "general-purpose",
+          description: "do work",
+          toolCallCount: 1,
+          tokenCount: 100,
+          timeline: [{ kind: "task_start", ts: 0, summary: "start" }],
+        },
+      } as never,
+      { isPartial: false, expanded: false },
+      tagTheme() as never,
+      {} as never,
+    );
+    expect(renderToString(out)).toBe("");
   });
 
   it("backgrounded → 'task_agent backgrounded' line with taskId", () => {
@@ -538,7 +565,11 @@ describe("task_agent renderResult", () => {
     expect(blob).toContain("[error]");
   });
 
-  it("renderCall paints task_agent + bold accent label + dim description", () => {
+  it("renderCall returns empty Text (running surface is the panel widget, not the main stream)", () => {
+    // Claudecode-style: the moment a task_agent call is constructed we
+    // do NOT paint a head into the main stream. The panel widget owns
+    // the running surface; renderResult paints the head only when the
+    // tool result arrives in terminal state.
     const tool = buildTaskAgentTool(fakePi, createTaskStore());
     expect(typeof tool.renderCall).toBe("function");
     const out = tool.renderCall!(
@@ -546,11 +577,7 @@ describe("task_agent renderResult", () => {
       tagTheme() as never,
       {} as never,
     );
-    const blob = renderToString(out);
-    expect(blob).toContain("task_agent");
-    expect(blob).toContain("[toolTitle]");
-    expect(blob).toContain("[accent]general-purpose");
-    expect(blob).toContain("[dim]audit");
+    expect(renderToString(out)).toBe("");
   });
 });
 

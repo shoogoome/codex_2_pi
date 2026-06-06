@@ -220,7 +220,17 @@ export function notifyTaskTerminal(
     {
       customType: TASK_NOTIFICATION_CUSTOM_TYPE,
       content,
-      display: true,
+      // Async wakeups (background task completes while the user is
+      // doing something else, opts.triggerTurn===true) paint a row to
+      // the TUI so the completion is visible. Sync paths
+      // (triggerTurn unset/false) suppress: the originating tool's own
+      // renderResult already surfaces the terminal line in the same
+      // conversation slot, and a second customMessage row was the
+      // visible "三块 task_agent 信息" duplication the user reported.
+      // Note: display:false only hides the TUI surface — the LLM
+      // context, RPC stream, and JSONL persistence still receive the
+      // full XML payload via Pi's sendMessage routing.
+      display: opts.triggerTurn === true,
       details,
     },
     buildSendMessageOptions(opts),

@@ -473,20 +473,28 @@ export function buildTaskAgentTool(
       }
     },
     /**
-     * Compact rendering — same head + Ctrl+O expand pattern as task_bash /
-     * task_status. Without this Pi paints the FULL finalText (often a
-     * many-paragraph sub-agent report) as one massive tool-result block in
-     * the main stream. The leader LLM still receives the complete finalText
-     * via `result.content[0].text`; this only changes the TUI surface.
+     * Compact rendering — claudecode-style.
+     *
+     * The running surface for a task_agent call is the task panel widget,
+     * NOT the main stream. While the call is being constructed and while
+     * the spawn is in-flight we paint NOTHING into the main stream:
+     * `renderCall` returns an empty Text, and `renderResult` does the
+     * same when isPartial=true or details.status==="running".
+     *
+     * The moment the spawn promise resolves to a terminal status
+     * (completed / killed / failed), `renderResult` paints the head +
+     * (N events · Ctrl+O) hint into the main stream — same slot the
+     * panel row had occupied. Combined with the panel filtering on
+     * status==="running", this produces the visual "panel row slides
+     * up into the main stream" effect the user described.
+     *
+     * The leader LLM still receives the complete finalText via
+     * `result.content[0].text`; this only changes the TUI surface.
      */
-    renderCall(args, theme) {
-      const t = isThemeWithFg(theme) ? theme : { fg: (_c: string, x: string) => x, bold: (x: string) => x };
-      const a = args as { description?: unknown; subagent_type?: unknown };
-      const desc = typeof a.description === "string" ? a.description : "";
-      const sub = typeof a.subagent_type === "string" ? a.subagent_type : "agent";
-      const label = (t.bold ?? ((x: string) => x))(t.fg("toolTitle", "task_agent"));
-      const tail = ` ${t.fg("accent", sub)}${desc ? ` ${t.fg("dim", "·")} ${t.fg("dim", desc)}` : ""}`;
-      return new Text(`${label}${tail}`, 0, 0);
+    renderCall(_args, _theme) {
+      // Empty Text — main stream stays blank while the call is in flight.
+      // Panel widget owns the live surface.
+      return new Text("", 0, 0);
     },
     renderResult(result, options, theme) {
       return renderTaskAgentResult(result as AgentToolResult<TaskAgentDetails>, options, theme);
@@ -567,18 +575,24 @@ function renderTaskAgentResult(
     : { fg: (_c, x) => x };
   const details = (result.details ?? { action: "task_agent" }) as TaskAgentDetails;
 
-  // Streaming partial — single dim line; the panel widget already shows
-  // live status (lastTool / token count) so we don't repaint the timeline here.
+  // Streaming partial — the running surface is the panel widget, NOT
+  // the main stream. Paint nothing here; the head appears once the
+  // spawn promise resolves to a terminal status (the same moment the
+  // panel row vanishes via its status==="running" filter).
   if (options.isPartial) {
-    const agent = details.agentType ?? "agent";
-    const desc = details.description ?? "";
-    const events = details.timeline?.length ?? 0;
-    const tail = desc ? ` ${desc}` : "";
-    return new Text(t.fg("dim", `task_agent running… ${agent}${tail} · ${events} events`), 0, 0);
+    return new Text("", 0, 0);
+  }
+
+  // Defensive: a non-partial result whose details still report running
+  // should also stay blank in the main stream. The terminal head is
+  // gated on completed / killed / failed below.
+  if (details.status === "running") {
+    return new Text("", 0, 0);
   }
 
   // Backgrounded — anchor with a single dim line; output lives on disk and is
-  // surfaced via task_status.
+  // surfaced via task_status. Users explicitly opted into background mode and
+  // need a confirmation that the task is now off-thread.
   if (details.isBackgrounded === true) {
     const tid = details.taskId ?? "?";
     return new Text(t.fg("dim", `task_agent backgrounded (taskId=${tid})`), 0, 0);

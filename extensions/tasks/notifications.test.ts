@@ -170,7 +170,12 @@ describe("notifyTaskTerminal", () => {
     expect(pi.sendMessage).toHaveBeenCalledTimes(1);
     const [msg, opts] = pi.sendMessage.mock.calls[0]!;
     expect(msg.customType).toBe(TASK_NOTIFICATION_CUSTOM_TYPE);
-    expect(msg.display).toBe(true);
+    // Sync path (triggerTurn unset) → display:false. The tool's own
+    // renderResult already surfaces the terminal line in the same
+    // conversation slot; a second customMessage row is redundant
+    // (the bug where the main stream painted head + completion line
+    // side by side).
+    expect(msg.display).toBe(false);
     expect(typeof msg.content).toBe("string");
     expect(msg.content).toContain("<task_notification>");
     const details = msg.details as TaskNotificationDetails;
@@ -178,6 +183,22 @@ describe("notifyTaskTerminal", () => {
     expect(details.status).toBe("completed");
     expect(details.timestamp).toBeGreaterThan(0);
     expect(opts).toEqual({});  // deliverAs 和 triggerTurn 都是 undefined — 立即渲染
+  });
+
+  it("triggerTurn:true (async wakeup) → display:true so the user sees backgrounded task completion", () => {
+    const pi = createFakePi();
+    const store = createTaskStore();
+    registerTask(sample("babcdefgh"), store);
+    notifyTaskTerminal(pi, store, baseOpts({ triggerTurn: true }));
+    expect(pi.sendMessage.mock.calls[0]![0].display).toBe(true);
+  });
+
+  it("triggerTurn:false (explicit) → display:false (sync semantics)", () => {
+    const pi = createFakePi();
+    const store = createTaskStore();
+    registerTask(sample("babcdefgh"), store);
+    notifyTaskTerminal(pi, store, baseOpts({ triggerTurn: false }));
+    expect(pi.sendMessage.mock.calls[0]![0].display).toBe(false);
   });
 
   it("second call is a silent no-op (CAS guard)", () => {

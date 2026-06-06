@@ -109,6 +109,50 @@ describe("buildTaskPanel", () => {
     expect(() => component.dispose?.()).not.toThrow();
   });
 
+  it("filters out completed / killed / failed local_agent tasks (claudecode-style: completed tasks vanish from the panel)", () => {
+    // The panel widget owns the live surface. Once a local_agent task
+    // flips to a terminal state, its renderResult head is painted into
+    // the main stream — keeping the row in the panel as well would
+    // double-render the same completion (the bug the user reported).
+    // Filter to running only so completed rows immediately disappear
+    // from the widget when the spawn promise resolves.
+    const taskStore = createTaskStore();
+    const viewState = createTaskPanelViewStateStore();
+    registerTask(makeLocalAgent("a1", "Alpha", { status: "running" }), taskStore);
+    registerTask(
+      makeLocalAgent("a2", "Beta", { status: "completed", startTime: 1 }),
+      taskStore,
+    );
+    registerTask(
+      makeLocalAgent("a3", "Gamma", { status: "killed", startTime: 2 }),
+      taskStore,
+    );
+    registerTask(
+      makeLocalAgent("a4", "Delta", { status: "failed", startTime: 3 }),
+      taskStore,
+    );
+
+    const factory = buildTaskPanel({ taskStore, viewState });
+    const component = factory(fakeTui(), fakeTheme());
+    const lines = component.render(200);
+    expect(lines.some((l) => l.includes("Alpha"))).toBe(true);
+    expect(lines.some((l) => l.includes("Beta"))).toBe(false);
+    expect(lines.some((l) => l.includes("Gamma"))).toBe(false);
+    expect(lines.some((l) => l.includes("Delta"))).toBe(false);
+  });
+
+  it("when all local_agent tasks are terminal → render returns [] (widget vanishes entirely)", () => {
+    const taskStore = createTaskStore();
+    const viewState = createTaskPanelViewStateStore();
+    registerTask(
+      makeLocalAgent("a1", "Done", { status: "completed" }),
+      taskStore,
+    );
+    const factory = buildTaskPanel({ taskStore, viewState });
+    const component = factory(fakeTui(), fakeTheme());
+    expect(component.render(200)).toEqual([]);
+  });
+
   it("toEntry surfaces last recentToolName as lastTool on the row", () => {
     const taskStore = createTaskStore();
     const viewState = createTaskPanelViewStateStore();
