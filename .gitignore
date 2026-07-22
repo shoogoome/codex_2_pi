@@ -26,7 +26,6 @@ tmp/
 .env.*
 !.env.example
 !.env.*.example
-.pi/models.json
 
 # Pi local runtime state
 .pi/migrate-state.json
