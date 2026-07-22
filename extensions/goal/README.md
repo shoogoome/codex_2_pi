@@ -10,7 +10,7 @@
 
 - 暴露三个模型可调用工具：`get_goal`、`create_goal`、`update_goal`。
 - `create_goal` 只在明确要求创建 goal 时使用；如果当前 thread 已经有 goal，则创建失败。
-- `update_goal` 只允许把已有 goal 标记为 `complete`，不能通过工具 pause、resume 或 budget-limit。
+- `update_goal` 只允许把已有 goal 标记为 `complete` 或 `blocked`，不能通过工具 pause、resume 或 budget-limit。
 - 工具响应包含 `goal`、`remainingTokens`、`completionBudgetReport`。
 - goal 持久化在当前 thread/session 分支中，恢复时通过 replay 最新状态得到当前 goal。
 - active goal 会在后续 turn 注入隐藏上下文，提醒模型继续追踪目标并在真正完成时调用 `update_goal`。
@@ -28,7 +28,7 @@ interface ThreadGoal {
   threadId: string;
   goalId: string;
   objective: string;
-  status: "active" | "paused" | "budget_limited" | "complete";
+  status: "active" | "paused" | "blocked" | "budget_limited" | "complete";
   tokenBudget?: number;
   tokensUsed: number;
   timeUsedSeconds: number;
@@ -326,11 +326,21 @@ Session JSONL 中也能看到 `customType: "thread-goal"` 从 active 变为 comp
 
 ## 已知差异
 
-和 Codex 原生实现相比，这个 extension 有以下 Pi 适配差异：
+和 Codex 原生实现相比,这个 extension 有以下 Pi 适配差异:
 
-- Codex 使用 Rust session/state runtime；Pi extension 使用 session custom entry replay。
-- `/goal <objective>` 和 `/goal resume` 已通过 `pi.sendMessage(..., { triggerTurn: true })` 对齐 Codex 的“命令回车后自动开始/恢复工作”体验。
-- Codex 还有更完整的 idle continuation 调度，能在 active goal 结束一轮后根据运行时状态继续调度。Pi extension 目前只在命令触发和普通用户 turn 中注入/启动 goal context，没有在 `turn_end` 中无条件自启动下一轮，以避免抢占用户输入或造成无限续跑。
-- `/goal pause`、`/goal resume`、`/goal clear` 是 Pi 侧人工操作命令，Codex 工具契约不暴露这些能力给模型。
+- Codex 使用 Rust session/state runtime;Pi extension 使用 session custom entry replay。
+- `/goal <objective>` 和 `/goal resume` 已通过 `pi.sendMessage(..., { triggerTurn: true })` 对齐 Codex 的"命令回车后自动开始/恢复工作"体验。
+- **Idle continuation 调度已实现**:`turn_end` 后若 goal 仍 active 且 `ctx.isIdle() && !ctx.hasPendingMessages()`,extension 会通过 `pi.sendMessage({triggerTurn:true})` 启动一次自动续跑 turn,直到模型自行调用 `update_goal({status:"complete"|"blocked"})`、用户介入、或 budget 耗尽切到 `budget_limited`。`continuationInFlight` flag 防止 turn_end 抖动重复触发。
+- **continuation prompt 仅在自动续跑 turn 注入**:普通用户 turn 上 `before_agent_start` 不再叠加 continuation prompt(节省每轮数千 token);只有 budget_limited 状态会注入 wrap-up steering。这与 Codex `mark_thread_goal_continuation_turn_started` 一致。
+- **token accounting 实时化**:每次 `tool_execution_end`(除 update_goal 自身)都重算 usage,跨过 budget 立刻切 `budget_limited`,下一轮 turn 即可看到 wrap-up steering。先前只在 `before_agent_start` / `turn_end` 结算,一个 turn 内连烧多个 tool 会延迟到 turn 结束才发现超额。
+- `update_goal` 现在与 Codex 一致接受 `complete | blocked` 两种 status。`blocked` 表示模型在严格审计下达到 3 轮以上同一卡点,需要用户介入。`continuationPrompt` 已加回 Blocked audit 段。
+- `/goal resume` 不再允许从 `budget_limited` 恢复(终态);需用户输入新 objective 或调整预算。允许从 `paused` / `blocked` 恢复。
+- statusLine 改用 codex 风格紧凑格式化:`Pursuing goal (1.2K / 50K)` / `Goal achieved (1h 30m)`,长 token 数不再字面爆视图。
+- `/goal pause`、`/goal resume`、`/goal clear` 是 Pi 侧人工操作命令,Codex 工具契约不暴露这些能力给模型。
 
-这些差异来自 Pi extension API 的运行模型，不影响三个模型工具的外部契约。
+仍未对齐的差异(YAGNI 范围之外):
+
+- Codex 还有 `usage_limited` 状态(API rate limit 级)、`paused` 与 `blocked` 在 metrics 上的细分、以及 plan-mode 抑制 idle continuation 的开关 — Pi 这边目前只暴露 idle continuation 全开,没有 plan-mode 联动。
+- token 增量公式:Pi 使用 `usage.input + usage.output`,假设 provider 已把 cached input 排除在 `usage.input` 之外;codex 显式 `non_cached_input + output`。如果未来某个 provider 把 cache 算进 input,需要改 `totalTokenUsage` 减去 `usage.cacheRead`。
+
+这些差异来自 Pi extension API 的运行模型,不影响三个模型工具的外部契约。

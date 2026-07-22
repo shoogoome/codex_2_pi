@@ -4,6 +4,9 @@
   "description": "Compact tool display, diff visualization, user message box, and thinking labels for Pi coding agent.",
   "type": "module",
   "main": "./index.ts",
+  "pi": {
+    "extensions": ["dist/index.js"]
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"

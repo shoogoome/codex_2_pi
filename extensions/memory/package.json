@@ -1,0 +1,18 @@
+{
+  "name": "pi-memory-extension",
+  "version": "0.1.0",
+  "description": "Claude-style long-term memory for Pi: a git-root-scoped MEMORY.md index + typed topic files, injected via before_agent_start and re-injected after compaction. The model maintains the files with ordinary write/edit; /memory and /remember drive them.",
+  "type": "module",
+  "main": "./index.ts",
+  "pi": {
+    "extensions": [
+      "dist/index.js"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "@earendil-works/pi-ai": "*",
+    "typebox": "*"
+  }
+}

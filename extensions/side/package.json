@@ -4,7 +4,7 @@
   "type": "module",
   "main": "index.ts",
   "pi": {
-    "extension": true
+    "extensions": ["dist/index.js"]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

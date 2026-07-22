@@ -4,18 +4,49 @@
 
 ## 包含的扩展
 
-| 扩展 | 能力 |
-|---|---|
-| `extensions/diff` | 添加 `/diff`，展示已跟踪和未跟踪的 git 变更。 |
-| `extensions/review` | 添加 `/review`，提供 Codex 风格的评审预设。 |
-| `extensions/user-input` | 添加 `request_user_input`、`ask_user_question` 和 `askUserQuestion` 工具。 |
-| `extensions/subagents` | 添加 Codex 风格的 subagent 工具，由 Pi RPC 子进程驱动。 |
-| `extensions/side` | 添加 `/side`，在 Pi overlay 中启动临时 fork subagent，关闭窗口即关闭 side 会话。 |
-| `extensions/init` | 添加 `/init`，通过主 agent 创建项目 `AGENTS.md` 指南。 |
-| `extensions/imagegen` | 添加 `generate_image` 生图工具和 `/images` 图片路径展示器。 |
-| `extensions/todo` | 添加 Codex 风格 `update_plan` 工具、计划更新渲染和常驻 plan overlay。 |
-| `extensions/compact-ui` | 添加 Codex 风格紧凑 UI：用户/模型消息前缀化，并让常见内置工具使用更短的调用与结果渲染。 |
-| `extensions/pets` | 添加 Codex 风格终端宠物 widget：依据 agent 状态切换动画，Kitty graphics + tmux DCS passthrough 可选，其余环境自动回退到 block-art 字符画。 |
+完整能力总表、分组与详情链接见 [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md)；下表列出当前全部扩展。
+
+### 基础扩展（Codex 复刻）
+
+| 扩展 | 能力 | 主要命令 / 工具 |
+|---|---|---|
+| `extensions/diff` | 展示已跟踪和未跟踪的 git 变更。 | `/diff` |
+| `extensions/review` | 提供 Codex 风格的评审预设（基准分支 / 未提交 / 某提交 / 自定义）。 | `/review [instructions]` |
+| `extensions/user-input` | 向用户提问 1-3 个带选项的问题（UI 自动加 `Other` 自由文本项）。 | `request_user_input` / `ask_user_question` / `askUserQuestion` |
+| `extensions/side` | 在 Pi overlay 中从当前 leaf 启动临时 fork subagent，关闭窗口即关闭 side 会话。 | `/side [message]` |
+| `extensions/init` | 通过主 agent 检查项目并创建项目 `AGENTS.md` 指南（已存在则跳过）。 | `/init` |
+| `extensions/imagegen` | OpenAI Images 生图工具 + 图片路径展示器（结果只返回路径）。 | `generate_image` · `/images` |
+| `extensions/todo` | Codex 风格 `update_plan`（整份计划快照）+ 计划渲染 + 常驻 plan overlay。 | `update_plan` |
+| `extensions/compact-ui` | Codex 风格紧凑 UI:消息前缀化 + 常见内置工具短渲染（与 claude-ui 互斥）。 | （`--claude-ui=false` 回退到此皮肤） |
+| `extensions/pets` | Codex 风格终端宠物 widget，依 agent 状态切换动画，Kitty graphics/tmux passthrough 可选，其余回退 block-art。 | （无命令，自动 widget） |
+| `extensions/goal` | Codex 风格 thread goal:持久目标 + 预算消耗 + 续跑提示，随 session 保存。 | `get_goal` / `create_goal` / `update_goal` · `/goal <objective>` · `/goal resume` |
+| `extensions/localagent` | 注册 `task_agent` 工具 + `local_agent` 任务类型，进程内后台跑本地子 agent。 | `task_agent` |
+| `extensions/localshell` | 注册 `task_bash` 工具 + LocalShellTask，后台执行 shell 命令（超时自动转后台）。 | `task_bash` |
+| `extensions/tasks` | 任务框架底座:default TaskStore + 背景 agents panel（Ctrl+T 焦点 / Enter overlay）+ 任务查询管理工具。 | `task_status` / `task_kill` / `task_list` |
+| `extensions/teammate` | 多 agent 团队协作:创建团队、成员间消息、计划审批、团队任务看板。 | `team_create` / `send_message` / `request_plan_approval` / `team_delete` / `team_plan_approve` |
+
+### 新增扩展（Codex + Claude Code 能力移植）
+
+| 扩展 | 能力 | 主要命令 / 入口 |
+|---|---|---|
+| `extensions/claude-ui` | Claude Code 风格无边框 TUI 皮肤:● 助手前导、用户灰底整行、工具去背景盒 ⎿、整行底色 diff、长输出折叠。 | `--claude-ui`（默认开）· `Ctrl+O` 展开 |
+| `extensions/input-history` | 跨会话输入历史持久化 + 反向增量搜索。 | `Alt+R`（可改绑 `ctrl+r`） |
+| `extensions/context-pipeline` | 分层上下文管理:按预算截断 tool_result、microcompact 清旧结果、接近上限自动结构化压缩。 | `/prune [status\|soft\|hard]` · `/context-prune` |
+| `extensions/agents-context` | 补充加载 `AGENTS.md`/`CLAUDE.md`、`.claude/rules`、`@include`、条件 paths 规则，去重后隐藏注入。 | `--agents-context`（默认开）· `PI_AGENTS_CONTEXT=0` |
+| `extensions/memory` | Claude 风格长期记忆:`.pi/memory` + `MEMORY.md` 索引，每轮召回注入，compaction 后重注入。 | `/memory [list\|show\|init]` · `/remember <text>` |
+| `extensions/approvals` | 唯一审批闸门:权限模式 × 规则库 × 命令安全 × 受保护路径 × MCP 逐工具，统一 allow/ask/deny。 | `/approvals [mode\|rules\|allow\|ask\|deny\|remove]` |
+| `extensions/plan-mode` | 只读规划闸门:仅可探查，模型提交计划经批准后才恢复写工具。 | `/plan [on\|off]` · `Alt+P` · `exit_plan_mode` |
+| `extensions/profiles` | 命名配置预设（模型+工具+thinking+审批）一键保存/切换/删除。 | `/profile [save\|apply\|delete\|<name>]` · `--profile <name>` |
+| `extensions/resume-picker` | 会话恢复选择器 + 跨项目会话全文检索（rg），命中后切回历史会话。 | `/resume-picker [--all] [过滤词]` · `/search <关键词>` |
+| `extensions/autopilot` | 自主续跑控制器:自动注入隐藏 follow-up 连续推进，按预算/轮数/收益递减停止。 | `/autopilot [on [目标]\|off\|status]` |
+| `extensions/local-models` | 发现本地大模型运行时（Ollama、LM Studio）并注册为 localhost OpenAI 兼容 provider。 | `/local-models [list\|pull\|ensure_ready]` · `/ollama` · `/lm` |
+| `extensions/mcp` | 内置 MCP 客户端:读 `.pi/mcp.json` 连 server，暴露 `mcp__<server>__<tool>`，审批由 approvals 兜底。 | `/mcp [list\|status\|add\|remove\|reconnect]` |
+| `extensions/plugin-loader` | 发现磁盘上 Claude/pi/Cursor 风格插件，把 skills/commands/themes/output-styles 接入 Pi。 | `/plugin [list\|enable\|disable]` |
+| `extensions/hooks-runner` | 配置驱动 hook 框架:把 Pi 生命周期事件桥接到 Claude Code JSON hook 协议，可拦截/改写/注入。 | `/hooks` · `.pi/hooks.json` |
+| `extensions/agents` | 加载 Claude 风格 subagent 角色 `.md` + 内置角色库，应用到当前会话（收敛工具 + 注入系统提示）。 | `/agents [list\|show <name>\|use <name>]` |
+| `extensions/migrate` | 一次性把 Claude/Cursor 的 MCP、subagents、commands、hooks、memory 导入 `.pi/`，只导缺失不覆盖。 | `/migrate [category]` · `--dry-run` |
+| `extensions/monitor` | 只读效果监控:缓存命中率、上下文构成、清理/压缩回收比，面板 + footer 展示。 | `/monitor` |
+| `extensions/cost-usage` | 只读追踪会话美元成本、按模型 token、时长与编辑增删行，面板 + footer $ 状态。 | `/cost` · `/usage` |
 
 ## 命令
 

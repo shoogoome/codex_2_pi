@@ -298,16 +298,31 @@ function handleThinkingContextEvent(event: unknown, ctx: ExtensionContext | unde
   }
 }
 
-export function registerThinkingLabeling(pi: ExtensionAPI): void {
+export function registerThinkingLabeling(
+  pi: ExtensionAPI,
+  shouldActivate: () => boolean,
+): void {
+  // Thinking labeling is a compact-ui render change, so it yields to claude-ui
+  // just like the tool/user-message overrides. Gated lazily inside each handler
+  // so the arbitration is re-evaluated per event, not once at registration.
   pi.on("message_update", async (event, ctx) => {
+    if (!shouldActivate()) {
+      return;
+    }
     handleThinkingMessageUpdateEvent(event, ctx);
   });
 
   pi.on("message_end", async (event, ctx) => {
+    if (!shouldActivate()) {
+      return;
+    }
     handleThinkingMessageEndEvent(event, ctx);
   });
 
   pi.on("context", async (event, ctx) => {
+    if (!shouldActivate()) {
+      return;
+    }
     handleThinkingContextEvent(event, ctx);
   });
 }

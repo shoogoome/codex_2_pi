@@ -1,0 +1,16 @@
+{
+  "name": "pi-monitor-extension",
+  "version": "0.1.0",
+  "description": "Read-only effectiveness monitor for pi: cache hit rate, context composition, and cleanup/compaction ratios via a /monitor overlay and a footer status line.",
+  "type": "module",
+  "main": "./index.ts",
+  "pi": {
+    "extensions": ["dist/index.js"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "@earendil-works/pi-ai": "*",
+    "typebox": "*"
+  }
+}

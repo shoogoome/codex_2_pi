@@ -1,0 +1,14 @@
+{
+  "name": "pi-agents-context-extension",
+  "version": "0.1.0",
+  "description": "Supplemental AGENTS.md/CLAUDE.md context loading for Pi: .claude/rules, @includes, conditional path rules, user + local layers.",
+  "type": "module",
+  "main": "./index.ts",
+  "pi": {
+    "extensions": ["dist/index.js"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}

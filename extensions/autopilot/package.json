@@ -1,0 +1,24 @@
+{
+  "name": "pi-autopilot-extension",
+  "version": "0.1.0",
+  "description": "Self-continuation autopilot controller for Pi (off by default).",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.ts",
+  "files": [
+    "index.ts",
+    "src",
+    "package.json",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "dist/index.js"
+    ]
+  }
+}

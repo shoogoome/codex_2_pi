@@ -919,6 +919,7 @@ function renderMcpResult(
 export function registerToolDisplayOverrides(
   pi: ExtensionAPI,
   getConfig: ConfigGetter,
+  shouldActivate: () => boolean,
 ): void {
   const bootstrapTools = getBuiltInTools(process.cwd());
   const builtInPromptMetadata = {
@@ -950,6 +951,14 @@ export function registerToolDisplayOverrides(
     }
   };
 
+  // Built-in tool overrides are installed only while compact-ui is the active
+  // skin (claude-ui disabled). They are NOT registered while compact-ui yields,
+  // so claude-ui's frameless registration stays the winning one — arbitration
+  // is by flag, never by registration order. Guarded to install at most once,
+  // and re-evaluated on session_start / before_agent_start in case the flag was
+  // not yet readable during extension load.
+  let builtInOverridesRegistered = false;
+  const registerBuiltInOverrides = (): void => {
   registerIfOwned("read", () => {
     pi.registerTool({
       name: "read",
@@ -1377,6 +1386,17 @@ export function registerToolDisplayOverrides(
     },
     });
   });
+  };
+
+  const ensureBuiltInOverrides = (): void => {
+    if (builtInOverridesRegistered || !shouldActivate()) {
+      return;
+    }
+    builtInOverridesRegistered = true;
+    registerBuiltInOverrides();
+  };
+
+  ensureBuiltInOverrides();
 
   const wrappedMcpToolNames = new Set<string>();
 
@@ -1454,9 +1474,15 @@ export function registerToolDisplayOverrides(
   };
 
   pi.on("session_start", async () => {
-    registerMcpToolOverrides();
+    ensureBuiltInOverrides();
+    if (shouldActivate()) {
+      registerMcpToolOverrides();
+    }
   });
   pi.on("before_agent_start", async () => {
-    registerMcpToolOverrides();
+    ensureBuiltInOverrides();
+    if (shouldActivate()) {
+      registerMcpToolOverrides();
+    }
   });
 }

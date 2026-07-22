@@ -10,12 +10,13 @@
     "package.json"
   ],
   "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
   },
   "pi": {
     "extensions": [
-      "index.ts"
+      "dist/index.js"
     ]
   }
 }

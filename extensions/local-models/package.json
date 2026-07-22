@@ -1,0 +1,23 @@
+{
+  "name": "pi-local-models-extension",
+  "version": "0.1.0",
+  "description": "Discover local model runtimes (Ollama, LM Studio) and register them as pi providers pointing at localhost.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.ts",
+  "files": [
+    "index.ts",
+    "src",
+    "package.json"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "dist/index.js"
+    ]
+  }
+}
