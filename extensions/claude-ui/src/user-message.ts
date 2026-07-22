@@ -3,11 +3,11 @@
  * ╭─user─╮ border box, the message is a full-width faint-grey (`userMessageBg`
  * #373737) band with no left padding; a slash command gets a subtle ❯ pointer.
  */
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { GLYPH_POINTER } from "./constants.js";
 import {
   isBlankLine,
   sanitizeInlineBackground,
-  visibleLength,
 } from "./ansi.js";
 import type { ClaudeUiTheme } from "./theme-types.js";
 
@@ -88,8 +88,15 @@ export function renderUserMessageLines(
       }
     }
 
-    const pad = " ".repeat(Math.max(0, safeWidth - visibleLength(text)));
-    return applyRowBackground(theme, `${text}${pad}`);
+    // Native Markdown output can still contain an over-wide physical row for
+    // long unbroken mixed ASCII/CJK input. Code-point length is not a terminal
+    // column measurement (CJK commonly occupies two columns), and adding the
+    // slash-command pointer may consume another two columns. Clamp the final
+    // foreground text before padding so the custom band always honours Pi
+    // TUI's strict render-width contract.
+    const clipped = truncateToWidth(text, safeWidth, "", true);
+    const pad = " ".repeat(Math.max(0, safeWidth - visibleWidth(clipped)));
+    return applyRowBackground(theme, `${clipped}${pad}`);
   });
 
   // marginTop=1 keeps the single-blank-line rhythm; the band itself has no top pad.

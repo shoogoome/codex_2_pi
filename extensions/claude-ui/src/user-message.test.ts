@@ -1,3 +1,4 @@
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { renderUserMessageLines } from "./user-message.js";
 import { GLYPH_POINTER } from "./constants.js";
@@ -9,6 +10,12 @@ const theme = {
   fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
   bold: (text: string) => text,
   getBgAnsi: (color: string) => `${BG}:${color}:`,
+};
+
+const ansiTheme = {
+  fg: (_color: string, text: string) => `\x1b[2m${text}\x1b[22m`,
+  bold: (text: string) => `\x1b[1m${text}\x1b[22m`,
+  getBgAnsi: (_color: string) => "\x1b[48;5;238m",
 };
 
 function contentRows(lines: string[]): string[] {
@@ -47,6 +54,24 @@ describe("renderUserMessageLines", () => {
     const rows = contentRows(out);
     expect(rows[0]).not.toContain("\x1b[41m");
     expect(rows[0]).toContain("red text");
+  });
+
+  it("clamps long unbroken mixed ASCII/CJK rows to the terminal width", () => {
+    const width = 40;
+    const input = `${"w".repeat(36)}测试超长序列会不会tui报错${"w".repeat(36)}`;
+    const out = renderUserMessageLines([input], width, ansiTheme);
+
+    for (const row of contentRows(out)) {
+      expect(visibleWidth(row)).toBeLessThanOrEqual(width);
+    }
+  });
+
+  it("keeps the slash-command pointer inside the terminal width", () => {
+    const width = 12;
+    const out = renderUserMessageLines([`/${"界".repeat(20)}`], width, ansiTheme);
+
+    expect(contentRows(out)[0]).toContain(GLYPH_POINTER);
+    expect(visibleWidth(contentRows(out)[0] ?? "")).toBeLessThanOrEqual(width);
   });
 
   it("returns [] for an empty body", () => {
