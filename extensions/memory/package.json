@@ -1,7 +1,7 @@
 {
   "name": "pi-memory-extension",
   "version": "0.1.0",
-  "description": "Claude-style long-term memory for Pi: a git-root-scoped MEMORY.md index + typed topic files, injected via before_agent_start and re-injected after compaction. The model maintains the files with ordinary write/edit; /memory and /remember drive them.",
+  "description": "Claude Code-style automatic long-term memory for Pi: zero-config initialization, scoped recall, conservative turn-end distillation, deduplication, and optional /memory and /remember controls.",
   "type": "module",
   "main": "./index.ts",
   "pi": {

@@ -6,12 +6,35 @@
 // markdown listing and performs all reads/writes. Keeping the mapping pure lets
 // the "which file becomes which pi resource" contract be unit-tested directly.
 
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DiscoveredPlugin, PluginDirs } from "./types.js";
 
-/** A plugin's skills/ dir (if present) maps to resources_discover skillPaths. */
-export function skillPathsFor(dirs: PluginDirs): string[] {
-  return dirs.skills ? [dirs.skills] : [];
+function safeDeclaredPath(root: string, raw: string): string | undefined {
+  const target = resolve(root, raw);
+  const rel = relative(resolve(root), target);
+  return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel) ? undefined : target;
+}
+
+/** Convention + manifest-declared skill paths, constrained to the plugin root. */
+export function skillPathsFor(dirs: PluginDirs, root?: string, declared: string[] = []): string[] {
+  const paths = dirs.skills ? [dirs.skills] : [];
+  if (root) paths.push(...declared.map((item) => safeDeclaredPath(root, item)).filter((item): item is string => Boolean(item)));
+  return [...new Set(paths)];
+}
+
+/** Convention + manifest-declared output-style paths, constrained to the plugin root. */
+export function outputStylePathsFor(dirs: PluginDirs, root?: string, declared: string[] = []): string[] {
+  const paths = dirs.outputStyles ? [dirs.outputStyles] : [];
+  if (root) paths.push(...declared.map((item) => safeDeclaredPath(root, item)).filter((item): item is string => Boolean(item)));
+  return [...new Set(paths)];
+}
+
+/** Agent markdown directories/files declared by convention or manifest. */
+export function agentPathsFor(plugin: DiscoveredPlugin): string[] {
+  const paths = plugin.dirs.agents ? [plugin.dirs.agents] : [];
+  const declared = Array.isArray(plugin.manifest.agents) ? plugin.manifest.agents : [];
+  paths.push(...declared.map((item) => safeDeclaredPath(plugin.root, item)).filter((item): item is string => Boolean(item)));
+  return [...new Set(paths)];
 }
 
 /** A plugin's themes/ dir (if present) maps to resources_discover themePaths. */

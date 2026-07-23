@@ -8,7 +8,7 @@
 
 ---
 
-## 新增扩展（18 个，按 category 分组）
+## 新增扩展（按 category 分组）
 
 ### TUI
 
@@ -23,7 +23,8 @@
 |---|---|---|---|
 | `context-pipeline` | 分层上下文管理：发送前按预算截断 tool_result、无 LLM 的 microcompact 清旧工具结果、接近窗口上限时自动结构化压缩。 | `/prune`（`status`/`soft`/`hard`）· `/context-prune` | [context-pipeline.md](extensions/context-pipeline.md) |
 | `agents-context` | 补充加载 Pi 原生不加载的 `AGENTS.md`/`CLAUDE.md`、`.claude/rules`、`@include`、条件 paths 规则，去重后隐藏注入。 | `--agents-context`（默认开）· 环境变量 `PI_AGENTS_CONTEXT=0` | [agents-context.md](extensions/agents-context.md) |
-| `memory` | Claude 风格长期记忆：按 git 根划分的 `.pi/memory` + `MEMORY.md` 索引，每轮注入相关主题，compaction 后重注入。 | `/memory list\|show\|init` · `/remember <text>` | [memory.md](extensions/memory.md) |
+| `settings-env` | 从全局和项目 `settings.json` 的顶层 `env` 读取环境变量并注入 Pi 进程；项目值覆盖全局值，已有启动环境默认优先。 | `env` · `envOverride` | [settings-env.md](extensions/settings-env.md) |
+| `memory` | Claude Code 风格自动长期记忆：按 git 根零配置初始化，召回相关主题，并在命中长期信息时后台提炼、去重更新索引。 | `/memory list\|show\|init` · `/remember <text>`（可选手动入口） | [memory.md](extensions/memory.md) |
 
 ### 安全审批
 
@@ -45,6 +46,12 @@
 | 扩展 | 一句话能力 | 主要命令 / 入口 | 详情 |
 |---|---|---|---|
 | `local-models` | 发现本地大模型运行时（Ollama、LM Studio）并注册为指向 localhost 的 OpenAI 兼容 provider，支持列举/拉取/就绪检查。 | `/local-models`（`list`/`pull`/`ensure_ready`）· 别名 `/ollama` `/lm` | [local-models.md](extensions/local-models.md) |
+
+### 联网
+
+| 扩展 | 一句话能力 | 主要命令 / 入口 | 详情 |
+|---|---|---|---|
+| `webfetch` | 客户端联网抓取（移植 Claude WebFetch）：给 URL(+可选阅读意图) → fetch → HTML 转 markdown 交模型阅读。SSRF 防护（私有段拦截 + 连接前 DNS 守卫 + 重定向逐跳校验）、10MB 流式截断、100K 字符上限、15min 缓存；v1 不做二级模型问答。 | 工具 `webfetch` · `--webfetch`（默认开） | [webfetch.md](extensions/webfetch.md) |
 
 ### 工具
 

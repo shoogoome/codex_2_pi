@@ -6,10 +6,19 @@
 
 import { isTerminalTaskStatus, type TaskStateBase } from "./Task.js";
 import type { TaskStore } from "./taskStore.js";
-import { evictTaskOutput, getTaskOutputDelta } from "./diskOutput.js";
+import { evictTaskOutput, getTaskOutputTailDelta } from "./diskOutput.js";
 
 export const POLL_INTERVAL_MS = 1000;
 export const STOPPED_DISPLAY_MS = 3_000;
+/**
+ * 单个 running 任务、单轮 poll 的输出读取上限(仅面板可见时)。
+ *
+ * 面板可见时,pollTasks 用 tail-biased 读取(`getTaskOutputTailDelta`)驱动
+ * 面板/overlay 刷新。封顶到 256KB 确保即便任务是每秒吐几 MB 的 firehose
+ * (pxdev dev server / Puppeteer),单轮读取也恒定 ≤256KB(偏向最近输出),
+ * 不会随文件增长而放大 CPU/内存。
+ */
+export const POLL_MAX_READ_BYTES = 256 * 1024;
 /**
  * Panel grace period — 占位,本期框架不直接使用。
  *
@@ -82,18 +91,49 @@ export { isTerminalTaskStatus };
 // ---------- pollTasks ----------
 
 /**
+ * pollTasks 的可选项 — 控制"是否读输出内容"与"单轮读取上限"。
+ *
+ * 关键:`isPanelVisible` 是 CPU 空转 bug 的核心门控。
+ */
+export interface PollTasksOptions {
+  /**
+   * 后台任务面板/overlay 当前是否可见(即输出内容是否真的显示在屏幕上)。
+   *
+   * - 返回 false(默认,未传时视为 false):对 running 任务**完全不读输出内容**
+   *   —— 不调 `getTaskOutputTailDelta`。idle pi(没在看面板)因此对 running 任务
+   *   零输出读取,即便有 firehose 任务在每秒吐几 MB,CPU 也保持 ~0。
+   * - 返回 true:才按 tail-biased 方式读增量(封顶 `maxReadBytes`)驱动面板刷新。
+   *
+   * 注意:终态检测 / eviction / 终态通知(notifyTaskTerminal)都不依赖这个读取,
+   * 所以门控关闭时它们照常工作。
+   */
+  isPanelVisible?: () => boolean;
+  /** 面板可见时单任务单轮读取上限。默认 {@link POLL_MAX_READ_BYTES}(256KB)。 */
+  maxReadBytes?: number;
+}
+
+/**
  * 周期任务:
  *   (a) 扫 terminal+notified+无 retain grace → evictTerminalTask
- *   (b) 扫 running → getTaskOutputDelta 推进 outputOffset
+ *   (b) 扫 running → **仅面板可见时** getTaskOutputTailDelta 推进 outputOffset
  *
  * **不发任何模型可见消息** — 终态通知由 notifyTaskTerminal 主动发起,与 poll 解耦。
  *
+ * 面板不可见时:running 任务分支完全跳过输出读取(见 PollTasksOptions.isPanelVisible),
+ * offset 保持不动 —— 面板下次打开时 `getTaskOutputTailDelta` 会从 tail 补读一段
+ * (跳过已积压的中间字节,只读最近 maxReadBytes),因此不会因 offset 陈旧而爆读。
+ *
  * 返回采集到的 evict / offset 数据,主要给测试用。
  */
-export async function pollTasks(store: TaskStore): Promise<{
+export async function pollTasks(
+  store: TaskStore,
+  options: PollTasksOptions = {},
+): Promise<{
   evictedTaskIds: string[];
   updatedTaskOffsets: Record<string, number>;
 }> {
+  const panelVisible = options.isPanelVisible?.() === true;
+  const maxReadBytes = options.maxReadBytes ?? POLL_MAX_READ_BYTES;
   const snapshot = store.get();
   const evictedTaskIds: string[] = [];
   const updatedTaskOffsets: Record<string, number> = {};
@@ -113,7 +153,11 @@ export async function pollTasks(store: TaskStore): Promise<{
     }
 
     if (task.status === "running") {
-      const delta = await getTaskOutputDelta(task.id, task.outputOffset);
+      // 面板可见性门控 —— 面板/overlay 没在显示输出时,对 running 任务零输出读取。
+      // 这是修复 idle pi 空转的关键:firehose 任务(pxdev / Puppeteer)每秒吐几 MB,
+      // 但只要用户没在看输出,就不读、不解码、不重绘。终态/eviction/通知不受影响。
+      if (!panelVisible) continue;
+      const delta = await getTaskOutputTailDelta(task.id, task.outputOffset, maxReadBytes);
       if (delta.content) {
         updatedTaskOffsets[task.id] = delta.newOffset;
       }
@@ -157,16 +201,31 @@ export async function pollTasks(store: TaskStore): Promise<{
 // ---------- polling 计时器 ----------
 
 let _pollTimer: NodeJS.Timeout | undefined;
+/**
+ * 防重入守卫:上一轮 pollTasks 尚未 settle 时,跳过本轮 timer 触发。
+ *
+ * 面板可见 + firehose 任务时,单轮读取虽已封顶 256KB,但若磁盘慢导致某轮
+ * >1s,不加守卫会让多轮 pollTasks 叠加并发,进一步放大 CPU/句柄占用。守卫保证
+ * 任意时刻至多一轮在飞。
+ */
+let _pollInFlight = false;
 
 export function startTaskFrameworkPolling(
   store: TaskStore,
   intervalMs: number = POLL_INTERVAL_MS,
+  options: PollTasksOptions = {},
 ): void {
   if (_pollTimer) return;
   _pollTimer = setInterval(() => {
-    void pollTasks(store).catch(() => {
-      // pollTasks 内部已 catch fs 错误,这里兜底防 timer 死掉。
-    });
+    if (_pollInFlight) return; // 上一轮未完成 → 跳过本轮,不叠加
+    _pollInFlight = true;
+    void pollTasks(store, options)
+      .catch(() => {
+        // pollTasks 内部已 catch fs 错误,这里兜底防 timer 死掉。
+      })
+      .finally(() => {
+        _pollInFlight = false;
+      });
   }, intervalMs);
   _pollTimer.unref?.();
 }
@@ -176,4 +235,5 @@ export function stopTaskFrameworkPolling(): void {
     clearInterval(_pollTimer);
     _pollTimer = undefined;
   }
+  _pollInFlight = false;
 }

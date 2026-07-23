@@ -3,7 +3,7 @@
 // schema-conversion decisions out of the I/O layer.
 
 import type { TSchema } from "typebox";
-import { mcpToolName } from "./naming.js";
+import { mcpToolName, sanitizeMcpSegment } from "./naming.js";
 import { jsonSchemaToTypeBox } from "./schema.js";
 import type { McpToolDef } from "./types.js";
 
@@ -25,6 +25,14 @@ export type ConvertFn = (schema: unknown) => TSchema;
 /**
  * Build one spec per tool. `convert` defaults to jsonSchemaToTypeBox but is
  * injectable for testing. An empty tool list yields [].
+ *
+ * `server` is expected to already be a sanitized canonical id (see
+ * `sanitizeServerName`). Each tool's name segment is sanitized here too as
+ * defense in depth — remote tool names are usually already legal, but an
+ * illegal char anywhere in the flat name still 400s the whole request. Only the
+ * charset is normalized (`sanitizeMcpSegment`), so a tool name containing `__`
+ * survives. The original (un-sanitized) tool name is kept in `toolName` because
+ * that is what must be forwarded to the server on `tools/call`.
  */
 export function buildToolDefinitions(
   server: string,
@@ -32,7 +40,7 @@ export function buildToolDefinitions(
   convert: ConvertFn = jsonSchemaToTypeBox,
 ): ToolDefinitionSpec[] {
   return tools.map((tool) => ({
-    name: mcpToolName(server, tool.name),
+    name: mcpToolName(server, sanitizeMcpSegment(tool.name)),
     label: `${server}:${tool.name}`,
     description:
       typeof tool.description === "string" && tool.description.trim().length > 0

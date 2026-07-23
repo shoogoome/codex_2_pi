@@ -129,14 +129,36 @@ export function withRuntimeServer(
 export interface ConfigPaths {
   globalPath: string;
   projectPath: string;
+  legacyGlobalPath: string;
+  legacyProjectPath: string;
 }
 
-/** Pure path construction: ~/.pi/agent/mcp.json (global) + <cwd>/.pi/mcp.json. */
+/**
+ * Pure path construction. `mcp.json` is Pi's canonical path; `.mcp.json` is
+ * also read for Claude/Cursor compatibility when the canonical file is absent.
+ */
 export function computeConfigPaths(home: string, cwd: string): ConfigPaths {
   return {
     globalPath: path.join(home, ".pi", "agent", "mcp.json"),
     projectPath: path.join(cwd, ".pi", "mcp.json"),
+    legacyGlobalPath: path.join(home, ".pi", "agent", ".mcp.json"),
+    legacyProjectPath: path.join(cwd, ".mcp.json"),
   };
+}
+
+/**
+ * The on-disk config file that owns a server of the given source. Returns
+ * undefined for `runtime` (plugin-injected) servers, which have no config file
+ * and must never be written to disk — this is the correctness guarantee behind
+ * /mcp remove writing the right file instead of always the project config.
+ */
+export function configPathForSource(
+  source: ServerSource,
+  paths: Pick<ConfigPaths, "globalPath" | "projectPath">,
+): string | undefined {
+  if (source === "global") return paths.globalPath;
+  if (source === "project") return paths.projectPath;
+  return undefined;
 }
 
 /** Parse existing file text into a mutable {mcpServers} object (never throws). */

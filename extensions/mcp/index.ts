@@ -2,8 +2,9 @@
 // interaction and all side effects (file I/O, spawning transports, network);
 // every decision helper lives in src/ as a pure/injectable module.
 //
-// Flow: session_start → read ~/.pi/agent/mcp.json + <cwd>/.pi/mcp.json →
-// parse + merge (project wins) → per server createTransport → McpClient
+// Flow: session_start → read ~/.pi/agent/mcp.json + <cwd>/.pi/mcp.json
+// (falling back to compatible .mcp.json paths) → parse + merge (project wins)
+// → per server createTransport → McpClient
 // .initialize() → listTools() → buildToolDefinitions() → pi.registerTool.
 // Each tool's execute forwards to the live client and maps MCP content back to
 // a pi tool result. Failures degrade per-server (notify + status=error); they
@@ -23,6 +24,7 @@ import {
   parseMcpConfig,
   mergeMcpConfigs,
   computeConfigPaths,
+  configPathForSource,
   normalizeServerConfig,
   applyServerToConfigText,
   removeServerFromConfigText,
@@ -30,9 +32,21 @@ import {
 import { createTransport } from "./src/transport.js";
 import { McpClient } from "./src/client.js";
 import { buildToolDefinitions } from "./src/register.js";
+import { sanitizeServerName } from "./src/naming.js";
 import { mcpContentToToolResult } from "./src/result.js";
+import {
+  McpPanel,
+  parseKvPairs,
+  type McpPanelDeps,
+  type McpServerRow,
+  type RemoveResult,
+  type Transport as PanelTransport,
+  type Scope as PanelScope,
+} from "./src/panel.js";
 import type {
   McpServerConfig,
+  McpStdioConfig,
+  McpHttpConfig,
   McpToolDef,
   Transport,
   ServerSource,
@@ -40,7 +54,19 @@ import type {
 } from "./src/types.js";
 
 interface RegistryEntry {
+  /**
+   * Canonical, sanitized server id. This is the registry key, the segment used
+   * in every `mcp__<name>__<tool>` tool name, the dispatch key resolved at call
+   * time, and what the approvals gate matches on — a single id threaded through
+   * the whole pipeline so it is always OpenAI-legal.
+   */
   name: string;
+  /**
+   * The original (pre-sanitization) server name as declared in config or by
+   * plugin-loader. Used only for display and for locating the entry in the
+   * on-disk config file (which stores raw names) — never for tool names.
+   */
+  rawName: string;
   config: McpServerConfig;
   source: ServerSource;
   transport?: Transport;
@@ -63,6 +89,7 @@ export default function mcpExtension(pi: ExtensionAPI): void {
   const registeredToolNames = new Set<string>();
   let lastUi: ExtensionUIContext | undefined;
   let projectConfigPath = "";
+  let globalConfigPath = "";
   let initialized = false;
 
   const notify = (msg: string, type: "info" | "warning" | "error" = "info"): void => {
@@ -71,6 +98,18 @@ export default function mcpExtension(pi: ExtensionAPI): void {
     } catch {
       // notify must never throw
     }
+  };
+
+  // Resolve a raw server name to its canonical (sanitized) registry id. If this
+  // raw name is already registered, reuse its existing id so reconnects and
+  // config edits stay stable; otherwise sanitize it and, on collision with an
+  // already-taken id, append a numeric suffix. The canonical id — not the raw
+  // name — is the registry key and the segment used in every tool name.
+  const canonicalIdFor = (rawName: string): string => {
+    for (const [id, entry] of registry) {
+      if (entry.rawName === rawName) return id;
+    }
+    return sanitizeServerName(rawName, new Set(registry.keys()));
   };
 
   const connectedCount = (): number => {
@@ -169,7 +208,7 @@ export default function mcpExtension(pi: ExtensionAPI): void {
         entry.transport = undefined;
       }
       entry.client = undefined;
-      notify(`MCP server "${entry.name}" failed: ${entry.error}`, "error");
+      notify(`MCP server "${entry.rawName}" failed: ${entry.error}`, "error");
     }
   };
 
@@ -185,15 +224,23 @@ export default function mcpExtension(pi: ExtensionAPI): void {
     const home = os.homedir();
     const paths = computeConfigPaths(home, cwd);
     projectConfigPath = paths.projectPath;
+    globalConfigPath = paths.globalPath;
 
-    const g = parseMcpConfig(readFileSafe(paths.globalPath));
-    const p = parseMcpConfig(readFileSafe(paths.projectPath));
+    const globalCanonical = readFileSafe(paths.globalPath);
+    const projectCanonical = readFileSafe(paths.projectPath);
+    const g = parseMcpConfig(
+      globalCanonical.trim() ? globalCanonical : readFileSafe(paths.legacyGlobalPath),
+    );
+    const p = parseMcpConfig(
+      projectCanonical.trim() ? projectCanonical : readFileSafe(paths.legacyProjectPath),
+    );
     for (const e of [...g.errors, ...p.errors]) notify(`MCP config: ${e}`, "warning");
 
     const merged = mergeMcpConfigs(g.servers, p.servers);
     for (const { name, config, source } of Object.values(merged)) {
-      if (!registry.has(name)) {
-        registry.set(name, { name, config, source, tools: [], status: "disconnected" });
+      const id = canonicalIdFor(name);
+      if (!registry.has(id)) {
+        registry.set(id, { name: id, rawName: name, config, source, tools: [], status: "disconnected" });
       }
     }
     await Promise.all(
@@ -237,6 +284,31 @@ export default function mcpExtension(pi: ExtensionAPI): void {
 
   // ---- runtime injection from plugin-loader ----
 
+  pi.events.on("mcp:replace-plugin-servers", (payload: unknown) => {
+    const items = payload && typeof payload === "object" && Array.isArray((payload as { registrations?: unknown }).registrations)
+      ? (payload as { registrations: unknown[] }).registrations
+      : [];
+    const wanted = new Set(items.flatMap((item) => {
+      const name = item && typeof item === "object" ? (item as { name?: unknown }).name : undefined;
+      return typeof name === "string" ? [name] : [];
+    }));
+    // The registry is keyed by sanitized canonical id, but the payload carries
+    // raw (pre-sanitized) names, so match on each entry's rawName throughout.
+    for (const [id, entry] of [...registry.entries()]) {
+      if (entry.source !== "runtime" || wanted.has(entry.rawName)) continue;
+      registry.delete(id);
+      // Pi cannot unregister tools; close the old transport. Re-adding this name registers a fresh tool/client.
+      entry.transport?.close();
+    }
+    // Force re-registration on same-name config changes instead of silently retaining stale config.
+    for (const [id, entry] of [...registry.entries()]) {
+      if (entry.source !== "runtime" || !wanted.has(entry.rawName)) continue;
+      registry.delete(id);
+      entry.transport?.close();
+    }
+    refreshStatus();
+  });
+
   pi.events.on(REGISTER_CHANNEL, (data: unknown) => {
     const reg = data as Partial<McpRegistration> | null;
     if (!reg || typeof reg.name !== "string" || reg.name.length === 0) {
@@ -248,14 +320,16 @@ export default function mcpExtension(pi: ExtensionAPI): void {
       notify(`mcp:register-server "${reg.name}" ignored: invalid config`, "warning");
       return;
     }
+    const id = canonicalIdFor(reg.name);
     const entry: RegistryEntry = {
-      name: reg.name,
+      name: id,
+      rawName: reg.name,
       config,
       source: "runtime",
       tools: [],
       status: "disconnected",
     };
-    registry.set(reg.name, entry);
+    registry.set(id, entry);
     void connect(entry).then(() => refreshStatus());
   });
 
@@ -272,23 +346,130 @@ export default function mcpExtension(pi: ExtensionAPI): void {
           : e.status === "error"
             ? `error: ${e.error ?? "unknown"}`
             : "disconnected";
-      lines.push(`• ${e.name} [${e.source}/${kind}] — ${e.status}, ${detail}`);
+      lines.push(`• ${e.rawName} [${e.source}/${kind}] — ${e.status}, ${detail}`);
     }
     lines.push(`(${connectedCount()} connected)`);
     return lines.join("\n");
   };
 
-  const writeProjectConfig = (mutate: (text: string) => string): boolean => {
+  // Generalized config writer: write to an arbitrary path (project or global),
+  // so add/remove can target the file that actually owns the server.
+  const writeConfigAt = (targetPath: string, mutate: (text: string) => string): boolean => {
     try {
-      const current = readFileSafe(projectConfigPath);
+      const current = readFileSafe(targetPath);
       const next = mutate(current);
-      mkdirSync(dirname(projectConfigPath), { recursive: true });
-      writeFileSync(projectConfigPath, next, "utf8");
+      mkdirSync(dirname(targetPath), { recursive: true });
+      writeFileSync(targetPath, next, "utf8");
       return true;
     } catch (err) {
-      notify(`Failed to write ${projectConfigPath}: ${(err as Error).message}`, "error");
+      notify(`Failed to write ${targetPath}: ${(err as Error).message}`, "error");
       return false;
     }
+  };
+
+  // The on-disk config file that owns a server of the given source. Runtime
+  // (plugin-injected) servers have no config file — never write for them.
+  const pathForSource = (source: ServerSource): string | undefined =>
+    configPathForSource(source, { projectPath: projectConfigPath, globalPath: globalConfigPath });
+
+  // Project a live registry entry into the plain row the panel renders from.
+  const toServerRow = (entry: RegistryEntry): McpServerRow => {
+    const cfg = entry.config;
+    const isStdio = "command" in cfg;
+    const transport: PanelTransport = isStdio ? "stdio" : (cfg as McpHttpConfig).type;
+    const row: McpServerRow = {
+      id: entry.name,
+      rawName: entry.rawName,
+      transport,
+      source: entry.source,
+      status: entry.status,
+      error: entry.error,
+      toolCount: entry.tools.length,
+    };
+    if (isStdio) {
+      const c = cfg as McpStdioConfig;
+      row.command = c.command;
+      row.args = c.args;
+      row.env = c.env;
+    } else {
+      const c = cfg as McpHttpConfig;
+      row.url = c.url;
+      row.headers = c.headers;
+    }
+    return row;
+  };
+
+  // Shared remove path used by both the panel and the /mcp remove subcommand.
+  // Writes to the correct file by source; runtime servers are memory-only.
+  const removeServerById = (id: string): RemoveResult => {
+    const entry = registry.get(id);
+    if (!entry) return { removedFromFile: false, message: "Server not found." };
+    const targetPath = pathForSource(entry.source);
+    let removedFromFile = false;
+    if (targetPath) {
+      removedFromFile = writeConfigAt(targetPath, (t) => removeServerFromConfigText(t, entry.rawName));
+    }
+    try {
+      entry.transport?.close();
+    } catch {
+      // ignore
+    }
+    registry.delete(id);
+    refreshStatus();
+    const message =
+      entry.source === "runtime"
+        ? `"${entry.rawName}" comes from a plugin; removed from memory only (returns on reload). Disable the plugin via /plugin.`
+        : `Removed "${entry.rawName}" from ${targetPath}. Its tools stay registered until restart.`;
+    return { removedFromFile, message };
+  };
+
+  // Everything the McpPanel overlay needs, bound to this extension's registry.
+  const buildPanelDeps = (): McpPanelDeps => ({
+    listServers: () => [...registry.values()].map(toServerRow),
+    toolsFor: (id) => registry.get(id)?.tools ?? [],
+    configPaths: () => ({ projectPath: projectConfigPath, globalPath: globalConfigPath }),
+    reconnect: async (id) => {
+      const entry = registry.get(id);
+      if (!entry) return;
+      await connect(entry);
+      refreshStatus();
+    },
+    addServer: async ({ name, scope, config }) => {
+      const target = scope === "global" ? globalConfigPath : projectConfigPath;
+      if (!writeConfigAt(target, (t) => applyServerToConfigText(t, name, config))) {
+        return { status: "error", error: `failed to write ${target}` };
+      }
+      const id = canonicalIdFor(name);
+      const entry: RegistryEntry = { name: id, rawName: name, config, source: scope, tools: [], status: "disconnected" };
+      registry.set(id, entry);
+      await connect(entry);
+      refreshStatus();
+      return { status: entry.status, error: entry.error };
+    },
+    removeServer: (id) => removeServerById(id),
+  });
+
+  const openPanel = async (ctx: ExtensionContext): Promise<void> => {
+    const deps = buildPanelDeps();
+    let panel: McpPanel | undefined;
+    let unsubscribe: (() => void) | undefined;
+    try {
+      await ctx.ui.custom<void>(
+        (tui, theme, _kb, done) => {
+          panel = new McpPanel(theme, deps, done);
+          panel.requestRender = () => tui.requestRender();
+          unsubscribe = tui.addInputListener((data) => {
+            panel?.handleInput(data);
+            return { consume: true };
+          });
+          return panel;
+        },
+        { overlay: true, overlayOptions: { anchor: "center", width: "85%", maxHeight: "85%", margin: 1 } },
+      );
+    } finally {
+      unsubscribe?.();
+    }
+    refreshStatus();
   };
 
   const handleAdd = async (ctx: ExtensionContext): Promise<void> => {
@@ -298,6 +479,9 @@ export default function mcpExtension(pi: ExtensionAPI): void {
     }
     const kind = await ctx.ui.select("MCP server type", ["stdio", "http", "sse"]);
     if (!kind) return;
+    const scopeChoice = await ctx.ui.select("Scope", ["project", "global"]);
+    if (!scopeChoice) return;
+    const scope = scopeChoice as PanelScope;
     const name = await ctx.ui.input("Server name", "e.g. github");
     if (!name) return;
 
@@ -306,25 +490,37 @@ export default function mcpExtension(pi: ExtensionAPI): void {
       const command = await ctx.ui.input("Command", "e.g. npx");
       if (!command) return;
       const argsRaw = await ctx.ui.input("Args (space-separated, optional)", "");
+      const envRaw = await ctx.ui.input("Env (KEY=value, comma-separated, optional)", "");
       config = { command, ...(argsRaw ? { args: argsRaw.split(/\s+/).filter(Boolean) } : {}) };
+      const env = parseKvPairs(envRaw ?? "");
+      if (Object.keys(env).length) (config as McpStdioConfig).env = env;
     } else {
       const url = await ctx.ui.input("URL", "https://…");
       if (!url) return;
+      const headersRaw = await ctx.ui.input("Headers (KEY=value, comma-separated, optional)", "");
       config = { type: kind as "http" | "sse", url };
+      const headers = parseKvPairs(headersRaw ?? "");
+      if (Object.keys(headers).length) (config as McpHttpConfig).headers = headers;
     }
 
-    if (!writeProjectConfig((text) => applyServerToConfigText(text, name, config!))) return;
+    const target = scope === "global" ? globalConfigPath : projectConfigPath;
+    if (!writeConfigAt(target, (text) => applyServerToConfigText(text, name, config!))) return;
+    const id = canonicalIdFor(name);
     const entry: RegistryEntry = {
-      name,
+      name: id,
+      rawName: name,
       config,
-      source: "project",
+      source: scope,
       tools: [],
       status: "disconnected",
     };
-    registry.set(name, entry);
+    registry.set(id, entry);
     await connect(entry);
     refreshStatus();
-    notify(`Added MCP server "${name}" (${entry.status}).`, entry.status === "connected" ? "info" : "warning");
+    notify(
+      `Added MCP server "${name}" to ${scope} (${entry.status}).`,
+      entry.status === "connected" ? "info" : "warning",
+    );
   };
 
   const handleRemove = async (ctx: ExtensionContext): Promise<void> => {
@@ -332,40 +528,54 @@ export default function mcpExtension(pi: ExtensionAPI): void {
       notify("/mcp remove requires interactive UI", "warning");
       return;
     }
-    const names = [...registry.keys()];
-    if (names.length === 0) {
+    const entries = [...registry.values()];
+    if (entries.length === 0) {
       notify("No MCP servers to remove.", "info");
       return;
     }
-    const name = await ctx.ui.select("Remove which MCP server?", names);
-    if (!name) return;
-    writeProjectConfig((text) => removeServerFromConfigText(text, name));
-    const entry = registry.get(name);
-    try {
-      entry?.transport?.close();
-    } catch {
-      // ignore
-    }
-    registry.delete(name);
-    refreshStatus();
-    notify(
-      `Removed "${name}" from config. Its tools remain registered until restart.`,
-      "info",
-    );
+    // Present the raw names (what appears in the config file), then resolve back
+    // to the canonical registry id — removeServerById writes the correct file
+    // by source (project/global) and never touches disk for runtime servers.
+    const rawNames = entries.map((e) => e.rawName);
+    const chosen = await ctx.ui.select("Remove which MCP server?", rawNames);
+    if (!chosen) return;
+    const entry = entries.find((e) => e.rawName === chosen);
+    if (!entry) return;
+    const res = removeServerById(entry.name);
+    notify(res.message, "info");
   };
 
-  const handleReconnect = async (): Promise<void> => {
-    await Promise.all([...registry.values()].map((e) => connect(e)));
+  const handleReconnect = async (target?: string): Promise<void> => {
+    const entries = [...registry.values()];
+    const chosen = target
+      ? entries.filter((e) => e.rawName === target || e.name === target)
+      : entries;
+    if (target && chosen.length === 0) {
+      notify(`No MCP server named "${target}".`, "warning");
+      return;
+    }
+    await Promise.all(chosen.map((e) => connect(e)));
     refreshStatus();
-    notify(`Reconnected MCP servers (${connectedCount()} connected).`, "info");
+    notify(
+      `Reconnected ${target ? `"${target}"` : "MCP servers"} (${connectedCount()} connected).`,
+      "info",
+    );
   };
 
   pi.registerCommand("mcp", {
     description: "Manage MCP servers: list | status | add | remove | reconnect",
     handler: async (args: string, ctx: ExtensionContext) => {
-      const sub = args.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      const sub = parts[0]?.toLowerCase() ?? "";
       switch (sub) {
         case "":
+          // Interactive terminal → open the overlay panel; headless → list text.
+          if (ctx.hasUI) {
+            await openPanel(ctx);
+          } else {
+            notify(buildListText(), "info");
+          }
+          return;
         case "list":
         case "status":
           notify(buildListText(), "info");
@@ -377,7 +587,7 @@ export default function mcpExtension(pi: ExtensionAPI): void {
           await handleRemove(ctx);
           return;
         case "reconnect":
-          await handleReconnect();
+          await handleReconnect(parts[1]);
           return;
         default:
           notify(`Unknown /mcp subcommand "${sub}". Use list|status|add|remove|reconnect.`, "warning");

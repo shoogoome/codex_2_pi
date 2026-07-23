@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { discoverPlugins, discoverPluginAt, probeManifest, detectDirs } from "./discover.js";
+import {
+  detectDirs,
+  discoverManagedPlugins,
+  discoverPlugins,
+  discoverPluginAt,
+  probeManifest,
+} from "./discover.js";
 import type { FsFacade } from "./discover.js";
 
 /**
@@ -103,6 +109,33 @@ describe("discoverPluginAt", () => {
     expect(p.name).toBe("bare");
     expect(p.manifestKind).toBe("none");
     expect(p.dirs.commands).toBe("/root/bare/commands");
+  });
+});
+
+describe("discoverManagedPlugins", () => {
+  it("preserves manager record names for manifestless version directories", () => {
+    const fs = makeFakeFs(
+      {
+        "/cache/common/0.0.0/.mcp.json": "{}",
+        "/cache/iwiki/0.0.0/.mcp.json": "{}",
+      },
+      ["/cache/common/0.0.0", "/cache/iwiki/0.0.0"],
+    );
+
+    const plugins = discoverManagedPlugins(
+      [
+        { name: "common", path: "/cache/common/0.0.0" },
+        { name: "iwiki_doc", path: "/cache/iwiki/0.0.0" },
+      ],
+      fs,
+    );
+
+    expect(plugins.map((plugin) => plugin.name)).toEqual(["common", "iwiki_doc"]);
+    expect(plugins.map((plugin) => plugin.root)).toEqual([
+      "/cache/common/0.0.0",
+      "/cache/iwiki/0.0.0",
+    ]);
+    expect(plugins.every((plugin) => plugin.dirs.mcpJson?.endsWith("/.mcp.json"))).toBe(true);
   });
 });
 

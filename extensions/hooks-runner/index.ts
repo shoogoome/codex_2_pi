@@ -62,6 +62,7 @@ import {
   type HookInputBase,
 } from "./src/protocol.js";
 import { runCommandHook, type SpawnedChild, type SpawnFn } from "./src/executor.js";
+import { loadPluginHooks, mergeHooksConfig, type PluginHookDescriptor } from "./src/pluginHooks.js";
 import { hashHookCommand, isTrusted, reduceTrustEntries, TRUST_ENTRY } from "./src/trust.js";
 import type {
   EntryLike,
@@ -143,6 +144,8 @@ function replaceInput(target: Record<string, unknown>, next: Record<string, unkn
 export default function hooksRunnerExtension(pi: ExtensionAPI, deps: HooksRunnerDeps = {}): void {
   const spawnHook = deps.spawn ?? realSpawnHook;
   let config: HooksConfig | undefined;
+  let baseConfig: HooksConfig = {};
+  let pluginHookDescriptors: PluginHookDescriptor[] = [];
   let trusted = new Set<string>();
   let pendingContext: string[] = [];
   let lastUi: ExtensionContext["ui"] | undefined;
@@ -358,6 +361,17 @@ export default function hooksRunnerExtension(pi: ExtensionAPI, deps: HooksRunner
 
   // ---- session_start → SessionStart ----
 
+  pi.events.on("plugins:replace-hooks", (payload: unknown) => {
+    pluginHookDescriptors = payload && typeof payload === "object" && Array.isArray((payload as { hooks?: unknown }).hooks)
+      ? (payload as { hooks: PluginHookDescriptor[] }).hooks
+      : [];
+    try { config = mergeHooksConfig(baseConfig, loadPluginHooks(pluginHookDescriptors)); }
+    catch (error) {
+      config = baseConfig;
+      notify(`plugin hooks: ${error instanceof Error ? error.message : String(error)}`, "warning");
+    }
+  });
+
   pi.on("session_start", async (event: SessionStartEvent, ctx: ExtensionContext): Promise<void> => {
     lastUi = ctx.ui;
     const home = os.homedir();
@@ -365,7 +379,12 @@ export default function hooksRunnerExtension(pi: ExtensionAPI, deps: HooksRunner
     const g = parseHooksConfig(readFileSafe(paths.globalPath));
     const p = parseHooksConfig(readFileSafe(paths.projectPath));
     for (const w of [...g.warnings, ...p.warnings]) notify(`hooks config: ${w}`, "warning");
-    config = mergeHooksConfigs(g.config, p.config);
+    baseConfig = mergeHooksConfigs(g.config, p.config);
+    try { config = mergeHooksConfig(baseConfig, loadPluginHooks(pluginHookDescriptors)); }
+    catch (error) {
+      config = baseConfig;
+      notify(`plugin hooks: ${error instanceof Error ? error.message : String(error)}`, "warning");
+    }
 
     // Rebuild the trusted set from the branch on every session_start.
     const branch = ctx.sessionManager.getBranch() as unknown as EntryLike[];

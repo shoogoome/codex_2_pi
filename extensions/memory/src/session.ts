@@ -149,6 +149,14 @@ export class MemorySession {
     return this.index;
   }
 
+  /** Reload index and topic files after an automatic or explicit mutation. */
+  reload(): void {
+    this.topics = [];
+    this.index = null;
+    this.loadIndex();
+    this.loadTopics();
+  }
+
   /** session_compact: dropped injected messages → re-arm rules + index. */
   resetInjectionLatch(): void {
     this.armed = true;

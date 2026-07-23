@@ -1,18 +1,21 @@
 # memory 扩展
 
-Claude 风格的长期记忆:为 agent 提供一个按 git 根目录划分的持久记忆目录,把 `MEMORY.md` 索引与"召回"的相关主题内容在每一轮注入上下文,压缩(compaction)后自动重新注入。记忆文件由**模型自己**用普通的 read/write/edit 维护;扩展只负责定位/创建目录、注入、并提供 `/memory`、`/remember` 两个命令。
+Claude Code 风格的自动长期记忆：为 agent 提供按 git 根目录划分的持久记忆目录，自动初始化 `MEMORY.md`，按需召回相关主题，并在每轮结束后保守提炼值得跨会话保留的稳定事实。用户不需要先执行 init，也不需要每次主动 `/remember`；命令和普通 read/write/edit 仍可用于显式查看或修正记忆。
 
 ## 能力
 
-- **定位/创建记忆目录**:按 git 根目录划分作用域。
-  - 在 git 仓库内:`<gitRoot>/.pi/memory`
-  - 不在仓库内(降级):`~/.pi/agent/memory/<projectHash>`(projectHash 由 cwd 的 djb2 哈希派生,与 mcp / plugin-loader 扩展的 `~/.pi/agent/*` 约定一致)
+- **自动初始化记忆目录**：`session_start`（包括 startup/reload/new/resume/fork）时自动建立作用域和空索引，无需手动 `/memory init`。
+  - 在 git 仓库内：`<gitRoot>/.pi/memory`
+  - 不在仓库内（降级）：`~/.pi/agent/memory/<projectHash>`（projectHash 由 cwd 的 djb2 哈希派生）
+- **自动提炼**：`turn_end` 后先用本地信号门判断最新一轮是否可能包含长期信息；只有命中时才调用当前模型提炼，普通对话不增加额外模型请求。
+- **保守维护**：自动提炼可新增、合并、去重、替换旧事实或删除完全失效主题，并在变更后重建 `MEMORY.md`。
+- **安全与并发**：忽略临时任务状态、猜测和常见凭据格式；同一进程内串行写入，提炼失败静默降级，不阻塞正常对话。
 - **注入记忆块**:在 `before_agent_start` 以 `display:false` 的 CustomMessage(customType `memory`)注入,不改动 systemPrompt,便于与其它扩展组合。
   - 首轮(以及每次 compaction 后的首轮)注入:规则说明块 + 完整 `MEMORY.md` 索引。
   - 每一轮都可能附加:与当前 prompt 相关的**召回主题正文**。
 - **召回(MVP)**:对 prompt 做确定性关键词打分(name 权重 3、description 权重 2、body 权重 1),挑选最相关的主题正文注入。
 - **压缩后重注入**:`session_compact` 事件会重置注入闩锁(latch),下一轮重新注入规则+索引。
-- **命令**:`/memory`(list/show/init)、`/remember`。
+- **命令**：`/memory`（list/show/init）、`/remember`。它们是查看和显式纠正入口，不再是记忆生效的前置步骤。
 
 ## 存储布局
 
@@ -68,9 +71,18 @@ type: user
 
 `/memory` 子命令支持参数补全(list / show / init)。命令均在有 UI 时以多行 `notify` 展示,无 UI 时降级为单行通知。
 
+## 自动提炼流程
+
+1. `turn_end` 读取当前分支中最新一组 user/assistant 消息，不读取 thinking 或 tool result。
+2. 本地关键词门检查稳定偏好、明确纠正、项目约定等信号；无信号立即结束。
+3. 命中后使用当前会话模型做一次低 token、零温度的结构化 JSON 提炼。
+4. 只接受 `user`、`feedback`、`project`、`reference` 四类；过滤临时状态、未确认的 assistant 声明和常见密钥/密码模式。
+5. 在主题级合并和去重，按 `replaces` 精确移除被新事实取代的旧条目，再原子地串行维护索引。
+6. `session_shutdown` 等待队列收尾；任何提炼或解析错误都不会影响主对话。
+
 ## 工具
 
-本扩展**不注册任何 LLM 可调工具**,也不拥有专门的存储工具。记忆文件由模型用普通的 read/write/edit 直接维护;注入的规则块会告诉模型记忆目录位置以及如何保持索引同步。
+本扩展不注册额外的 LLM 工具。自动维护由生命周期 hook 完成；模型仍可用普通 read/write/edit 修正主题文件，用户也可使用 `/remember` 显式记录。
 
 ## 配置
 
@@ -94,10 +106,10 @@ type: user
 ## 用法示例
 
 ```
-# 初始化记忆目录(可选;首次 /remember 或模型写文件时也会创建)
+# 目录和空索引会自动创建；此命令仅用于手动确认/修复
 /memory init
 
-# 记住一条事实(落到 General notes,并同步索引)
+# 可选：显式记住一条事实（自动提炼之外的手动入口）
 /remember 部署脚本在 scripts/deploy.sh,需要先设置 AWS_PROFILE
 
 # 查看有哪些记忆主题
@@ -112,10 +124,9 @@ type: user
 
 ## 说明 / 注意
 
-- **分工**:扩展只做定位/创建目录、注入(索引 + 召回 + 规则)、暴露命令三件事;真正维护记忆内容(写/改主题文件)是模型的职责。
-- **不修改 systemPrompt**:注入走 `display:false` 的 CustomMessage,可与其它扩展干净组合;若宿主展开了隐藏消息,会通过注册的消息渲染器以纯文本显示。
-- **`/remember` 的并发保护**:仅在 agent 空闲(`isIdle()`)时才写文件,避免与模型自己的文件写入竞争;繁忙时提示稍后重试。
-- **索引同步为尽力而为**:`/remember` 后同步 `MEMORY.md` 若失败会被吞掉,索引漂移可由模型后续恢复。
-- **召回是关键词的、确定性的**:name > description > body 加权;零分主题不注入;同分按名称排序保证确定性。**语义召回属于二期**,尚未实现。
-- **二期未做项(当前为文档化的空 no-op)**:`turn_end`(后台 fork 子 agent 做自动记忆提取 / 蒸馏)与 `session_shutdown`(会话结束时的记忆整合 / autoDream)已接线但**不做任何事、绝不 fork 子 agent**,均在 MVP 范围外。
+- **不修改 systemPrompt**：召回仍通过 `display:false` CustomMessage 注入，可与其它扩展组合。
+- **提炼是按需而非每轮调用模型**：本地信号门优先过滤普通轮次；命中后才做结构化提炼。
+- **召回仍是确定性关键词方案**：name > description > body；语义召回尚未实现。
+- **不会保证记住一切**：自动策略刻意偏保守，避免错误和隐私内容长期落盘；重要内容可用 `/remember` 强制记录，并可直接编辑文件纠错。
+- **文件属于项目数据**：仓库内默认写入 `.pi/memory/`，是否提交由项目自行决定。
 - 默认启用。可用 `--no-memory` 或 `PI_MEMORY=0` 禁用。

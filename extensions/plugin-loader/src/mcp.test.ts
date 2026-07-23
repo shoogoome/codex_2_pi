@@ -4,6 +4,7 @@ import {
   mergeServers,
   buildMcpRegistrations,
   detectMcpExtension,
+  sanitizeServerName,
   MCP_REGISTER_CHANNEL,
 } from "./mcp.js";
 
@@ -38,7 +39,7 @@ describe("mergeServers", () => {
 });
 
 describe("buildMcpRegistrations", () => {
-  it("namespaces names and substitutes CLAUDE_PLUGIN_ROOT deeply", () => {
+  it("namespaces names with '_' (never ':') and substitutes CLAUDE_PLUGIN_ROOT deeply", () => {
     const regs = buildMcpRegistrations(
       "demo",
       {
@@ -52,19 +53,40 @@ describe("buildMcpRegistrations", () => {
       "/plug/demo",
     );
     const byName = Object.fromEntries(regs.map((r) => [r.name, r.config]));
-    expect(byName["demo:local"]).toEqual({
+    expect(byName["demo_local"]).toEqual({
       command: "/plug/demo/bin/server",
       args: ["--data", "/plug/demo/data"],
       env: { TOKEN: "static" },
     });
-    expect(byName["demo:remote"]).toEqual({
+    expect(byName["demo_remote"]).toEqual({
       url: "https://x",
       headers: { Root: "/plug/demo" },
     });
+    // No generated name may contain a colon (the original 400-causing bug).
+    for (const r of regs) expect(r.name).not.toContain(":");
+  });
+
+  it("sanitizes illegal chars in plugin/server names to an OpenAI-legal id", () => {
+    const regs = buildMcpRegistrations(
+      "zhiyan",
+      { "zhiyan-log": { url: "https://x" }, "weird name.v2": { url: "https://y" } },
+      "/r",
+    );
+    const names = regs.map((r) => r.name);
+    expect(names).toEqual(["zhiyan_zhiyan-log", "zhiyan_weird_name_v2"]);
+    for (const n of names) expect(n).toMatch(/^[a-zA-Z][a-zA-Z0-9_-]*$/);
   });
 
   it("returns [] for no servers", () => {
     expect(buildMcpRegistrations("p", {}, "/r")).toEqual([]);
+  });
+});
+
+describe("sanitizeServerName", () => {
+  it("replaces colons and collapses/strips underscores", () => {
+    expect(sanitizeServerName("zhiyan:zhiyan-log")).toBe("zhiyan_zhiyan-log");
+    expect(sanitizeServerName("a b.c/d")).toBe("a_b_c_d");
+    expect(sanitizeServerName("__x__")).toBe("x");
   });
 });
 

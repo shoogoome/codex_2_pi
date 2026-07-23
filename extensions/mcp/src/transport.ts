@@ -5,6 +5,7 @@
 // no real network in the suite).
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { expandEnvRecord, expandEnvValue } from "./env.js";
 import { buildJsonRpcRequest, classifyRpcMessage, createLineBuffer, encodeFrame, nextRequestId } from "./framing.js";
 import type {
   JsonRpcResponse,
@@ -28,8 +29,10 @@ export class StdioTransport implements Transport {
   private closed = false;
 
   constructor(config: McpStdioConfig) {
+    const expanded = expandEnvRecord(config.env);
+    assertEnvAvailable(expanded.missing);
     this.child = spawn(config.command, config.args ?? [], {
-      env: { ...process.env, ...(config.env ?? {}) },
+      env: { ...process.env, ...(expanded.values ?? {}) },
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -131,16 +134,25 @@ export class StdioTransport implements Transport {
 }
 
 export class HttpTransport implements Transport {
-  constructor(private readonly config: McpHttpConfig) {}
+  private readonly headers: Record<string, string>;
+  private readonly url: string;
+
+  constructor(private readonly config: McpHttpConfig) {
+    const expandedUrl = expandEnvValue(config.url);
+    const expandedHeaders = expandEnvRecord(config.headers);
+    assertEnvAvailable([...new Set([...expandedUrl.missing, ...expandedHeaders.missing])]);
+    this.url = expandedUrl.value;
+    this.headers = expandedHeaders.values ?? {};
+  }
 
   async request(method: string, params?: unknown): Promise<unknown> {
     const body = JSON.stringify(buildJsonRpcRequest(nextRequestId(), method, params));
-    const res = await fetch(this.config.url, {
+    const res = await fetch(this.url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         accept: "application/json, text/event-stream",
-        ...(this.config.headers ?? {}),
+        ...this.headers,
       },
       body,
     });
@@ -184,6 +196,12 @@ export function parseHttpBody(text: string): unknown {
     }
   }
   return JSON.parse(trimmed);
+}
+
+function assertEnvAvailable(missing: string[]): void {
+  if (missing.length > 0) {
+    throw new Error(`Missing environment variable(s): ${missing.join(", ")}`);
+  }
 }
 
 function isStdio(config: McpServerConfig): config is McpStdioConfig {

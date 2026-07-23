@@ -25,15 +25,20 @@ import type {
   BeforeAgentStartEventResult,
 } from "@earendil-works/pi-coding-agent";
 import { isEnabled, reduceToggles, PLUGIN_TOGGLE_ENTRY } from "./src/config.js";
+import { parsePluginCommand, PLUGIN_HELP } from "./src/cli.js";
+import { PluginManager, type PluginScope } from "./src/manager.js";
+import { PluginPanel, type PluginPanelDeps, type PluginRow } from "./src/panel.js";
 import { transformCommand } from "./src/commandTransform.js";
 import {
   commandFilesFor,
   deferredFor,
   mcpServerSourcePaths,
   skillPathsFor,
+  outputStylePathsFor,
+  agentPathsFor,
   themePathsFor,
 } from "./src/contribute.js";
-import { discoverPlugins, type FsFacade } from "./src/discover.js";
+import { discoverManagedPlugins, discoverPlugins, type FsFacade } from "./src/discover.js";
 import {
   buildMcpRegistrations,
   detectMcpExtension,
@@ -128,7 +133,9 @@ interface Contribution {
   /** Names of commands written to the prompt cache (for /plugin list). */
   commandNames: string[];
   outputStyles: OutputStyle[];
-  /** Deferred features present in this plugin, for reporting. */
+  agentPaths: string[];
+  hookPaths: string[];
+  /** Unsupported features present in this plugin, for reporting. */
   deferred: string[];
 }
 
@@ -143,12 +150,16 @@ function contribute(plugin: DiscoveredPlugin): Contribution {
     themePaths: [],
     commandNames: [],
     outputStyles: [],
+    agentPaths: [],
+    hookPaths: [],
     deferred: [],
   };
   const { dirs, root, name } = plugin;
 
-  c.skillPaths.push(...skillPathsFor(dirs));
+  c.skillPaths.push(...skillPathsFor(dirs, root, plugin.manifest.skills));
   c.themePaths.push(...themePathsFor(dirs));
+  c.agentPaths.push(...agentPathsFor(plugin));
+  if (dirs.hooksJson) c.hookPaths.push(dirs.hooksJson);
 
   // Commands: transform each *.md and write to a per-plugin prompt cache dir.
   // The dir listing (fs) happens here; the dir + manifest source merge is pure.
@@ -179,9 +190,13 @@ function contribute(plugin: DiscoveredPlugin): Contribution {
     }
   }
 
-  // Output styles: parse + collect (applied later on before_agent_start).
-  if (dirs.outputStyles) {
-    for (const file of listMarkdown(dirs.outputStyles)) {
+  // Output styles: convention + manifest-declared paths.
+  for (const stylePath of outputStylePathsFor(dirs, root, plugin.manifest.outputStyles)) {
+    const files = (() => {
+      try { return fs.statSync(stylePath).isDirectory() ? listMarkdown(stylePath) : [stylePath]; }
+      catch { return []; }
+    })();
+    for (const file of files) {
       const source = readFileSafe(file);
       if (source === undefined) continue;
       const id = basename(file).replace(/\.md$/i, "");
@@ -191,8 +206,8 @@ function contribute(plugin: DiscoveredPlugin): Contribution {
     }
   }
 
-  // Deferred features — reported, not wired.
-  c.deferred.push(...deferredFor(dirs));
+  // LSP has no dynamic registration surface in Pi yet. Hooks/agents are bridged below.
+  c.deferred.push(...deferredFor({ ...dirs, hooksJson: undefined, agents: undefined }));
 
   return c;
 }
@@ -245,33 +260,62 @@ export default function pluginLoaderExtension(pi: ExtensionAPI): void {
     description: "How a selected output-style is applied: append (default) | replace.",
   });
 
+  let manager = new PluginManager();
+
   function enabled(): DiscoveredPlugin[] {
-    return state.plugins.filter((p) => isEnabled(p.name, state.toggles));
+    return state.plugins.filter((p) => {
+      const managed = manager.listInstalled().find((record) => resolve(record.path) === resolve(p.root));
+      return isEnabled(p.name, state.toggles) && manager.isEnabled(managed?.id ?? p.name);
+    });
   }
 
   function rediscover(cwd: string): void {
-    const roots = [...flagRoots(pi, cwd), ...defaultRoots(cwd)];
-    state.plugins = discoverPlugins(roots, realFs);
+    manager = new PluginManager({ cwd });
+    const managed = manager.listInstalled().filter((record) => fs.existsSync(record.path));
+    const manual = discoverPlugins([...flagRoots(pi, cwd), ...defaultRoots(cwd)], realFs);
+    const installed = discoverManagedPlugins(managed, realFs);
+    const seenRoots = new Set<string>();
+    state.plugins = [...installed, ...manual].filter((plugin) => {
+      const root = resolve(plugin.root);
+      if (seenRoots.has(root)) return false;
+      seenRoots.add(root);
+      return true;
+    });
   }
 
-  /** Build the prompt cache + emit mcp registrations for all enabled plugins. */
+  /** Build caches and reconcile every dynamically bridgeable plugin contribution. */
   function refreshContributions(ctx: ExtensionContext): void {
     state.contributions.clear();
-    for (const plugin of enabled()) {
-      state.contributions.set(plugin.name, contribute(plugin));
-    }
+    for (const plugin of enabled()) state.contributions.set(plugin.name, contribute(plugin));
     emitMcp(ctx);
+    pi.events.emit("plugins:replace-agents", {
+      paths: [...state.contributions.values()].flatMap((item) => item.agentPaths),
+    });
+    pi.events.emit("plugins:replace-hooks", {
+      hooks: [...state.contributions.entries()].flatMap(([pluginName, item]) =>
+        item.hookPaths.map((path) => {
+          const record = manager.listInstalled().find((installed) => installed.name === pluginName);
+          return {
+            plugin: pluginName,
+            path,
+            root: record?.path ?? dirname(dirname(path)),
+            data: record ? manager.pluginEnvironment(record).CLAUDE_PLUGIN_DATA : undefined,
+            userConfig: record?.userConfig ?? {},
+          };
+        }),
+      ),
+    });
   }
 
   function emitMcp(ctx: ExtensionContext): void {
-    const registrations = enabled().flatMap((plugin) =>
-      buildMcpRegistrations(plugin.name, collectServers(plugin), plugin.root),
-    );
-    if (registrations.length === 0) return;
-    for (const reg of registrations) {
-      pi.events.emit(MCP_REGISTER_CHANNEL, reg);
-    }
-    if (!detectMcpExtension(pi.getCommands()) && !state.mcpNotified) {
+    const registrations = enabled().flatMap((plugin) => {
+      const record = manager.listInstalled().find((installed) => resolve(installed.path) === resolve(plugin.root));
+      const data = record ? manager.pluginEnvironment(record).CLAUDE_PLUGIN_DATA : "";
+      return buildMcpRegistrations(plugin.name, collectServers(plugin), plugin.root, data);
+    });
+    pi.events.emit("mcp:replace-plugin-servers", { registrations });
+    for (const reg of registrations) pi.events.emit(MCP_REGISTER_CHANNEL, reg);
+    if (registrations.length > 0 && !detectMcpExtension(pi.getCommands()) && !state.mcpNotified) {
       state.mcpNotified = true;
       ctx.ui.notify(
         `plugin-loader: ${registrations.length} MCP server(s) declared by plugins, but no mcp ` +
@@ -293,10 +337,7 @@ export default function pluginLoaderExtension(pi: ExtensionAPI): void {
     // On reload, re-run discovery so newly added plugins are picked up.
     if (event.reason === "reload") {
       rediscover(event.cwd);
-      state.contributions.clear();
-      for (const plugin of enabled()) {
-        state.contributions.set(plugin.name, contribute(plugin));
-      }
+      refreshContributions(event as unknown as ExtensionContext);
     }
     const skillPaths: string[] = [];
     const promptPaths: string[] = [];
@@ -325,69 +366,169 @@ export default function pluginLoaderExtension(pi: ExtensionAPI): void {
     },
   );
 
+  function valueMap(pairs: string[]): Record<string, unknown> {
+    const values: Record<string, unknown> = {};
+    for (const pair of pairs) {
+      const index = pair.indexOf("=");
+      if (index < 1) throw new Error(`Expected key=value, got: ${pair}`);
+      const raw = pair.slice(index + 1);
+      try { values[pair.slice(0, index)] = JSON.parse(raw); }
+      catch { values[pair.slice(0, index)] = raw; }
+    }
+    return values;
+  }
+
+  function formatList(available = false): unknown[] {
+    if (available) return manager.listAvailable();
+    const managed = manager.listInstalled();
+    const managedNames = new Set(managed.map((item) => item.name));
+    return [
+      ...managed.map((item) => ({ ...item, enabled: manager.isEnabled(item.id) })),
+      ...state.plugins.filter((item) => !managedNames.has(item.name)).map((item) => ({
+        id: item.name, name: item.name, version: item.manifest.version ?? "", path: item.root,
+        scope: "directory", enabled: enabled().some((plugin) => plugin.name === item.name),
+      })),
+    ];
+  }
+
+  /** Live deps for the PluginPanel overlay — every op delegates to `manager`. */
+  function buildPanelDeps(): PluginPanelDeps {
+    const marketplaceRows = () => {
+      const avail = manager.listAvailable();
+      return manager.listMarketplaces().map((m) => ({
+        ...m,
+        available: avail.filter((a) => a.marketplace === m.name).length,
+        installed: avail.filter((a) => a.marketplace === m.name && a.installed).length,
+      }));
+    };
+    return {
+      listInstalled: () => formatList(false) as PluginRow[],
+      listAvailable: () => manager.listAvailable(),
+      listMarketplaces: marketplaceRows,
+      componentsFor: (id) => manager.details(id).components,
+      manifestFor: (id) => manager.details(id).manifest,
+      setEnabled: (id, on, scope) => {
+        // Mirror the /plugin enable|disable command branch: manager state +
+        // session toggle entry (the latter gates directory plugins by name).
+        manager.setEnabled(id, on, scope);
+        state.toggles.set(id, on);
+        pi.appendEntry(PLUGIN_TOGGLE_ENTRY, { name: id, enabled: on });
+      },
+      install: (id, scope, userConfig) => void manager.install(id, scope, { userConfig }),
+      uninstall: (id, scope, opts) => void manager.uninstall(id, scope, opts),
+      update: (id, scope) => void manager.update(id, scope),
+      configure: (id, values, scope) => void manager.configure(id, values, scope),
+      addMarketplace: (source, scope) => void manager.addMarketplace(source, scope),
+      removeMarketplace: (name, scope) => void manager.removeMarketplace(name, scope),
+      updateMarketplace: (name) => void manager.updateMarketplace(name),
+    };
+  }
+
+  /** Open the Claude-style capturing overlay; reconcile once on dirty close. */
+  async function openPanel(ctx: ExtensionCommandContext): Promise<void> {
+    const deps = buildPanelDeps();
+    let panel: PluginPanel | undefined;
+    let unsubscribe: (() => void) | undefined;
+    try {
+      await ctx.ui.custom<void>(
+        (tui, theme, _kb, done) => {
+          panel = new PluginPanel(theme, deps, done);
+          panel.requestRender = () => tui.requestRender();
+          unsubscribe = tui.addInputListener((data) => {
+            panel?.handleInput(data);
+            return { consume: true };
+          });
+          return panel;
+        },
+        { overlay: true, overlayOptions: { anchor: "center", width: "85%", maxHeight: "85%", margin: 1 } },
+      );
+    } finally {
+      unsubscribe?.();
+    }
+    if (panel?.dirty) {
+      rediscover(ctx.cwd);
+      refreshContributions(ctx);
+      ctx.ui.notify(
+        "Run /reload to apply skills, commands, hooks, and agents; restart may be required for MCP/LSP processes.",
+        "info",
+      );
+    }
+  }
+
   pi.registerCommand("plugin", {
-    description: "List discovered plugins and enable/disable them.",
-    async handler(args: string, ctx: ExtensionCommandContext): Promise<void> {
-      const parts = args.trim().split(/\s+/).filter((s) => s.length > 0);
-      const sub = parts[0];
-      const target = parts.slice(1).join(" ").trim();
-
-      if (!sub || sub === "list") {
-        if (state.plugins.length === 0) {
-          ctx.ui.notify(
-            "No plugins discovered. Drop a plugin under ~/.pi/agent/plugins/, .pi/plugins/, " +
-              "or pass --plugin-dir <dir>.",
-            "info",
-          );
+    description: "Manage Claude-style plugins and marketplaces.",
+    async handler(rawArgs: string, ctx: ExtensionCommandContext): Promise<void> {
+      try {
+        const args = rawArgs.trim();
+        // No-args + interactive terminal → open the overlay panel. Headless
+        // (scripts/tests) with no args falls through to a plain `list`.
+        if (!args && ctx.hasUI) {
+          await openPanel(ctx);
           return;
         }
-        const lines: string[] = [];
-        for (const plugin of state.plugins) {
-          const on = isEnabled(plugin.name, state.toggles);
-          const c = state.contributions.get(plugin.name);
-          const bits: string[] = [];
-          if (c?.skillPaths.length) bits.push("skills");
-          if (c?.commandNames.length) bits.push(`commands(${c.commandNames.length})`);
-          if (c?.themePaths.length) bits.push("themes");
-          if (c?.outputStyles.length) bits.push(`output-styles(${c.outputStyles.length})`);
-          const servers = Object.keys(collectServers(plugin));
-          if (servers.length) bits.push(`mcp(${servers.length})`);
-          const deferred = c?.deferred.length ? ` — deferred: ${c.deferred.join(", ")}` : "";
-          const contributes = bits.length ? bits.join(", ") : "nothing";
-          lines.push(
-            `${on ? "[on] " : "[off]"} ${plugin.name}${plugin.manifest.version ? ` v${plugin.manifest.version}` : ""} — ${contributes}${deferred}`,
-          );
-        }
-        lines.push("");
-        lines.push(
-          "Deferred features (hooks, agents) need a hooks-runner / subagent extension — not loaded yet.",
-        );
-        lines.push("Use /plugin enable <name> · /plugin disable <name>. Reload to apply.");
-        ctx.ui.notify(lines.join("\n"), "info");
-        return;
+        const selected = args || "list";
+        const parsed = parsePluginCommand(selected);
+        const sub = parsed.command || "list";
+        const scope = parsed.scope ?? "user";
+        let result: unknown;
+
+        if (sub === "help" || sub === "--help" || sub === "-h") {
+          ctx.ui.notify(PLUGIN_HELP, "info");
+          return;
+        } else if (sub === "list") {
+          result = formatList(parsed.available);
+        } else if (sub === "marketplace") {
+          const action = parsed.args[0];
+          const target = parsed.args[1];
+          if (action === "add" && target) result = manager.addMarketplace(target, scope);
+          else if (action === "list") result = manager.listMarketplaces(parsed.scope);
+          else if ((action === "remove" || action === "rm") && target) result = { removed: manager.removeMarketplace(target, parsed.scope) };
+          else if (action === "update") result = manager.updateMarketplace(target);
+          else throw new Error("Usage: /plugin marketplace add|list|remove|update ...");
+        } else if (sub === "install" || sub === "i") {
+          if (!parsed.args[0]) throw new Error("Usage: /plugin install <plugin@marketplace> [--scope ...]");
+          result = manager.install(parsed.args[0], scope, { userConfig: parsed.configs });
+        } else if (sub === "uninstall" || sub === "remove") {
+          if (!parsed.args[0]) throw new Error("Usage: /plugin uninstall <plugin> [--scope ...]");
+          result = manager.uninstall(parsed.args[0], scope, { keepData: parsed.keepData, prune: parsed.prune });
+        } else if (sub === "enable" || sub === "disable") {
+          const on = sub === "enable";
+          if (parsed.all) result = manager.listInstalled(parsed.scope).map((item) => manager.setEnabled(item.id, on, item.scope));
+          else {
+            const target = parsed.args[0];
+            if (!target) throw new Error(`Usage: /plugin ${sub} <plugin> [--scope ...]`);
+            result = manager.setEnabled(target, on, parsed.scope);
+            state.toggles.set(target, on);
+            pi.appendEntry(PLUGIN_TOGGLE_ENTRY, { name: target, enabled: on });
+          }
+        } else if (sub === "update") {
+          if (!parsed.args[0]) throw new Error("Usage: /plugin update <plugin> [--scope ...]");
+          result = manager.update(parsed.args[0], scope);
+        } else if (sub === "details") {
+          if (!parsed.args[0]) throw new Error("Usage: /plugin details <plugin>");
+          result = manager.details(parsed.args[0]);
+        } else if (sub === "configure") {
+          if (!parsed.args[0]) throw new Error("Usage: /plugin configure <plugin> key=value ...");
+          result = manager.configure(parsed.args[0], { ...valueMap(parsed.args.slice(1)), ...parsed.configs }, parsed.scope);
+        } else if (sub === "validate") {
+          if (!parsed.args[0]) throw new Error("Usage: /plugin validate <path>");
+          result = manager.validate(parsed.args[0]);
+        } else if (sub === "init" || sub === "new") {
+          if (!parsed.args[0]) throw new Error("Usage: /plugin init <name> [parent-directory]");
+          result = { path: manager.init(parsed.args[0], parsed.args[1]) };
+        } else if (sub === "prune" || sub === "autoremove") {
+          result = manager.prune(scope);
+        } else throw new Error(`Unknown plugin command: ${sub}. Run /plugin help.`);
+
+        rediscover(ctx.cwd);
+        refreshContributions(ctx);
+        const text = parsed.json ? JSON.stringify(result, null, 2) : Array.isArray(result)
+          ? (result.length ? result.map((item) => typeof item === "string" ? item : JSON.stringify(item)).join("\n") : "No plugins found.")
+          : typeof result === "string" ? result : JSON.stringify(result, null, 2);
+        ctx.ui.notify(`${text}\n\nRun /reload to refresh skills, commands, hooks, and agents; restart may be required for MCP/LSP processes.`, "info");
+      } catch (error) {
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }
-
-      if (sub === "enable" || sub === "disable") {
-        if (!target) {
-          ctx.ui.notify(`Usage: /plugin ${sub} <plugin-name>.`, "error");
-          return;
-        }
-        const known = state.plugins.some((p) => p.name === target);
-        if (!known) {
-          ctx.ui.notify(`Unknown plugin "${target}". Use /plugin list.`, "error");
-          return;
-        }
-        const nextEnabled = sub === "enable";
-        state.toggles.set(target, nextEnabled);
-        pi.appendEntry(PLUGIN_TOGGLE_ENTRY, { name: target, enabled: nextEnabled });
-        ctx.ui.notify(
-          `Plugin "${target}" ${nextEnabled ? "enabled" : "disabled"}. Run /reload to apply resource changes.`,
-          "info",
-        );
-        return;
-      }
-
-      ctx.ui.notify(`Unknown subcommand "${sub}". Use: list, enable, disable.`, "error");
     },
   });
 }

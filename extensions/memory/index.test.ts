@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import memoryExtension from "./index.js";
@@ -141,7 +141,7 @@ describe("memory extension wiring", () => {
     expect(reinjected?.message?.content).toContain("## Memory index");
   });
 
-  it("injects nothing when there is no memory for the cwd", async () => {
+  it("auto-initializes and injects an empty index when there is no memory for the cwd", async () => {
     const bare = join(root, "bare");
     mkdirSync(join(bare, ".git"), { recursive: true });
 
@@ -153,7 +153,34 @@ describe("memory extension wiring", () => {
     const result = await pi.handlers.get("before_agent_start")![0](
       { prompt: "anything" },
       ctx,
-    );
-    expect(result).toBeUndefined();
+    ) as { message?: { content: string; display: boolean } };
+    expect(result?.message?.display).toBe(false);
+    expect(result?.message?.content).toContain("_(none yet)_");
+    expect(existsSync(join(bare, ".pi", "memory", "MEMORY.md"))).toBe(true);
+  });
+
+  it("re-scopes memory after a session switch", async () => {
+    const first = join(root, "first");
+    const second = join(root, "second");
+    for (const dir of [first, second]) {
+      mkdirSync(join(dir, ".git"), { recursive: true });
+      mkdirSync(join(dir, ".pi", "memory"), { recursive: true });
+    }
+    writeFileSync(join(first, ".pi", "memory", "MEMORY.md"), "# First memory");
+    writeFileSync(join(second, ".pi", "memory", "MEMORY.md"), "# Second memory");
+
+    const pi = makeFakePi();
+    memoryExtension(pi as never);
+    const firstCtx = { cwd: first, hasUI: false, isIdle: () => true };
+    const secondCtx = { ...firstCtx, cwd: second };
+    await pi.handlers.get("session_start")![0]({ reason: "startup" }, firstCtx);
+    await pi.handlers.get("session_start")![0]({ reason: "resume" }, secondCtx);
+    const result = await pi.handlers.get("before_agent_start")![0](
+      { prompt: "anything" },
+      secondCtx,
+    ) as { message?: { content: string } };
+
+    expect(result?.message?.content).toContain("# Second memory");
+    expect(result?.message?.content).not.toContain("# First memory");
   });
 });

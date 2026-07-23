@@ -7,6 +7,8 @@ import {
   deferredFor,
   mcpServerSourcePaths,
   skillPathsFor,
+  outputStylePathsFor,
+  agentPathsFor,
   themePathsFor,
 } from "./contribute.js";
 import { discoverPlugins, type FsFacade } from "./discover.js";
@@ -107,6 +109,8 @@ describe("discovery + contribution over a real temp dir", () => {
     // skills/ and themes/ map straight to skillPaths / themePaths.
     expect(skillPathsFor(plugin.dirs)).toEqual([join(root, "skills")]);
     expect(themePathsFor(plugin.dirs)).toEqual([join(root, "themes")]);
+    expect(outputStylePathsFor(plugin.dirs)).toEqual([join(root, "output-styles")]);
+    expect(agentPathsFor(plugin)).toEqual([join(root, "agents")]);
 
     // commands/*.md plus manifest-declared sources become command files; the
     // non-markdown file is excluded, the manifest `extra/more.md` is included.
@@ -163,12 +167,14 @@ describe("discovery + contribution over a real temp dir", () => {
     // shared is defined in all three sources; inline manifest wins.
     expect(merged.shared).toEqual({ command: "inline-wins" });
 
-    // Registrations are namespaced <plugin>:<server> with CLAUDE_PLUGIN_ROOT
-    // substituted — the payload shape the mcp extension listens for.
+    // Registrations are namespaced <plugin>_<server> (sanitized to an
+    // OpenAI-legal charset, never ':') with CLAUDE_PLUGIN_ROOT substituted —
+    // the payload shape the mcp extension listens for.
     const regs = buildMcpRegistrations(plugin.name, merged, root);
     const byName = Object.fromEntries(regs.map((r) => [r.name, r.config]));
-    expect(byName["srv:base"]).toEqual({ command: `${root}/bin/base` });
-    expect(byName["srv:shared"]).toEqual({ command: "inline-wins" });
+    expect(byName["srv_base"]).toEqual({ command: `${root}/bin/base` });
+    expect(byName["srv_shared"]).toEqual({ command: "inline-wins" });
+    for (const reg of regs) expect(reg.name).not.toContain(":");
     // Each registration is exactly { name, config } — matches McpRegistration.
     for (const reg of regs) {
       expect(Object.keys(reg).sort()).toEqual(["config", "name"]);

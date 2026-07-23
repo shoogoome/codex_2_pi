@@ -3,13 +3,31 @@
 // A plugin declares MCP servers either inline in its manifest (normalized into a
 // { serverName: config } record by manifest.ts) and/or via a `.mcp.json` file.
 // This module normalizes a parsed servers object, merges sources, substitutes
-// CLAUDE_PLUGIN_ROOT, and namespaces each server as `${plugin}:${server}`.
+// CLAUDE_PLUGIN_ROOT, and namespaces each server as `${plugin}_${server}`
+// (sanitized to an OpenAI-legal charset — never `:` — see sanitizeServerName).
 
 import { substituteDeep } from "./vars.js";
 import type { McpRegistration } from "./types.js";
 
 /** Channel the mcp extension listens on. */
 export const MCP_REGISTER_CHANNEL = "mcp:register-server";
+
+/**
+ * Sanitize a namespaced server name to OpenAI's function-name charset
+ * (`[A-Za-z0-9_-]`). Historically this joined `${plugin}:${server}` with a
+ * colon, but the colon is illegal in an OpenAI function name and — because the
+ * mcp extension turns the server name into `mcp__<name>__<tool>` — a single
+ * illegal char 400s the ENTIRE Chat Completions request. We now namespace with
+ * `_` and strip any other illegal chars at the source. The mcp extension
+ * re-sanitizes defensively (idempotent), so this is belt-and-suspenders. Kept
+ * in sync with `extensions/mcp/src/naming.ts` `sanitizeMcpName`.
+ */
+export function sanitizeServerName(name: string): string {
+  return name
+    .replace(/[^a-zA-Z0-9_-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
 
 /**
  * Normalize a parsed JSON object into a `{ serverName: config }` record.
@@ -47,10 +65,11 @@ export function buildMcpRegistrations(
   pluginName: string,
   servers: Record<string, unknown>,
   pluginRoot: string,
+  pluginData = "",
 ): McpRegistration[] {
-  const vars = { CLAUDE_PLUGIN_ROOT: pluginRoot };
+  const vars = { CLAUDE_PLUGIN_ROOT: pluginRoot, CLAUDE_PLUGIN_DATA: pluginData };
   return Object.entries(servers).map(([serverName, config]) => ({
-    name: `${pluginName}:${serverName}`,
+    name: sanitizeServerName(`${pluginName}_${serverName}`),
     config: substituteDeep(config, vars),
   }));
 }

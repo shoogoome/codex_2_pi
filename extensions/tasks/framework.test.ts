@@ -210,7 +210,7 @@ describe("pollTasks", () => {
     expect(store.getTask("babcdefgh")).toBeDefined();
   });
 
-  it("advances outputOffset for running tasks with new disk content", async () => {
+  it("advances outputOffset for running tasks with new disk content (panel visible)", async () => {
     const taskId = "brunntsk1";
     // running task,outputFile 由模板算
     const { getTaskOutputPath } = await import("./outputPath.js");
@@ -224,9 +224,32 @@ describe("pollTasks", () => {
     appendTaskOutput(taskId, "hello world");
     await flushTaskOutput(taskId);
 
-    const result = await pollTasks(store);
+    // Panel visible → the running-task branch reads the (capped, tail-biased)
+    // delta and advances the offset. See the gating test for the hidden path.
+    const result = await pollTasks(store, { isPanelVisible: () => true });
     expect(result.updatedTaskOffsets[taskId]).toBe(11);
     expect(store.getTask(taskId)?.outputOffset).toBe(11);
+  });
+
+  it("does NOT read/advance offset for running tasks when panel is not visible", async () => {
+    const taskId = "brunnhide";
+    const { getTaskOutputPath } = await import("./outputPath.js");
+    registerTask(
+      {
+        ...sample(taskId, "running"),
+        outputFile: getTaskOutputPath(taskId),
+      },
+      store,
+    );
+    appendTaskOutput(taskId, "firehose bytes");
+    await flushTaskOutput(taskId);
+
+    // Default (no options) and explicit isPanelVisible:false both gate reads off.
+    const def = await pollTasks(store);
+    expect(def.updatedTaskOffsets).toEqual({});
+    const hidden = await pollTasks(store, { isPanelVisible: () => false });
+    expect(hidden.updatedTaskOffsets).toEqual({});
+    expect(store.getTask(taskId)?.outputOffset).toBe(0);
   });
 
   it("does not advance offset for completed task even if disk has data", async () => {
@@ -243,7 +266,9 @@ describe("pollTasks", () => {
     appendTaskOutput(taskId, "post-completion");
     await flushTaskOutput(taskId);
 
-    const result = await pollTasks(store);
+    // Panel visible → proves it's the *completed* status (not the visibility
+    // gate) that suppresses the offset advance.
+    const result = await pollTasks(store, { isPanelVisible: () => true });
     expect(result.updatedTaskOffsets).toEqual({});
     expect(store.getTask(taskId)?.outputOffset).toBe(0);
   });

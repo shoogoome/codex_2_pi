@@ -126,8 +126,12 @@ export async function loadAllRoles(
   cwd: string,
   home: string = homedir(),
   fs: FsDeps = defaultFs,
+  pluginPaths: string[] = [],
 ): Promise<LoadRolesResult> {
-  const dirs = roleSourceDirs(cwd, home);
+  const dirs = [
+    ...roleSourceDirs(cwd, home),
+    ...pluginPaths.map((dir) => ({ dir, source: "project" as const })),
+  ];
   const scans = await Promise.all(dirs.map((d) => scanDir(d.dir, d.source, fs)));
   return loadRolesFromScans(scans);
 }

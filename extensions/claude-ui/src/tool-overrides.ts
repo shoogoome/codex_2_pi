@@ -20,9 +20,10 @@ import {
   type ExtensionAPI,
   type ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Text, type Component } from "@earendil-works/pi-tui";
+import { Text, type Component } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
-import { buildResultLines, buildToolHead, foldLines, resolveMaxLines, type FoldOptions } from "./tool-gutter.js";
+import { FoldableText } from "./foldable-text.js";
+import { buildResultLines, buildToolHead, resolveMaxLines, type FoldOptions } from "./tool-gutter.js";
 import { renderEditDiff, renderWriteDiff } from "./diff-render.js";
 import type { ClaudeUiTheme } from "./theme-types.js";
 
@@ -169,25 +170,25 @@ function resolveExpandHint(): string {
   }
 }
 
-/** Compact a result into a small preview (dim, connector-prefixed), folded. */
+/** Compact a result by rendered terminal rows, not only literal newlines. */
 function resultComponent(
   text: string,
   theme: ClaudeUiTheme,
   fold: FoldOptions = {},
 ): Component {
-  const lines = buildResultLines(text, theme, fold);
+  // Build every logical row first; FoldableText then wraps at the actual
+  // component width and applies the cap to visual terminal rows.
+  const lines = buildResultLines(text, theme, { ...fold, expanded: true });
   if (lines.length === 0) {
     return new Text("", 0, 0);
   }
-  const container = new Container();
-  container.addChild(new Text(lines.join("\n"), 0, 0));
-  return container;
+  return new FoldableText(lines.join("\n"), theme, fold);
 }
 
-/** Render error output in the error color, folded when collapsed. */
+/** Render error output in the error color, folded by visual terminal rows. */
 function errorComponent(text: string, theme: ClaudeUiTheme, fold: FoldOptions): Component {
   const styled = text.replace(/\r/g, "").split("\n").map((line) => theme.fg("error", line));
-  return new Text(foldLines(styled, theme, fold).join("\n"), 0, 0);
+  return new FoldableText(styled.join("\n"), theme, fold);
 }
 
 interface OverrideSpec {
@@ -282,7 +283,10 @@ export function registerToolOverrides(pi: ExtensionAPI, isEnabled: () => boolean
       },
       renderCall(args, theme) {
         const head = buildToolHead(name, spec.argSummary(args, theme), theme);
-        return new Text(head, 0, 0);
+        return new FoldableText(head, theme, {
+          maxLines: 1,
+          overflowMarker: "…",
+        });
       },
       renderResult(
         result,

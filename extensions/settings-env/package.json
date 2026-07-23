@@ -1,0 +1,13 @@
+{
+  "name": "pi-settings-env-extension",
+  "version": "0.1.0",
+  "description": "Load environment variables from global and project Pi settings.json files.",
+  "type": "module",
+  "main": "./index.ts",
+  "pi": {
+    "extensions": ["dist/index.js"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

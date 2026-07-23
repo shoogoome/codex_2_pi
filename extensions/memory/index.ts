@@ -9,11 +9,11 @@
  *                           + query-time recalled topic bodies (display:false)
  *   session_compact      -> reset latch so the index re-injects post-compaction
  *   /memory list|show|init, /remember <text>  -> user-facing commands
- *   turn_end / session_shutdown               -> documented no-op stubs (phase 2:
- *                           background fork extraction / autoDream — out of MVP)
+ *   turn_end              -> conservatively distill durable facts in background
+ *   session_shutdown      -> wait briefly for queued memory maintenance
  *
- * Division of labor: the harness injects the index + recall + rules and scaffolds
- * the dir; the MODEL maintains the memory files with ordinary write/edit.
+ * Division of labor: the harness injects recall and automatically maintains
+ * durable memory; the model may still update topic files directly when useful.
  */
 import {
   existsSync,
@@ -28,9 +28,11 @@ import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
+  TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { MemorySession } from "./src/session.js";
+import { nodeAutoMemoryFs, runAutoMemory } from "./src/auto-memory.js";
 import {
   buildRememberPlan,
   entriesFromTopics,
@@ -63,11 +65,13 @@ export default function memoryExtension(pi: ExtensionAPI): void {
     type: "boolean",
     default: true,
     description:
-      "Claude-style long-term memory: inject a git-root-scoped MEMORY.md index + recalled topics, and expose /memory and /remember. Disable with --no-memory or PI_MEMORY=0.",
+      "Claude-style automatic long-term memory: recall and maintain a git-root-scoped MEMORY.md index plus topic files. Disable with --no-memory or PI_MEMORY=0.",
   });
 
-  // Per-session state machine; rebuilt on every session_start.
+  // Per-session state machine; rebuilt whenever the active session changes.
   let session: MemorySession | null = null;
+  let sessionGeneration = 0;
+  let autoMemoryQueue: Promise<void> = Promise.resolve();
 
   const enabled = (): boolean => {
     try {
@@ -83,21 +87,38 @@ export default function memoryExtension(pi: ExtensionAPI): void {
     const cwd = ctx.cwd ?? process.cwd();
     const s = new MemorySession({ fs: realFs, cwd, home: homedir() });
     s.start();
+    // Auto-init is intentionally silent and idempotent: users should never
+    // need to run /memory init before automatic recall or persistence works.
+    const memoryDir = s.getMemoryDir();
+    realFs.mkdir(memoryDir);
+    if (!realFs.exists(s.getIndexPath())) {
+      realFs.writeFile(s.getIndexPath(), defaultIndexTemplate());
+      s.reload();
+    }
     return s;
   };
 
-  // session_start: locate dir, load index + topics, arm the latch.
-  pi.on("session_start", async (_event, ctx: ExtensionContext) => {
-    if (!enabled()) {
-      session = null;
-      return;
-    }
+  const beginSession = (ctx: ExtensionContext): void => {
+    sessionGeneration += 1;
     try {
       session = freshSession(ctx);
     } catch {
       session = null;
     }
-  });
+  };
+
+  // Locate the current project scope and arm the injection latch on every
+  // lifecycle transition that can change cwd/session state.
+  const handleSessionChange = async (_event: unknown, ctx: ExtensionContext): Promise<void> => {
+    if (!enabled()) {
+      sessionGeneration += 1;
+      session = null;
+      return;
+    }
+    beginSession(ctx);
+  };
+  // The host reports startup, reload, resume, new, and fork through one event.
+  pi.on("session_start", handleSessionChange);
 
   // before_agent_start: inject the memory block (rules+index once, recall each
   // turn) as a display:false CustomMessage. Never touches systemPrompt so we
@@ -125,15 +146,37 @@ export default function memoryExtension(pi: ExtensionAPI): void {
     session?.resetInjectionLatch();
   });
 
-  // --- phase-2 stubs (documented no-ops in MVP) -------------------------
-  // Auto-extraction (fork a sub-agent to distill new memories) and idle
-  // consolidation / autoDream are explicitly out of MVP scope. These handlers
-  // are wired but intentionally inert — they must NOT fork sub-agents here.
-  pi.on("turn_end", async () => {
-    /* phase 2: background extraction — no-op in MVP. */
+  // turn_end: enqueue conservative extraction. The runner applies a cheap
+  // lexical gate first, so ordinary turns do not make an extra model request.
+  // Queueing prevents overlapping topic/index writes across rapid turns.
+  pi.on("turn_end", async (event: TurnEndEvent, ctx: ExtensionContext) => {
+    if (!enabled() || !session) return;
+    const activeSession = session;
+    const generation = sessionGeneration;
+    autoMemoryQueue = autoMemoryQueue
+      .catch(() => undefined)
+      .then(async () => {
+        await runAutoMemory({
+          cwd: ctx.cwd ?? process.cwd(),
+          memoryDir: activeSession.getMemoryDir(),
+          event,
+          messages: ctx.sessionManager.getBranch()
+            .filter((entry): entry is typeof entry & { type: "message"; message: unknown } => entry.type === "message")
+            .map((entry) => entry.message),
+          ctx,
+          fs: nodeAutoMemoryFs,
+        });
+        // A session switch/fork can replace state while extraction is running.
+        if (session === activeSession && sessionGeneration === generation) {
+          activeSession.reload();
+        }
+      })
+      .catch(() => undefined);
+    // Deliberately do not await: extraction must not delay the next turn.
   });
   pi.on("session_shutdown", async () => {
-    /* phase 2: end-of-session consolidation — no-op in MVP. */
+    // Give queued writes a chance to complete before the host tears down.
+    await autoMemoryQueue;
   });
 
   // --- /memory list | show <name> | init -------------------------------

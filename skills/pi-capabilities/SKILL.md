@@ -22,7 +22,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 | `/autopilot [on [目标]\|off\|status]` | autopilot | 自主续跑控制器 |
 | `/local-models [list\|pull\|ensure_ready]`, `/ollama`, `/lm` | local-models | 发现/拉取/就绪检查本地模型(Ollama/LM Studio) |
 | `/mcp [list\|status\|add\|remove\|reconnect]` | mcp | 管理 MCP server 连接 |
-| `/plugin [list\|enable\|disable]` | plugin-loader | 加载/开关 Claude 风格插件 |
+| `/plugin`, `/plugin marketplace …`, `/plugin install\|remove\|update …` | plugin-loader | 管理 Marketplace 与 user/project/local scope 的 Claude 风格插件 |
 | `/hooks` | hooks-runner | 列出已配置生命周期 hook |
 | `/agents [list\|show <name>\|use <name>]` | agents | 查看/应用 subagent 角色 |
 | `/migrate [mcp\|agents\|commands\|hooks\|memory]` | migrate | 导入 Claude/Cursor 配置到 .pi/ |
@@ -42,6 +42,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **compact-ui**：Codex 风格紧凑 UI（消息前缀化 + 内置工具短渲染），与 claude-ui 互斥。
 - **input-history**：跨会话输入历史 + 反向增量搜索，默认 `Alt+R`（可改绑 `ctrl+r`）。
 - **agents-context**：自动加载 `AGENTS.md`/`CLAUDE.md`、`.claude/rules`、`@include`、条件 paths 规则；`--agents-context`（默认开）/ `PI_AGENTS_CONTEXT=0`。
+- **settings-env**：启动时读取全局和项目 `settings.json` 顶层 `env` 并注入 `process.env`；已有启动环境默认优先，`envOverride: true` 可覆盖。
 - **pets**：终端宠物 widget，依 agent 状态切换动画。
 
 ## 模型可调用的工具（非命令）
@@ -56,6 +57,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **request_user_input / ask_user_question / askUserQuestion**（user-input）：向用户提 1-3 个带选项的问题。
 - **exit_plan_mode**（plan-mode）：模型提交计划并请求退出只读规划。
 - **mcp__<server>__<tool>**（mcp）：远端 MCP 工具注册成的 Pi 原生工具。
+- **webfetch**（webfetch）：联网抓取公开 URL → HTML 转 markdown 交模型阅读；SSRF 防护 + 10MB/100K 上限 + 15min 缓存。`--webfetch` 默认开。
 
 ## 何时用哪个
 
@@ -65,18 +67,20 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **想让 agent 不停手连续推进长任务**：`/autopilot on [目标]`（有预算/轮数/收益递减停止）。
 - **切回过去的会话 / 找以前聊过的内容**：`/resume-picker`、`/search`(pi 内置 `/resume` 也能朴素切换会话)。
 - **常用配置组合一键切换**：`/profile save` 后 `/profile <name>`，或 `--profile` 启动应用。
-- **接外部工具 / 第三方能力**：`/mcp add`（MCP server）；加载 Claude 风格插件用 `/plugin`。
+- **接外部工具 / 第三方能力**：`/mcp add`（MCP server）；Claude 风格插件用 `/plugin marketplace add` 后 `/plugin install`。
 - **复用已有 Claude/Cursor 配置**：`/migrate`。
-- **跨会话记住偏好/事实**：`/remember`、`/memory`。
+- **跨会话记住偏好/事实**：memory 默认自动初始化、召回和按需提炼；`/remember`、`/memory` 只在需要强制记录、查看或纠错时使用。
 - **用本地模型**：`/local-models list` / `pull` / `ensure_ready`。
 - **要花了多少钱 / 用了多少 token**：`/cost`。
 - **生命周期自动化（提交前/工具前后注入或拦截）**：hooks-runner + `/hooks`，配置 `.pi/hooks.json`。
 - **切换 agent 角色（只读探索/规划/验证等）**：`/agents use <name>`。
 - **调出以前输入过的 prompt**：`Alt+R` 反向搜索（input-history）。
 - **切换 TUI 观感**：`--claude-ui`（默认，Claude 风格）↔ `--claude-ui=false`（compact-ui）。
+- **抓取网页 / 查在线文档 / 读 URL 内容**：`webfetch`（公开 URL → HTML 转 markdown 交模型读；SSRF 防护;认证 / 私有页请改用 MCP 或 `gh`）。
+- **在 settings.json 配环境变量**：用 settings-env 的顶层 `env`；项目配置覆盖全局配置，但默认不覆盖启动 Pi 时已有的变量。
 
 ## 详情文档
 
-- 新增 18 个扩展：`docs/extensions/{claude-ui,input-history,context-pipeline,agents-context,memory,approvals,plan-mode,profiles,resume-picker,autopilot,local-models,mcp,plugin-loader,hooks-runner,agents,migrate,monitor,cost-usage}.md`
+- 新增扩展文档：`docs/extensions/{claude-ui,input-history,context-pipeline,agents-context,settings-env,memory,approvals,plan-mode,profiles,resume-picker,autopilot,local-models,mcp,plugin-loader,hooks-runner,agents,migrate,monitor,cost-usage}.md`
 - 原有基础扩展（diff/review/init/imagegen/todo/compact-ui/pets/goal/side/localagent/localshell/tasks/teammate/user-input）：见仓库 `README.md`
 - 总表：`docs/CAPABILITIES.md`

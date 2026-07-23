@@ -116,10 +116,12 @@ describe("withRuntimeServer", () => {
 });
 
 describe("computeConfigPaths", () => {
-  it("builds global and project paths", () => {
-    const { globalPath, projectPath } = computeConfigPaths("/home/u", "/proj");
-    expect(globalPath).toBe("/home/u/.pi/agent/mcp.json");
-    expect(projectPath).toBe("/proj/.pi/mcp.json");
+  it("builds canonical and compatible legacy paths", () => {
+    const paths = computeConfigPaths("/home/u", "/proj");
+    expect(paths.globalPath).toBe("/home/u/.pi/agent/mcp.json");
+    expect(paths.projectPath).toBe("/proj/.pi/mcp.json");
+    expect(paths.legacyGlobalPath).toBe("/home/u/.pi/agent/.mcp.json");
+    expect(paths.legacyProjectPath).toBe("/proj/.mcp.json");
   });
 });
 

@@ -14,6 +14,7 @@ import {
   flushTaskOutput,
   getTaskOutput,
   getTaskOutputDelta,
+  getTaskOutputTailDelta,
   getTaskOutputSize,
   initTaskOutput,
   initTaskOutputAsSymlink,
@@ -141,6 +142,83 @@ describe("getTaskOutputDelta", () => {
     const delta = await getTaskOutputDelta("babcdefgh", 0, 4);
     expect(delta.content).toBe("0123");
     expect(delta.newOffset).toBe(4);
+  });
+
+  it("reads FORWARD from offset (not tail-biased) — task_status contract", async () => {
+    // getTaskOutputDelta must keep its strict forward-from-offset semantics so
+    // the task_status tool (agent-driven, output_offset param) is unaffected by
+    // the poll's tail-biased read. With a 4-byte cap it returns the OLDEST 4
+    // bytes past the offset, never the tail.
+    appendTaskOutput("babcdefgh", "0123456789");
+    await flushTaskOutput("babcdefgh");
+    const fwd = await getTaskOutputDelta("babcdefgh", 0, 4);
+    expect(fwd.content).toBe("0123");
+    expect(fwd.newOffset).toBe(4);
+  });
+
+  it("does not allocate a constant 8MB buffer for a tiny read", async () => {
+    appendTaskOutput("babcdefgh", "hello");
+    await flushTaskOutput("babcdefgh");
+    // Spy AFTER flush so we only capture readFileRange's allocation, not the
+    // write path's #queueToBuffers().
+    const allocSpy = vi.spyOn(Buffer, "allocUnsafe");
+    try {
+      const delta = await getTaskOutputDelta("babcdefgh", 0); // default 8MB cap
+      expect(delta.content).toBe("hello");
+      const sizes = allocSpy.mock.calls.map((c) => Number(c[0]));
+      expect(sizes.length).toBeGreaterThan(0);
+      // Buffer sized to the 5 bytes actually available — never the 8MB cap.
+      expect(Math.max(...sizes)).toBeLessThanOrEqual(5);
+    } finally {
+      allocSpy.mockRestore();
+    }
+  });
+});
+
+describe("getTaskOutputTailDelta (poll panel-visible path)", () => {
+  it("reads forward from offset when the gap is within the cap", async () => {
+    appendTaskOutput("babcdefgh", "hello world");
+    await flushTaskOutput("babcdefgh");
+    const d = await getTaskOutputTailDelta("babcdefgh", 6, 256 * 1024);
+    expect(d.content).toBe("world");
+    expect(d.newOffset).toBe(11);
+  });
+
+  it("caps a single read to maxBytes and biases to the tail (stale offset)", async () => {
+    // 1MB firehose; offset 0 is far behind. A 256KB cap must return only the
+    // most-recent 256KB and jump newOffset to EOF — never read the whole 1MB.
+    const total = 1024 * 1024;
+    const cap = 256 * 1024;
+    appendTaskOutput("babcdefgh", "x".repeat(total - 1) + "Z"); // last byte marks EOF
+    await flushTaskOutput("babcdefgh");
+    const size = await getTaskOutputSize("babcdefgh");
+    expect(size).toBe(total);
+
+    const allocSpy = vi.spyOn(Buffer, "allocUnsafe");
+    try {
+      const d = await getTaskOutputTailDelta("babcdefgh", 0, cap);
+      // Exactly the tail cap, not the full file.
+      expect(Buffer.byteLength(d.content, "utf8")).toBe(cap);
+      expect(d.content.endsWith("Z")).toBe(true); // tail-biased: newest byte present
+      expect(d.newOffset).toBe(total); // advanced to EOF
+      const sizes = allocSpy.mock.calls.map((c) => Number(c[0]));
+      expect(Math.max(...sizes)).toBeLessThanOrEqual(cap); // never allocates the full 1MB
+    } finally {
+      allocSpy.mockRestore();
+    }
+  });
+
+  it("returns empty (offset clamped) when nothing new", async () => {
+    appendTaskOutput("babcdefgh", "abc");
+    await flushTaskOutput("babcdefgh");
+    const d = await getTaskOutputTailDelta("babcdefgh", 3, 256 * 1024);
+    expect(d.content).toBe("");
+    expect(d.newOffset).toBe(3);
+  });
+
+  it("returns empty for a non-existent task without throwing", async () => {
+    const d = await getTaskOutputTailDelta("nope", 0, 256 * 1024);
+    expect(d).toEqual({ content: "", newOffset: 0 });
   });
 });
 

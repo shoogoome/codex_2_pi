@@ -39,4 +39,26 @@ describe("buildToolDefinitions", () => {
     ]);
     expect((defs[0].parameters as { type?: string }).type).toBe("object");
   });
+
+  it("sanitizes the tool segment in the flat name but keeps the original toolName", () => {
+    const defs = buildToolDefinitions(
+      "srv",
+      [{ name: "weird.tool name", inputSchema: { type: "object" } }],
+      stubConvert as never,
+    );
+    // Flat name is OpenAI-legal; the real tools/call still uses the raw name.
+    expect(defs[0].name).toBe("mcp__srv__weird_tool_name");
+    expect(defs[0].name).toMatch(/^[a-zA-Z][a-zA-Z0-9_-]*$/);
+    expect(defs[0].toolName).toBe("weird.tool name");
+  });
+
+  it("preserves __ inside an otherwise-legal tool name", () => {
+    const defs = buildToolDefinitions(
+      "srv",
+      [{ name: "a__b__c" }],
+      stubConvert as never,
+    );
+    expect(defs[0].name).toBe("mcp__srv__a__b__c");
+    expect(defs[0].toolName).toBe("a__b__c");
+  });
 });

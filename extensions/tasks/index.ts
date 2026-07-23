@@ -93,11 +93,23 @@ export default function tasksExtension(
   // before re-subscribing.
   let unsubPanel: (() => void) | undefined;
 
+  // Panel-visibility latch for the framework poll's output-read gate. TRUE only
+  // while the task_output overlay is on screen (the sole surface that actually
+  // renders task output — the compact aboveEditor rows are built from `progress`,
+  // not polled output). When false, pollTasks does ZERO output reads for running
+  // tasks, so an idle pi stays at ~0% CPU even under a firehose local_bash task
+  // (pxdev / Puppeteer). See PollTasksOptions.isPanelVisible.
+  let panelVisible = false;
+
   pi.on("session_start", (_event, ctx) => {
     // sessionManager 是 ReadonlySessionManager —— 取 sessionId 即可,不要 mutate。
     store._setSessionId(ctx.sessionManager.getSessionId());
     _resetTaskOutputDirForTest();
-    startTaskFrameworkPolling(store, deps.pollIntervalMs);
+    // 无 UI(headless / RPC)时 panelVisible 恒 false → poll 永不读输出;
+    // 模型看子 agent 输出走 task_status 按需读取路径,不受影响。
+    startTaskFrameworkPolling(store, deps.pollIntervalMs, {
+      isPanelVisible: () => panelVisible,
+    });
     pi.registerTool(buildTaskKillTool(store));
     pi.registerTool(buildTaskStatusTool(store));
     pi.registerTool(buildTaskListTool(store));
@@ -168,6 +180,10 @@ export default function tasksExtension(
     }
 
     const unsubViewState = viewState.subscribe((state) => {
+      // Flip the poll's output-read gate: reads happen only while the
+      // task_output overlay is up. Closing it (any other kind) reverts to
+      // zero output reads for running tasks.
+      panelVisible = state.kind === "task_output";
       requestRender();
       if (state.kind === "task_output") {
         if (overlayHandle || overlayDone) return;
@@ -234,6 +250,7 @@ export default function tasksExtension(
       unsubKeybindings();
       unsubViewState();
       dismissOverlay();
+      panelVisible = false;
       ctx.ui.setWidget(WIDGET_KEY, undefined);
     };
   });
@@ -241,6 +258,7 @@ export default function tasksExtension(
   pi.on("session_shutdown", async () => {
     unsubPanel?.();
     unsubPanel = undefined;
+    panelVisible = false;
     stopTaskFrameworkPolling();
     // 等待所有 in-flight 写盘 settle,避免 async-ENOENT-after-teardown。
     await _clearOutputsForTest();
@@ -312,6 +330,7 @@ export {
   getRunningTasks,
   PANEL_GRACE_MS,
   POLL_INTERVAL_MS,
+  POLL_MAX_READ_BYTES,
   pollTasks,
   registerTask,
   startTaskFrameworkPolling,
@@ -319,6 +338,7 @@ export {
   STOPPED_DISPLAY_MS,
   updateTaskState,
 } from "./framework.js";
+export type { PollTasksOptions } from "./framework.js";
 
 export {
   appendTaskOutput,
@@ -329,6 +349,7 @@ export {
   getMaxTaskOutputBytes,
   getTaskOutput,
   getTaskOutputDelta,
+  getTaskOutputTailDelta,
   getTaskOutputSize,
   initTaskOutput,
   initTaskOutputAsSymlink,

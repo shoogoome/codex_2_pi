@@ -11,7 +11,7 @@
  * background color: added #225C2B / removed #7A2936, with a brighter word-level
  * second layer (#38A660 / #B3596B). Context is dim with no background.
  */
-import { Container, Text, type Component } from "@earendil-works/pi-tui";
+import { Text, type Component } from "@earendil-works/pi-tui";
 import {
   DEFAULT_MAX_DIFF_LINES,
   GLYPH_ELLIPSIS,
@@ -23,7 +23,8 @@ import {
   WORD_REMOVED,
 } from "./constants.js";
 import { bgTrueColor, nestedWordBg } from "./bg.js";
-import { foldLines, type FoldOptions } from "./tool-gutter.js";
+import { FoldableText } from "./foldable-text.js";
+import { type FoldOptions } from "./tool-gutter.js";
 import type { ClaudeUiTheme } from "./theme-types.js";
 
 export type DiffLineKind = "add" | "del" | "context" | "meta";
@@ -157,13 +158,17 @@ export function buildDiffLineStrings(
   return out;
 }
 
-function linesToComponent(strings: string[]): Component {
+function linesToComponent(
+  strings: string[],
+  theme: ClaudeUiTheme,
+  fold: FoldOptions,
+): Component {
   if (strings.length === 0) {
     return new Text("", 0, 0);
   }
-  // Join into one Text so blank/whitespace rows still render (per-line Text
-  // drops whitespace-only content). Backgrounds are already embedded.
-  return new Text(strings.join("\n"), 0, 0);
+  // Join into one visual-row-aware component so a single minified/code line
+  // cannot expand into an unbounded number of terminal rows.
+  return new FoldableText(strings.join("\n"), theme, fold);
 }
 
 /**
@@ -187,12 +192,8 @@ export function renderEditDiff(
     const fallback = fallbackText?.trim();
     return new Text(fallback ? theme.fg("dim", fallback) : "", 0, 0);
   }
-  const rows = foldLines(
-    buildDiffLineStrings(parsed, theme),
-    theme,
-    withDiffFoldDefault(fold),
-  );
-  return linesToComponent(rows);
+  const resolvedFold = withDiffFoldDefault(fold);
+  return linesToComponent(buildDiffLineStrings(parsed, theme), theme, resolvedFold);
 }
 
 /** Turn write content into an all-added diff (no structured diff available). */
@@ -223,12 +224,8 @@ export function renderWriteDiff(
     const fallback = fallbackText?.trim();
     return new Text(fallback ? theme.fg("dim", fallback) : "", 0, 0);
   }
-  const rows = foldLines(
-    buildDiffLineStrings(parsed, theme),
-    theme,
-    withDiffFoldDefault(fold),
-  );
-  return linesToComponent(rows);
+  const resolvedFold = withDiffFoldDefault(fold);
+  return linesToComponent(buildDiffLineStrings(parsed, theme), theme, resolvedFold);
 }
 
 // Backwards-compatible alias for the planned public name.

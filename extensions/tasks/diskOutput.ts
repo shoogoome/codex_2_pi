@@ -57,12 +57,71 @@ async function readFileRange(
   let fh: FileHandle | undefined;
   try {
     fh = await open(path, fsConstants.O_RDONLY | O_NOFOLLOW);
-    const buffer = Buffer.allocUnsafe(maxBytes);
-    const { bytesRead } = await fh.read(buffer, 0, maxBytes, offset);
+    // Buffer sizing: allocate only what we can actually read — min(maxBytes,
+    // bytes remaining past offset) — instead of a constant 8MB. A per-second
+    // firehose poll on a small delta previously allocated (and GC'd) an 8MB
+    // buffer every tick; that allocation churn is a large part of the idle-CPU
+    // burn this file is on the hot path for. `fh.stat()` reads the size of the
+    // already-open fd (no extra open, no TOCTOU / symlink re-follow).
+    const { size } = await fh.stat();
+    const remaining = size > offset ? size - offset : 0;
+    const toRead = Math.min(maxBytes, remaining);
+    if (toRead <= 0) {
+      return { content: "", bytesRead: 0 };
+    }
+    const buffer = Buffer.allocUnsafe(toRead);
+    const { bytesRead } = await fh.read(buffer, 0, toRead, offset);
     if (bytesRead === 0) {
       return { content: "", bytesRead: 0 };
     }
     return { content: buffer.subarray(0, bytesRead).toString("utf8"), bytesRead };
+  } catch (e) {
+    if (getErrnoCode(e) === "ENOENT") return null;
+    throw e;
+  } finally {
+    await fh?.close().catch(() => {});
+  }
+}
+
+/**
+ * Tail-biased, single-open capped read for the framework poll's panel-visible
+ * path.
+ *
+ * Reads at most `maxBytes` and biases toward the *end* of the file: when the
+ * gap between `fromOffset` and the current size exceeds `maxBytes` (e.g. the
+ * panel was hidden while a firehose task wrote 100MB and the stored offset went
+ * stale), it jumps the start forward to `size - maxBytes` and returns the most
+ * recent `maxBytes` bytes, advancing `newOffset` to the file end. This caps a
+ * single poll round at `maxBytes` regardless of how far behind the offset is,
+ * and always shows the newest output rather than replaying ancient bytes.
+ *
+ * Opens once with O_NOFOLLOW (symlink defence) and stats the open fd, so the
+ * buffer is sized to exactly `size - start` (≤ maxBytes).
+ */
+async function readTailRange(
+  path: string,
+  fromOffset: number,
+  maxBytes: number,
+): Promise<{ content: string; newOffset: number } | null> {
+  let fh: FileHandle | undefined;
+  try {
+    fh = await open(path, fsConstants.O_RDONLY | O_NOFOLLOW);
+    const { size } = await fh.stat();
+    if (size <= fromOffset) {
+      // Nothing new (or the file shrank — clamp the offset back to size).
+      return { content: "", newOffset: Math.min(fromOffset, size) };
+    }
+    const start = Math.max(fromOffset, size - maxBytes);
+    const toRead = size - start; // guaranteed ≤ maxBytes by the max() above
+    const buffer = Buffer.allocUnsafe(toRead);
+    const { bytesRead } = await fh.read(buffer, 0, toRead, start);
+    if (bytesRead === 0) {
+      return { content: "", newOffset: start };
+    }
+    return {
+      content: buffer.subarray(0, bytesRead).toString("utf8"),
+      newOffset: start + bytesRead,
+    };
   } catch (e) {
     if (getErrnoCode(e) === "ENOENT") return null;
     throw e;
@@ -325,6 +384,37 @@ export async function getTaskOutputDelta(
       return { content: "", newOffset: fromOffset };
     }
     logError(e, "getTaskOutputDelta");
+    return { content: "", newOffset: fromOffset };
+  }
+}
+
+/**
+ * Tail-biased, capped delta for the framework poll (panel-visible path).
+ *
+ * Unlike {@link getTaskOutputDelta} (which reads strictly forward from
+ * `fromOffset` — the contract `task_status` relies on), this bounds a single
+ * read to `maxBytes` from the *tail*: if the offset is far behind (panel was
+ * hidden while a firehose wrote megabytes), it skips the stale middle and
+ * returns only the most recent `maxBytes`, advancing `newOffset` to the file
+ * end. Used only for driving the on-screen panel/overlay, never for the
+ * model-facing `task_status` read.
+ */
+export async function getTaskOutputTailDelta(
+  taskId: string,
+  fromOffset: number,
+  maxBytes: number = DEFAULT_MAX_READ_BYTES,
+): Promise<{ content: string; newOffset: number }> {
+  try {
+    const result = await readTailRange(getTaskOutputPath(taskId), fromOffset, maxBytes);
+    if (!result) {
+      return { content: "", newOffset: fromOffset };
+    }
+    return result;
+  } catch (e) {
+    if (getErrnoCode(e) === "ENOENT") {
+      return { content: "", newOffset: fromOffset };
+    }
+    logError(e, "getTaskOutputTailDelta");
     return { content: "", newOffset: fromOffset };
   }
 }

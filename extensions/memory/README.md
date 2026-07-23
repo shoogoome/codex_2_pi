@@ -1,112 +1,72 @@
 # pi-memory-extension
 
-Claude-style long-term memory for Pi. Gives the agent a persistent, git-root-scoped
-memory directory whose index and recalled topics are injected into context each turn,
-and re-injected after compaction. The **model** maintains the memory files with ordinary
-`write`/`edit`; the harness only locates/scaffolds the directory, injects, and exposes
-two commands.
+Claude Code-style automatic long-term memory for Pi.
 
-## What the harness does (and does not) do
+The extension scopes memory to the current git root, initializes it silently, injects the
+index and relevant topics into context, and conservatively distills durable facts after a
+turn. Users do not need to run `/memory init` or `/remember` for memory to work; those
+commands remain useful for inspection and explicit correction.
 
-The harness does three things only:
+## Automatic lifecycle
 
-1. **Locate/create** a git-root-scoped memory directory.
-2. **Inject** the `MEMORY.md` index + query-time recalled topic bodies + a rules block via
-   `before_agent_start`, re-injecting the index after each compaction.
-3. **Expose** `/memory` and `/remember` commands.
-
-It does **not** own a bespoke storage tool. The model reads and edits the memory files
-itself. Automatic extraction (background sub-agent distillation) and semantic recall are
-explicitly **phase-2** and out of MVP scope — the `turn_end` / `session_shutdown` hooks are
-wired as documented no-ops and never fork sub-agents.
+1. `session_start`（涵盖 startup/reload/new/resume/fork）解析当前作用域，并在缺失时创建
+   `MEMORY.md`。
+2. `before_agent_start` injects the index/rules once per context window and recalls relevant
+   topic bodies on demand.
+3. `turn_end` inspects only the latest user/assistant exchange. A local signal gate skips
+   ordinary turns; qualifying turns use the current model for a small structured extraction.
+4. Extracted facts are merged, deduplicated, allowed to replace obsolete facts, and used to
+   rebuild the index. Common credential formats and transient task state are excluded.
+5. Writes are serialized. Extraction failures never fail the main conversation, and
+   `session_shutdown` waits for queued maintenance.
 
 ## Storage layout
 
-- **In a git repo:** `<gitRoot>/.pi/memory`
-- **Off-repo fallback:** `~/.pi/agent/memory/<projectHash>` (hash derived from cwd, matching
-  the `~/.pi/agent/*` convention used by the mcp / plugin-loader extensions)
+- In a git repo: `<gitRoot>/.pi/memory`
+- Outside a repo: `~/.pi/agent/memory/<projectHash>`
 
-Inside that directory:
-
-```
+```text
 .pi/memory/
-  MEMORY.md        # index: one line per topic
-  coding-style.md  # a topic file
-  architecture.md  # a topic file
-  ...
+  MEMORY.md
+  coding-style.md
+  architecture.md
 ```
 
-### Topic frontmatter
-
-Each topic `.md` file begins with frontmatter:
+Each topic is Markdown with frontmatter:
 
 ```markdown
 ---
 name: Coding style
-description: How the user likes code written (one line, used for recall)
+description: Stable user preferences for code changes
 type: user
 ---
-- Prefers tabs over spaces
-- Wants small, composable functions
+- Prefer small, composable functions
 ```
 
-`type` is one of:
+Valid types are `user`, `feedback`, `project`, and `reference`.
 
-| type        | meaning                                            |
-|-------------|----------------------------------------------------|
-| `user`      | the user's stable preferences / identity           |
-| `feedback`  | corrections the user gave you                       |
-| `project`   | durable facts about this codebase                   |
-| `reference` | external knowledge worth keeping                    |
+## Recall and compaction
 
-### MEMORY.md index format
-
-One round-trippable line per topic:
-
-```markdown
-- `coding-style.md` — **Coding style** (user): How the user likes code written
-```
-
-The parser tolerates hand-edits: any line matching that shape is read, everything else is
-ignored, so the model can add prose around the list freely.
-
-## Injection
-
-On the first turn of a session (and the first turn after each compaction), the injected
-`display:false` message carries:
-
-- a **rules block** teaching the model where the memory dir is and how to maintain it,
-- the **full `MEMORY.md` index**.
-
-On every turn it may additionally carry **recalled topic bodies** relevant to the current
-prompt. Recall (MVP) is deterministic keyword scoring over topic name/description/body,
-bounded by:
-
-- at most `5` topics per turn,
-- a per-topic byte budget (line-boundary truncation),
-- a per-session cumulative cap on distinct topics recalled.
-
-Semantic recall is deferred to phase 2.
+The first turn, and the first turn after `session_compact`, receives the full index and
+maintenance instructions as a hidden custom message. Every turn may additionally receive
+keyword-ranked topic bodies. Recall is deterministic and bounded by topic, byte, and
+per-session limits; semantic/vector recall is not implemented.
 
 ## Commands
 
-- `/remember <text>` — append a timestamped bullet to a target topic (default *General
-  notes*), creating it if needed, and keep `MEMORY.md` in sync. Guarded on idle so it never
-  races the agent's own writes.
-- `/memory list` — list topics grouped by type.
-- `/memory show <name>` — print a topic's body.
-- `/memory init` — scaffold the memory directory + a blank `MEMORY.md`.
-
-Without a UI, commands degrade to one-line notifications.
+- `/memory list`
+- `/memory show <name>`
+- `/memory init` — optional idempotent repair/initialization command
+- `/remember <text>` — explicit manual persistence and correction path
 
 ## Enable / disable
 
-Enabled by default. Disable with the `--no-memory` flag or `PI_MEMORY=0`.
+Enabled by default. Disable with `--no-memory` or `PI_MEMORY=0`.
 
-## Architecture
+## Design notes
 
-`index.ts` is the only file that touches the pi `ExtensionAPI` and `node:fs`. All logic —
-git-root location, frontmatter parsing, `MEMORY.md` parse/build, keyword recall + budget
-truncation, the per-session injection state machine, and command planning — lives in `src/`
-as pure functions over an injected `FsLike`, each with a Vitest file driven by an in-memory
-fake filesystem (no real shell / network / spawn).
+The extension deliberately favors precision over recall: one-off requests, plans, current
+progress, guesses, assistant-only claims, and secrets should not be persisted. Users can
+inspect and edit the plain Markdown files at any time. Automatic extraction uses the active
+conversation model only after the local signal gate matches, so most turns add no extra
+model call.

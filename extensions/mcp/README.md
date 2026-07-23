@@ -38,7 +38,7 @@ An entry with a `command` is treated as stdio; an entry with a `url` (and option
 
 Each remote tool becomes a pi tool:
 
-- Name: `mcp__<server>__<tool>` (e.g. `mcp__github__create_issue`)
+- Name: `mcp__<server>__<tool>` (e.g. `mcp__github__create_issue`). Both segments are sanitized to OpenAI's function-name charset (`[a-zA-Z0-9_-]`, illegal chars → `_`, collision → `_2`/`_3`) at the registration boundary — an illegal char (e.g. the `:` in a plugin-namespaced `zhiyan:zhiyan-log`) otherwise 400s the entire Chat Completions request. The sanitized server id is the canonical id used for the tool name, parsing, dispatch, and approvals; the original tool name is still what's sent to the server on `tools/call`.
 - Parameters: the MCP `inputSchema` (JSON Schema) is converted to a TypeBox schema. Unsupported constructs (`oneOf`, `$ref`, …) relax to `Any`.
 - Results: MCP `content` items map to pi tool-result content — `text` → text (byte-capped via `truncateHead` at `DEFAULT_MAX_BYTES`, with a `…[truncated N bytes]` note), `image` → image, and `resource`/other types are JSON-serialized into text.
 

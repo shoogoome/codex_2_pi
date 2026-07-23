@@ -106,3 +106,22 @@ export function discoverPlugins(roots: string[], fs: FsFacade): DiscoveredPlugin
   }
   return out;
 }
+
+/**
+ * Discover plugin-manager records at their exact installation roots.
+ *
+ * Marketplace cache paths end in a version directory (commonly `0.0.0`) and
+ * some legacy plugins do not ship a manifest. In that case discoverPluginAt()
+ * falls back to the directory basename. Use the manager's stable record name
+ * instead, otherwise every such plugin is called `0.0.0` and name de-duplication
+ * drops all but the first one.
+ */
+export function discoverManagedPlugins(
+  records: Array<{ name: string; path: string }>,
+  fs: FsFacade,
+): DiscoveredPlugin[] {
+  return records.flatMap((record) => {
+    if (!record.path || !fs.existsSync(record.path) || !fs.isDirectory(record.path)) return [];
+    return [{ ...discoverPluginAt(record.path, fs), name: record.name }];
+  });
+}

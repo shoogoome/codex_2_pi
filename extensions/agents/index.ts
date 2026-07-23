@@ -16,6 +16,7 @@ export default function agentsExtension(pi: ExtensionAPI): void {
   // Role name cache for autocomplete (getArgumentCompletions is synchronous and
   // has no cwd, so we refresh this on every command run + session_start).
   let cachedRoleNames: string[] = getBuiltInRoles().map((r) => r.agentType);
+  let pluginAgentPaths: string[] = [];
 
   // Pending system prompt to inject on the next agent turn (set by `use`).
   // Consumed once, then cleared — a role application affects the next turn only.
@@ -30,9 +31,18 @@ export default function agentsExtension(pi: ExtensionAPI): void {
     return { systemPrompt };
   });
 
+  pi.events.on("plugins:replace-agents", (payload: unknown) => {
+    pluginAgentPaths = payload && typeof payload === "object" && Array.isArray((payload as { paths?: unknown }).paths)
+      ? (payload as { paths: unknown[] }).paths.filter((item): item is string => typeof item === "string")
+      : [];
+    void loadAllRoles(process.cwd(), undefined, undefined, pluginAgentPaths).then(({ roles }) => {
+      cachedRoleNames = roles.map((role) => role.agentType);
+    }).catch(() => undefined);
+  });
+
   pi.on("session_start", async (_event, ctx) => {
     try {
-      const { roles } = await loadAllRoles(ctx.cwd);
+      const { roles } = await loadAllRoles(ctx.cwd, undefined, undefined, pluginAgentPaths);
       cachedRoleNames = roles.map((r) => r.agentType);
     } catch {
       // Non-fatal: keep built-in names for completion.
@@ -43,7 +53,7 @@ export default function agentsExtension(pi: ExtensionAPI): void {
     description: "List / show / apply agent roles (built-in + .claude/.pi agent files)",
     getArgumentCompletions: (prefix: string) => completeAgentsArgs(cachedRoleNames, prefix),
     handler: async (args, ctx) => {
-      const { roles, failedFiles } = await loadAllRoles(ctx.cwd);
+      const { roles, failedFiles } = await loadAllRoles(ctx.cwd, undefined, undefined, pluginAgentPaths);
       cachedRoleNames = roles.map((r) => r.agentType);
       const { sub, name, rawSub } = parseAgentsArgs(args);
 
