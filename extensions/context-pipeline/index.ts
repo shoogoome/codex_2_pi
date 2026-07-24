@@ -38,6 +38,7 @@ import {
 
 const FLAG_OFF = "context-pipeline-off";
 const FLAG_NO_AUTOCOMPACT = "no-autocompact";
+const FLAG_PRUNE_AUTO = "prune-auto";
 const MONITOR_CHANNEL = "monitor:cleanup";
 
 export default function contextPipeline(pi: ExtensionAPI): void {
@@ -51,6 +52,12 @@ export default function contextPipeline(pi: ExtensionAPI): void {
     default: false,
     description: "Disable proactive autocompaction from the context pipeline.",
   });
+  pi.registerFlag(FLAG_PRUNE_AUTO, {
+    type: "boolean",
+    default: false,
+    description:
+      "Enable automatic microcompact pruning of old tool results (default manual: prune only via /prune, or set PI_CTXPIPE_PRUNE_MODE=auto).",
+  });
 
   const breaker = new CircuitBreaker(loadConfig().maxConsecutiveFailures);
   // Tokens freed by the most recent context-event trimming; subtracted from
@@ -60,6 +67,13 @@ export default function contextPipeline(pi: ExtensionAPI): void {
   // One-shot "soft prune" arming: when set, the next context event runs an
   // aggressive microcompact (see the /prune command below).
   const softPrune = new OneShotPrune();
+  // High-water mark batching for count-based microcompact triggers. Each pass
+  // rewrites old tool results and therefore breaks the LLM prompt prefix (a
+  // full cache cold start on cache-unfriendly backends). After a pass fires
+  // at compactable count C, the next pass requires C + microBatchSize, so the
+  // prefix breaks once per batch instead of every turn. Reset when history
+  // shrinks back under the base threshold (compaction / branch switch).
+  let microHighWater = 0;
   // Snapshot of the last context sent to the model. Used by `/prune status`
   // (and the soft-prune confirmation) to dry-run an estimate off the branch
   // that is actually about to be sent.
@@ -129,11 +143,35 @@ export default function contextPipeline(pi: ExtensionAPI): void {
     // A one-shot "soft prune" makes just this pass aggressive: keepRecent=1 and
     // the count threshold ignored, so stale compactable results are cleared now
     // rather than waiting for the usual count/idle trigger. Consuming resets it.
-    const microCfg = softPrune.consume() ? aggressiveConfig(cfg, AGGRESSIVE_KEEP_RECENT) : cfg;
-    const micro = microcompact(trimmed.messages, microCfg, Date.now());
-    emitCleanup("microcompact", micro.removedChars);
+    const aggressive = softPrune.consume();
+    // Manual prune mode (the default) never fires microcompact on its own —
+    // every automatic pass rewrites old tool results and breaks the prompt
+    // prefix (a cache cold start), so pruning is left to explicit /prune.
+    const autoPrune = pi.getFlag(FLAG_PRUNE_AUTO) === true || cfg.pruneMode === "auto";
+    let microMessages = trimmed.messages;
+    let microRemovedChars = 0;
+    if (autoPrune || aggressive) {
+      const microCfg = aggressive ? aggressiveConfig(cfg, AGGRESSIVE_KEEP_RECENT) : cfg;
+      // Normal passes trigger only above the high-water mark (batching, see
+      // microHighWater above); aggressive passes bypass batching by construction
+      // (their threshold is -1).
+      const micro = microcompact(trimmed.messages, microCfg, Date.now(), {
+        countThreshold: aggressive
+          ? microCfg.microCountThreshold
+          : Math.max(cfg.microCountThreshold, microHighWater),
+      });
+      emitCleanup("microcompact", micro.removedChars);
 
-    const releasedChars = trimmed.removedChars + micro.removedChars;
+      if (micro.triggered && micro.cleared > 0) {
+        microHighWater = micro.compactableCount + cfg.microBatchSize;
+      } else if (micro.compactableCount <= cfg.microCountThreshold) {
+        microHighWater = 0;
+      }
+      microMessages = micro.messages;
+      microRemovedChars = micro.removedChars;
+    }
+
+    const releasedChars = trimmed.removedChars + microRemovedChars;
     // chars/4 mirrors estimateTokens' conservative approximation.
     lastReleasedTokens = Math.round(releasedChars / 4);
 
@@ -141,9 +179,9 @@ export default function contextPipeline(pi: ExtensionAPI): void {
 
     // trimToolResults always returns a fresh (sliced) array, so array identity
     // vs. `original` can't detect "no change". Instead: nothing changed iff the
-    // trim removed no chars AND microcompact returned its input array untouched.
-    if (trimmed.removedChars === 0 && micro.messages === trimmed.messages) return;
-    return { messages: micro.messages as never };
+    // trim removed no chars AND the microcompact pass returned its input array.
+    if (trimmed.removedChars === 0 && microMessages === trimmed.messages) return;
+    return { messages: microMessages as never };
   });
 
   // ④ : also evaluate the threshold at the end of every turn.

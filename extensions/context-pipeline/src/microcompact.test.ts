@@ -96,5 +96,41 @@ describe("microcompact gap trigger", () => {
     const msgs: AnyMessage[] = [assistant(t0), tr("a", "bash", "x", t0 + 1)];
     const r = microcompact(msgs, cfg, t0 + 1000);
     expect(r.triggered).toBe(false);
+    expect(r.triggerReason).toBeNull();
+    expect(r.compactableCount).toBe(1);
+  });
+});
+
+describe("microcompact countThreshold override (batching)", () => {
+  it("does not trigger when over cfg threshold but under the override", () => {
+    const msgs: AnyMessage[] = [];
+    const total = cfg.microCountThreshold + 5; // over cfg threshold
+    for (let i = 0; i < total; i++) msgs.push(tr(`t${i}`, "read", `content-${i}`));
+
+    const r = microcompact(msgs, cfg, undefined, { countThreshold: total + 10 });
+    expect(r.triggered).toBe(false);
+    expect(r.triggerReason).toBeNull();
+    expect(r.compactableCount).toBe(total);
+    expect(r.messages).toBe(msgs);
+  });
+
+  it("triggers when count exceeds the override and reports reason/count", () => {
+    const msgs: AnyMessage[] = [];
+    const total = cfg.microCountThreshold + 30;
+    for (let i = 0; i < total; i++) msgs.push(tr(`t${i}`, "read", `content-${i}`));
+
+    const r = microcompact(msgs, cfg, undefined, { countThreshold: total - 1 });
+    expect(r.triggered).toBe(true);
+    expect(r.triggerReason).toBe("count");
+    expect(r.compactableCount).toBe(total);
+    expect(r.cleared).toBe(total - cfg.keepRecent);
+  });
+
+  it("gap trigger reports triggerReason=\"gap\"", () => {
+    const t0 = 1_000_000;
+    const msgs: AnyMessage[] = [assistant(t0), tr("a", "bash", "old", t0 + 1)];
+    const r = microcompact(msgs, cfg, t0 + cfg.gapMs + 1);
+    expect(r.triggered).toBe(true);
+    expect(r.triggerReason).toBe("gap");
   });
 });

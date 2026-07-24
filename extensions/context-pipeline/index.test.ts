@@ -107,9 +107,10 @@ describe("context event wiring", () => {
     expect(ctx.compact).not.toHaveBeenCalled();
   });
 
-  it("microcompacts old compactable results and preserves message/pairing count", () => {
-    const { pi, handlers, emitted } = makePi();
+  it("microcompacts old compactable results and preserves message/pairing count (auto mode)", () => {
+    const { pi, handlers, emitted, flags } = makePi();
     contextPipeline(pi);
+    flags.set("prune-auto", true);
     const handler = handlers.get("context")!;
 
     const messages: any[] = [];
@@ -130,6 +131,96 @@ describe("context event wiring", () => {
     );
     expect(micro.length).toBe(1);
     expect(micro[0].data.removedChars).toBeGreaterThan(0);
+  });
+
+  it("batches count-based microcompact triggers behind a high-water mark", () => {
+    const { pi, handlers, emitted, flags } = makePi();
+    contextPipeline(pi);
+    flags.set("prune-auto", true);
+    const handler = handlers.get("context")!;
+
+    const mk = (n: number) => Array.from({ length: n }, (_, i) => toolResult(`t${i}`, `payload-${i}`));
+    const microEmits = () =>
+      emitted.filter((e) => e.channel === "monitor:cleanup" && e.data.stage === "microcompact").length;
+
+    // First trigger at threshold+1: clears, high-water = count + batchSize.
+    const firstCount = DEFAULTS.microCountThreshold + 1;
+    const first = handler({ type: "context", messages: mk(firstCount) }, idleCtx());
+    expect(first).toBeTruthy();
+    expect(microEmits()).toBe(1);
+
+    // Growth below the batch size: no re-trigger, messages returned untouched
+    // (undefined) so the prompt prefix stays stable for the LLM cache.
+    const second = handler(
+      { type: "context", messages: mk(firstCount + DEFAULTS.microBatchSize - 1) },
+      idleCtx(),
+    );
+    expect(second).toBeUndefined();
+    expect(microEmits()).toBe(1);
+
+    // Reaching count > high-water triggers exactly one more batched pass.
+    const third = handler(
+      { type: "context", messages: mk(firstCount + DEFAULTS.microBatchSize + 1) },
+      idleCtx(),
+    );
+    expect(third).toBeTruthy();
+    expect(microEmits()).toBe(2);
+    const out = third.messages as any[];
+    // Oldest cleared in the batched pass, newest keepRecent kept.
+    expect(out[0].content[0].text).toBe(CLEARED_TEXT);
+    expect(out[out.length - 1].content[0].text).toBe(`payload-${out.length - 1}`);
+  });
+
+  it("manual prune mode (default) never auto-fires microcompact, even over threshold", () => {
+    const { pi, handlers, emitted } = makePi();
+    contextPipeline(pi);
+    const handler = handlers.get("context")!;
+
+    const messages: any[] = [];
+    const total = DEFAULTS.microCountThreshold + 5; // would trigger in auto mode
+    for (let i = 0; i < total; i++) messages.push(toolResult(`t${i}`, `payload-${i}`));
+
+    const result = handler({ type: "context", messages }, idleCtx());
+    expect(result).toBeUndefined();
+    expect(
+      emitted.filter((e) => e.channel === "monitor:cleanup" && e.data.stage === "microcompact"),
+    ).toHaveLength(0);
+  });
+
+  it("manual prune mode still runs an armed /prune soft pass", () => {
+    const { pi, handlers, commands, emitted } = makePi();
+    contextPipeline(pi);
+    const prune = commands.get("prune").handler;
+    const ctxHandler = handlers.get("context")!;
+
+    const mk = () => Array.from({ length: 6 }, (_, i) => toolResult(`t${i}`, `payload-${i}`));
+    prune("soft", commandCtx());
+
+    const out = ctxHandler({ type: "context", messages: mk() }, idleCtx());
+    const msgs = out.messages as any[];
+    expect(msgs[0].content[0].text).toBe(CLEARED_TEXT);
+    expect(msgs[5].content[0].text).toBe("payload-5"); // keepRecent=1
+    expect(
+      emitted.filter((e) => e.channel === "monitor:cleanup" && e.data.stage === "microcompact"),
+    ).toHaveLength(1);
+  });
+
+  it("--prune-auto re-enables automatic microcompact", () => {
+    const { pi, handlers, emitted, flags } = makePi();
+    contextPipeline(pi);
+    flags.set("prune-auto", true);
+    const handler = handlers.get("context")!;
+
+    const messages: any[] = [];
+    const total = DEFAULTS.microCountThreshold + 1;
+    for (let i = 0; i < total; i++) messages.push(toolResult(`t${i}`, `payload-${i}`));
+
+    const result = handler({ type: "context", messages }, idleCtx());
+    expect(result).toBeTruthy();
+    expect((result.messages as any[])[0].content[0].text).toBe(CLEARED_TEXT);
+    expect(
+      emitted.filter((e) => e.channel === "monitor:cleanup" && e.data.stage === "microcompact"),
+    ).toHaveLength(1);
   });
 
   it("returns undefined and emits nothing when everything fits", () => {
@@ -262,6 +353,34 @@ describe("prune command wiring", () => {
     // Subsequent context event: flag reset → normal (sub-threshold) → no change.
     const second = ctxHandler({ type: "context", messages: mk() }, idleCtx());
     expect(second).toBeUndefined();
+  });
+
+  it("an aggressive soft prune bypasses the high-water batch mark", () => {
+    const { pi, handlers, commands, flags } = makePi();
+    contextPipeline(pi);
+    flags.set("prune-auto", true);
+    const prune = commands.get("prune").handler;
+    const ctxHandler = handlers.get("context")!;
+
+    const mk = (n: number) => Array.from({ length: n }, (_, i) => toolResult(`t${i}`, `payload-${i}`));
+
+    // Establish a high-water mark via a normal count-based trigger.
+    const firstCount = DEFAULTS.microCountThreshold + 1;
+    ctxHandler({ type: "context", messages: mk(firstCount) }, idleCtx());
+
+    // A sub-high-water batch would normally be skipped, but /prune soft must
+    // still fire its aggressive pass on the very next context event.
+    prune("soft", commandCtx());
+    const out = ctxHandler(
+      { type: "context", messages: mk(firstCount + DEFAULTS.microBatchSize - 1) },
+      idleCtx(),
+    );
+    expect(out).toBeTruthy();
+    const msgs = out.messages as any[];
+    // keepRecent=1: everything but the newest cleared.
+    expect(msgs[0].content[0].text).toBe(CLEARED_TEXT);
+    expect(msgs[msgs.length - 2].content[0].text).toBe(CLEARED_TEXT);
+    expect(msgs[msgs.length - 1].content[0].text).toBe(`payload-${msgs.length - 1}`);
   });
 
   it("bare /prune (no args) also arms a soft prune", () => {

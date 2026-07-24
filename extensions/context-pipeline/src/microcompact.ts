@@ -12,6 +12,10 @@
 //
 // On trigger, the most recent cfg.keepRecent compactable results are kept; the
 // rest have their content replaced by a placeholder. The input is not mutated.
+//
+// opts.countThreshold overrides cfg.microCountThreshold for the count trigger;
+// the caller (index.ts) uses this to batch count-based passes behind a
+// high-water mark so the prompt prefix breaks once per batch, not every turn.
 
 import type { PipelineConfig } from "./config.js";
 import { type AnyMessage, codePoints, isTextBlock } from "./types.js";
@@ -23,6 +27,15 @@ export interface MicroResult {
   removedChars: number;
   cleared: number;
   triggered: boolean;
+  /** Which trigger fired: "count", "gap", or null when not triggered. */
+  triggerReason: "count" | "gap" | null;
+  /** Number of compactable tool results seen (cleared placeholders included). */
+  compactableCount: number;
+}
+
+export interface MicroOptions {
+  /** Overrides cfg.microCountThreshold for the count-based trigger. */
+  countThreshold?: number;
 }
 
 function isAlreadyCleared(content: unknown): boolean {
@@ -43,6 +56,7 @@ export function microcompact(
   messages: AnyMessage[],
   cfg: PipelineConfig,
   now?: number,
+  opts?: MicroOptions,
 ): MicroResult {
   const toolset = new Set(cfg.compactableTools.map((t) => t.toLowerCase()));
   const compactable: number[] = [];
@@ -69,21 +83,28 @@ export function microcompact(
   }
 
   const count = compactable.length;
+  const countThreshold = opts?.countThreshold ?? cfg.microCountThreshold;
+  const countTriggered = count > countThreshold;
   const gapTriggered =
     hasTimestamp &&
     lastAssistantTs != null &&
     typeof now === "number" &&
     now - lastAssistantTs > cfg.gapMs;
-  const triggered = count > cfg.microCountThreshold || gapTriggered;
+  const triggered = countTriggered || gapTriggered;
+  const triggerReason: MicroResult["triggerReason"] = countTriggered
+    ? "count"
+    : gapTriggered
+      ? "gap"
+      : null;
 
   if (!triggered || count === 0) {
-    return { messages, removedChars: 0, cleared: 0, triggered: false };
+    return { messages, removedChars: 0, cleared: 0, triggered: false, triggerReason: null, compactableCount: count };
   }
 
   const keep = Math.max(0, cfg.keepRecent);
   const clearCount = Math.max(0, count - keep);
   if (clearCount === 0) {
-    return { messages, removedChars: 0, cleared: 0, triggered: true };
+    return { messages, removedChars: 0, cleared: 0, triggered: true, triggerReason, compactableCount: count };
   }
 
   const clearIndices = compactable.slice(0, clearCount);
@@ -109,8 +130,8 @@ export function microcompact(
   }
 
   if (cleared === 0) {
-    return { messages, removedChars: 0, cleared: 0, triggered: true };
+    return { messages, removedChars: 0, cleared: 0, triggered: true, triggerReason, compactableCount: count };
   }
 
-  return { messages: out, removedChars, cleared, triggered: true };
+  return { messages: out, removedChars, cleared, triggered: true, triggerReason, compactableCount: count };
 }

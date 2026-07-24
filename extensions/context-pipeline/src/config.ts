@@ -14,6 +14,13 @@ export interface PipelineConfig {
   keepRecent: number;
   /** Compactable-result count above which microcompact triggers. */
   microCountThreshold: number;
+  /**
+   * Growth in compactable-result count required before the next count-based
+   * microcompact trigger. Batching triggers protects the LLM prompt cache:
+   * each pass rewrites old tool results and breaks the prompt prefix, so
+   * re-firing every turn pays a cold start per turn — once per batch instead.
+   */
+  microBatchSize: number;
   /** Idle gap (ms) since last assistant message that triggers microcompact. */
   gapMs: number;
   /** Tokens reserved for model output, subtracted from context window. */
@@ -24,6 +31,14 @@ export interface PipelineConfig {
   maxConsecutiveFailures: number;
   /** Lowercased tool names whose results may be microcompacted. */
   compactableTools: string[];
+  /**
+   * Prune trigger mode. "auto": microcompact fires automatically on the
+   * count/gap triggers. "manual": microcompact never fires on its own; old
+   * tool results are only cleared via /prune (soft/hard). Manual mode keeps
+   * the prompt prefix stable between user-triggered prunes, which matters on
+   * backends with per-worker prompt caches (each auto prune is a cold start).
+   */
+  pruneMode: "auto" | "manual";
 }
 
 export const DEFAULTS: PipelineConfig = {
@@ -31,11 +46,13 @@ export const DEFAULTS: PipelineConfig = {
   perBatchAggChars: 200000,
   keepRecent: 5,
   microCountThreshold: 30,
+  microBatchSize: 30,
   gapMs: 3600000,
   reserveOutput: 20000,
   thresholdBuffer: 13000,
   maxConsecutiveFailures: 3,
   compactableTools: ["read", "bash", "grep", "glob", "find", "ls", "webfetch"],
+  pruneMode: "manual",
 };
 
 function num(raw: string | undefined, fallback: number): number {
@@ -64,10 +81,15 @@ export function loadConfig(env: EnvLike = process.env): PipelineConfig {
     perBatchAggChars: num(env.PI_CTXPIPE_PER_BATCH, DEFAULTS.perBatchAggChars),
     keepRecent: num(env.PI_CTXPIPE_KEEP_RECENT, DEFAULTS.keepRecent),
     microCountThreshold: num(env.PI_CTXPIPE_MICRO_COUNT, DEFAULTS.microCountThreshold),
+    microBatchSize: num(env.PI_CTXPIPE_MICRO_BATCH, DEFAULTS.microBatchSize),
     gapMs: num(env.PI_CTXPIPE_GAP_MS, DEFAULTS.gapMs),
     reserveOutput: num(env.PI_CTXPIPE_RESERVE_OUTPUT, DEFAULTS.reserveOutput),
     thresholdBuffer: num(env.PI_CTXPIPE_THRESHOLD_BUFFER, DEFAULTS.thresholdBuffer),
     maxConsecutiveFailures: num(env.PI_CTXPIPE_MAX_FAILS, DEFAULTS.maxConsecutiveFailures),
     compactableTools,
+    pruneMode: (() => {
+      const raw = (env.PI_CTXPIPE_PRUNE_MODE ?? "").trim().toLowerCase();
+      return raw === "auto" || raw === "manual" ? raw : DEFAULTS.pruneMode;
+    })(),
   };
 }
