@@ -28,6 +28,15 @@ export function wrapVisualLines(text: string, width: number): string[] {
  * hundreds of rows before the existing line cap can see it.
  */
 export class FoldableText implements Component {
+  // Memoize the expensive ANSI wrap (graphemeWidth/wrapSingleLine) keyed by the
+  // resolved content width. `text`/`options.widthOffset` are fixed per instance,
+  // so for a given width the wrapped rows are deterministic. The TUI re-renders
+  // cached components every frame; without this the wrap dominated CPU (100%
+  // spin) on large transcripts. The cheap fold/slice logic still runs each frame
+  // (so `expanded` toggles stay live).
+  private cacheWidth = -1;
+  private cacheRows: string[] | null = null;
+
   constructor(
     private readonly text: string,
     private readonly theme: ClaudeUiTheme,
@@ -36,7 +45,14 @@ export class FoldableText implements Component {
 
   render(width: number): string[] {
     const contentWidth = Math.max(1, width - (this.options.widthOffset ?? 0));
-    const rows = wrapVisualLines(this.text, contentWidth);
+    let rows: string[];
+    if (contentWidth === this.cacheWidth && this.cacheRows !== null) {
+      rows = this.cacheRows;
+    } else {
+      rows = wrapVisualLines(this.text, contentWidth);
+      this.cacheWidth = contentWidth;
+      this.cacheRows = rows;
+    }
     if (rows.length === 0) {
       return [];
     }
@@ -69,5 +85,8 @@ export class FoldableText implements Component {
     ];
   }
 
-  invalidate(): void {}
+  invalidate(): void {
+    this.cacheWidth = -1;
+    this.cacheRows = null;
+  }
 }
