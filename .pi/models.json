@@ -159,13 +159,20 @@
       "baseUrl": "https://copilot.tencent.com/v2",
       "apiKey": "$CODEBUDDY_API_KEY",
       "api": "openai-completions",
+      "headers": {
+        "X-Conversation-ID": "81f0864098994c088ae6b203c785308c",
+        "X-IDE-Type": "cli",
+        "X-IDE-Name": "pi",
+        "X-Product": "codebuddy"
+      },
       "compat": {
         "supportsStore": false,
         "supportsDeveloperRole": false,
         "supportsReasoningEffort": true,
         "supportsUsageInStreaming": true,
         "maxTokensField": "max_tokens",
-        "supportsStrictMode": false
+        "supportsStrictMode": false,
+        "sendSessionAffinityHeaders": true
       },
       "models": [
         {

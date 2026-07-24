@@ -12,9 +12,10 @@ import {
 import { getPlan, restorePlanFromBranch, setPlan, shouldShowRestoredOverlay, hasUnfinishedPlan } from "./state.js";
 
 const PROMPT_GUIDELINE = [
-  "Use update_plan for non-trivial, multi-step, ambiguous, or long-running work; do not use it for simple one-step tasks.",
+  "Use update_plan for non-trivial, multi-step, ambiguous, or long-running work, or when the user asks for more than one thing in a single prompt; do not use it for simple one-step tasks.",
   "Call update_plan with the full latest plan snapshot, using short one-sentence steps and statuses pending, in_progress, or completed.",
-  "Keep exactly one in_progress step while work remains, mark completed steps before moving on, and mark all steps completed when done.",
+  "Before each new action, check whether the current step is done: update the plan every time you finish a step or change what you will do next, marking finished steps completed and the next step in_progress. Do not save up plan updates for the end.",
+  "Keep exactly one in_progress step while work remains. You may mark multiple steps completed in a single call when one pass finishes them, and mark all steps completed when done.",
   "When changing plan structure, include explanation; after calling update_plan, do not repeat the full plan because Pi displays it already.",
 ];
 
