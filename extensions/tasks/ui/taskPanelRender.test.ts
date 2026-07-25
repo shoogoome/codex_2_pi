@@ -26,7 +26,7 @@ describe("renderTaskPanel", () => {
     expect(renderTaskPanel([])).toEqual([]);
   });
 
-  it("non-focused header includes Tasks count + Ctrl+T hint", () => {
+  it("non-focused header includes Tasks count + Ctrl+Y hint", () => {
     const lines = renderTaskPanel([makeEntry()], {
       width: 80,
       focused: false,
@@ -35,7 +35,7 @@ describe("renderTaskPanel", () => {
     });
     expect(lines[0]).toContain("Tasks");
     expect(lines[0]).toContain("(1 running)");
-    expect(lines[0]).toContain("Ctrl+T");
+    expect(lines[0]).toContain("Ctrl+Y");
   });
 
   it("focused header includes ↑/↓ select / Enter view hint", () => {

@@ -399,7 +399,7 @@ describe("background-agent panel widget", () => {
       },
     );
 
-    // Recover the keybindings handler so we can simulate Ctrl+T then Enter.
+    // Recover the keybindings handler so we can simulate Ctrl+Y then Enter.
     const handler = fakeUI.onTerminalInput.mock.calls[0]![0] as (
       data: string,
     ) => unknown;
@@ -425,8 +425,8 @@ describe("background-agent panel widget", () => {
       } as never,
     }));
 
-    // Ctrl+T → focus
-    handler("\x14");
+    // Ctrl+Y → focus
+    handler("\x19");
     // ↓ to select first
     handler("\x1b[B");
     // Enter → enterTaskView → triggers ui.custom

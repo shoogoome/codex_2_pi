@@ -89,7 +89,7 @@
 | `side` | `/side` 在 Pi overlay 中从当前 leaf fork 临时 side subagent，关闭窗口即关闭 side 会话。 | `/side [message]` |
 | `localagent` | 注册 `task_agent` 工具 + `local_agent` 任务类型，在进程内后台跑本地子 agent。 | 工具 `task_agent` |
 | `localshell` | 注册 `task_bash` 工具 + LocalShellTask，后台执行 shell 命令（超时可自动转后台）。 | 工具 `task_bash` |
-| `tasks` | 任务框架底座：进程内 default TaskStore + 背景 agents panel（Ctrl+T 焦点 / Enter overlay）+ 任务查询/管理工具。 | 工具 `task_status`/`task_kill`/`task_list` |
+| `tasks` | 任务框架底座：进程内 default TaskStore + 背景 agents panel（Ctrl+Y 焦点 / Enter overlay）+ 任务查询/管理工具。 | 工具 `task_status`/`task_kill`/`task_list` |
 | `teammate` | 多 agent 团队协作：创建团队、成员间消息、计划审批与团队任务看板。 | 工具 `team_create`/`send_message`/`request_plan_approval`/`team_delete`/`team_plan_approve` + team task 工具 |
 | `user-input` | 向用户提问 1-3 个带选项的问题（UI 自动加 `Other` 自由文本项）。 | 工具 `request_user_input`/`ask_user_question`/`askUserQuestion` |
 

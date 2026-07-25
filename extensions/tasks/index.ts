@@ -7,7 +7,7 @@
 //   2. 注册 task-notification TUI renderer — Pi UI 收到本扩展发的 sendMessage 时正确渲染。
 //   3. 在 session_start hook 中:latch sessionId 到 store + 重置 outputPath latch + 启动 polling。
 //   4. session_start hasUI=true 时:挂背景 agents panel widget(对齐 claudecode 的
-//      "Waiting for N background agents to finish")+ Ctrl+T 焦点切换 + Enter 进
+//      "Waiting for N background agents to finish")+ Ctrl+Y 焦点切换 + Enter 进
 //      task output overlay。Esc 退出 overlay。仅显示 local_agent 任务。
 //   5. 在 session_shutdown hook 中:停 polling + flush all disk outputs + 重置 store。
 

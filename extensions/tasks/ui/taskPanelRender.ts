@@ -3,7 +3,7 @@
 // Visual style mirrors `extensions/teammate/ui/teamWidget.ts` but simpler
 // (no team grouping; one flat list of tasks):
 //
-//   ○ Tasks (5 running)    Ctrl+T to focus              <- blurred header
+//   ○ Tasks (5 running)    Ctrl+Y to focus              <- blurred header
 //   ● Tasks    ↑/↓ to select · Enter to view            <- focused header
 //   ○ local_agent  Fix #2 - default open bash/write   6m 44s  ↓ 74.0k tokens
 //   ▶ ○ local_agent  Fix #4 - overlay fills full      6m 10s  ↓ 78.2k tokens   <- selected
@@ -94,7 +94,7 @@ export function renderTaskPanel(
     const headerColor = focused ? "accent" : "dim";
     const hint = focused
       ? "↑/↓ to select · Enter to view"
-      : `Ctrl+T to focus`;
+      : `Ctrl+Y to focus`;
     const countLabel = focused
       ? TITLE
       : `${TITLE} (${runningCount} running)`;

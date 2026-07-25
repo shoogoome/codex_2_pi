@@ -104,19 +104,19 @@ describe("registerTaskPanelKeybindings", () => {
     expect(h.fakeUI.handlers.size).toBe(1);
   });
 
-  // ─── Blurred panel: only Ctrl+T is consumed; everything else passes ───
+  // ─── Blurred panel: only Ctrl+Y is consumed; everything else passes ───
 
-  it("blurred leader + Ctrl+T → focused=true + consume", () => {
+  it("blurred leader + Ctrl+Y → focused=true + consume", () => {
     const h = makeHarness({ tasks: [{ id: "a1", description: "x" }] });
-    const result = h.trigger("\x14");
+    const result = h.trigger("\x19");
     expect(result).toEqual({ consume: true });
     expect(h.viewState.get()).toEqual({ kind: "leader", focused: true });
   });
 
-  it("focused leader + Ctrl+T → focused=false + consume (blurs)", () => {
+  it("focused leader + Ctrl+Y → focused=false + consume (blurs)", () => {
     const h = makeHarness({ tasks: [{ id: "a1", description: "x" }] });
     h.viewState.toggleFocus();
-    const result = h.trigger("\x14");
+    const result = h.trigger("\x19");
     expect(result).toEqual({ consume: true });
     expect(h.viewState.get()).toEqual({ kind: "leader", focused: false });
   });
@@ -240,7 +240,7 @@ describe("registerTaskPanelKeybindings", () => {
     expect(h.viewState.get()).toEqual({ kind: "leader", focused: false });
   });
 
-  it("blurred leader_with_selection + ↑ → not consume (must press Ctrl+T first)", () => {
+  it("blurred leader_with_selection + ↑ → not consume (must press Ctrl+Y first)", () => {
     const h = makeHarness({
       tasks: [
         { id: "a1", description: "alpha", startTime: 0 },
@@ -282,14 +282,14 @@ describe("registerTaskPanelKeybindings", () => {
     });
   });
 
-  it("task_output + Ctrl+T → still toggles focus (idempotent exit)", () => {
+  it("task_output + Ctrl+Y → still toggles focus (idempotent exit)", () => {
     const h = makeHarness({ tasks: [{ id: "a1", description: "x" }] });
     h.viewState.selectTask("a1");
     h.viewState.enterTaskView();
-    // Ctrl+T while in task_output is a no-op for viewState.toggleFocus
+    // Ctrl+Y while in task_output is a no-op for viewState.toggleFocus
     // but should not throw; passing through is acceptable.
-    const result = h.trigger("\x14");
-    // We document behaviour: Ctrl+T while task_output should NOT toggle focus
+    const result = h.trigger("\x19");
+    // We document behaviour: Ctrl+Y while task_output should NOT toggle focus
     // because the state machine's toggleFocus is a no-op there. The keybindings
     // layer still consumes the key (so it doesn't reach the editor).
     expect(result).toEqual({ consume: true });

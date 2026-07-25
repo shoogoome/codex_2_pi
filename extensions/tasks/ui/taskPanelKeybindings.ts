@@ -1,10 +1,10 @@
 // Wire ctx.ui.onTerminalInput to the task-panel viewState.
 //
 // Focus model (mirrors the teammate panel pattern):
-//   - focused=false : Ctrl+T toggles focus; everything else passes through.
+//   - focused=false : Ctrl+Y toggles focus; everything else passes through.
 //                     Ctrl+G is left untouched so the teammate panel sees it.
 //   - focused=true  : ↑↓ Tab Enter Esc are intercepted.
-//   - task_output   : Esc / Enter / 'q' exit; Ctrl+T is consumed (no-op);
+//   - task_output   : Esc / Enter / 'q' exit; Ctrl+Y is consumed (no-op);
 //                     other keys pass through (best-effort harmless until we
 //                     add scroll keys).
 
@@ -26,12 +26,12 @@ export type TaskPanelKeyAction =
   | { kind: "ignore" };
 
 // Common terminal escape sequences:
-//   "\x14"   = Ctrl+T (DC4) — toggles task panel focus
+//   "\x19"   = Ctrl+Y (EM)  — toggles task panel focus
 //   "\x1b[A" = ↑    "\x1b[B" = ↓    "\x09" = Tab
 //   "\r" / "\n"     = Enter
 //   "\x1b"   = Esc
 export function classifyTaskPanelKey(data: string): TaskPanelKeyAction {
-  if (data === "\x14") return { kind: "toggle-task-focus" };
+  if (data === "\x19") return { kind: "toggle-task-focus" };
   if (data === "\x1b[A") return { kind: "cycle", direction: "prev" };
   if (data === "\x1b[B") return { kind: "cycle", direction: "next" };
   if (data === "\x09") return { kind: "cycle", direction: "next" };
@@ -61,7 +61,7 @@ export function registerTaskPanelKeybindings(
     const action = classifyTaskPanelKey(data);
     const state = deps.viewState.get();
 
-    // Ctrl+T is the universal toggle for the task panel. In task_output
+    // Ctrl+Y is the universal toggle for the task panel. In task_output
     // it's a no-op for viewState.toggleFocus but we still consume it so
     // it doesn't accidentally reach the editor.
     if (action.kind === "toggle-task-focus") {
@@ -84,7 +84,7 @@ export function registerTaskPanelKeybindings(
       return undefined;
     }
 
-    // Blurred panel: keys (other than Ctrl+T handled above) pass through
+    // Blurred panel: keys (other than Ctrl+Y handled above) pass through
     // to the editor untouched. The user can type freely; the teammate
     // panel still gets Ctrl+G unchanged.
     if (!state.focused) {
