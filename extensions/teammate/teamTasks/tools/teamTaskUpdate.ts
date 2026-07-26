@@ -85,6 +85,7 @@ export function buildTeamTaskUpdateTool(
     description: DESCRIPTION,
     parameters: TeamTaskUpdateParams,
     executionMode: "parallel",
+    renderShell: "self",
     async execute(_callId: unknown, raw: unknown) {
       const params = raw as {
         task_id?: string;

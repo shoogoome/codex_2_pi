@@ -260,6 +260,8 @@ export function buildTaskAgentTool(
     description,
     parameters: TaskAgentParams,
     executionMode: "parallel",
+    // Self-render like claude-ui's native overrides — no default bg Box.
+    renderShell: "self",
     async execute(_callId: unknown, raw: unknown, signal: AbortSignal | undefined, onUpdate, ctx: ExtensionContext) {
       const params = raw as {
         description: string;

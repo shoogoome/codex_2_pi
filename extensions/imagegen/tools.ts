@@ -78,6 +78,7 @@ export function createGenerateImageTool(options: CreateGenerateImageToolOptions 
     ],
     parameters: GenerateImageParams,
     executionMode: "sequential",
+    renderShell: "self",
     async execute(toolCallId, params, signal, _onUpdate, _ctx): Promise<AgentToolResult<GenerateImageDetails>> {
       const config = loadConfig();
       const selection = findImageModel(config, params.model);

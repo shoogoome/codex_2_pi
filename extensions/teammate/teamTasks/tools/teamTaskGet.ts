@@ -53,6 +53,7 @@ export function buildTeamTaskGetTool(
     description: DESCRIPTION,
     parameters: TeamTaskGetParams,
     executionMode: "parallel",
+    renderShell: "self",
     async execute(_callId: unknown, raw: unknown) {
       const params = raw as { task_id?: string };
       const taskId = params.task_id?.trim() ?? "";

@@ -44,6 +44,8 @@ export default function todoExtension(pi: ExtensionAPI) {
     promptGuidelines: PROMPT_GUIDELINE,
     parameters: UpdatePlanParamsSchema,
     executionMode: "sequential",
+    // Self-render like claude-ui's native overrides — no default bg Box.
+    renderShell: "self",
     renderCall(args, theme) {
       return renderUpdatePlanCall(args, theme);
     },

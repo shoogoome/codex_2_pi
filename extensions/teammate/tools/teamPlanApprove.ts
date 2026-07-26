@@ -64,6 +64,7 @@ export function buildTeamPlanApproveTool(
     description: DESCRIPTION,
     parameters: TeamPlanApproveParams,
     executionMode: "parallel",
+    renderShell: "self",
     async execute(_callId: unknown, raw: unknown) {
       const params = raw as {
         teammate?: string;

@@ -139,6 +139,8 @@ export default function mcpExtension(pi: ExtensionAPI): void {
       description: spec.description,
       parameters: spec.parameters,
       executionMode: "parallel",
+      // Self-render like claude-ui's native overrides — no default bg Box.
+      renderShell: "self",
       async execute(_toolCallId, params) {
         const entry = registry.get(server);
         const client = entry?.client;

@@ -33,6 +33,7 @@ export function buildTaskListTool(store: TaskStore): ToolDefinition<typeof TaskL
       "- Use task_list mainly for: (a) finding background tasks you spawned earlier, (b) seeing if there are unrelated tasks competing for resources.",
     parameters: TaskListParams,
     executionMode: "parallel",
+    renderShell: "self",
     async execute(_callId, rawParams): Promise<AgentToolResult<TaskListDetails>> {
       const { filter } = rawParams as { filter?: "running" | "all" };
       const f: "running" | "all" = filter ?? "running";

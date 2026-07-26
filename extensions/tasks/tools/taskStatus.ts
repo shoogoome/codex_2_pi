@@ -52,6 +52,9 @@ export function buildTaskStatusTool(store: TaskStore): ToolDefinition<typeof Tas
       "- DO use task_status when: (a) you have an explicit reason to inspect a long-running local_bash task or local_agent sub-agent, (b) debugging a stuck task, or (c) verifying terminal state after kill.",
     parameters: TaskStatusParams,
     executionMode: "parallel",
+    // Render without Pi's default backgrounded Box — matches claude-ui's
+    // native-tool overrides so the stream has one consistent look.
+    renderShell: "self",
     async execute(_callId, rawParams): Promise<AgentToolResult<TaskStatusDetails>> {
       const { task_id, output_offset } = rawParams as { task_id: string; output_offset?: number };
       const task = store.getTask(task_id);

@@ -19,6 +19,7 @@ export function buildTaskKillTool(store: TaskStore): ToolDefinition<typeof TaskK
       "- For teammates, prefer the graceful protocol: `send_message {to:\"<name>\", message:'{\"type\":\"shutdown_request\",\"request_id\":\"r1\"}'}` — the teammate's loop auto-acks and exits. Use task_kill only as a forced last resort (or via team_delete cascade for the whole team).",
     parameters: TaskKillParams,
     executionMode: "parallel",
+    renderShell: "self",
     async execute(_callId, rawParams): Promise<AgentToolResult<{ action: string }>> {
       const { task_id } = rawParams as { task_id: string };
       const task = store.getTask(task_id);

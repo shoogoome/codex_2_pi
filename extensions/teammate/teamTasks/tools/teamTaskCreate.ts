@@ -65,6 +65,7 @@ export function buildTeamTaskCreateTool(
     description: DESCRIPTION,
     parameters: TeamTaskCreateParams,
     executionMode: "parallel",
+    renderShell: "self",
     async execute(_callId: unknown, raw: unknown) {
       const params = raw as {
         team_name?: string;

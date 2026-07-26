@@ -44,6 +44,7 @@ export function buildTeamDeleteTool(
     description: DESCRIPTION,
     parameters: TeamDeleteParams,
     executionMode: "parallel",
+    renderShell: "self",
     async execute(_callId: unknown, raw: unknown) {
       const params = raw as { team_name: string; timeout_ms?: number };
       const teamName = params.team_name?.trim() ?? "";

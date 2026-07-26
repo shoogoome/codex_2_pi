@@ -64,6 +64,9 @@ export default function localshellExtension(pi: ExtensionAPI): void {
         "Run a shell command as a tracked task. Use ONLY for long-running, interactive, or backgroundable commands; for short one-shot commands use the regular `bash` tool. Auto-backgrounds after timeout_ms (default 60000).",
       parameters: TaskBashParams,
       executionMode: "parallel",
+      // Match claude-ui's native-tool overrides: render without Pi's default
+      // backgrounded Box so task_bash blends in with read/grep/write.
+      renderShell: "self",
       async execute(_callId: unknown, raw: unknown, signal, onUpdate) {
         const { command, description, timeout_ms } = raw as {
           command: string;

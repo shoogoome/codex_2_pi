@@ -47,6 +47,7 @@ export function buildSendMessageTool(
     description: DESCRIPTION,
     parameters: SendMessageParams,
     executionMode: "parallel",
+    renderShell: "self",
     async execute(_callId: unknown, raw: unknown) {
       const params = raw as { to?: string; message?: string };
       const to = (params.to ?? "").trim();

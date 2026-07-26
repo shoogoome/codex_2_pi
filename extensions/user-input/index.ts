@@ -17,6 +17,7 @@ export default function userInputExtension(pi: ExtensionAPI) {
       promptGuidelines: [PROMPT_GUIDELINE],
       parameters: RequestUserInputArgsSchema,
       executionMode: "sequential",
+      renderShell: "self",
       async execute(_toolCallId, params, signal, _onUpdate, ctx) {
         return executeRequestUserInput(params, ctx.ui, ctx.hasUI, signal);
       },
