@@ -1,5 +1,5 @@
 import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
-import { Box, Text } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import type { PlanSnapshot, StepStatus, UpdatePlanDetails, UpdatePlanParams } from "./schema.js";
 
 export function formatStatusGlyph(status: StepStatus): string {
@@ -36,14 +36,11 @@ export function renderUpdatePlanCall(args: UpdatePlanParams, theme: Theme): Text
   return new Text(theme.fg("toolTitle", theme.bold(formatUpdatePlanCallTitle(args))), 0, 0);
 }
 
-export function renderUpdatePlanResult(result: AgentToolResult<UpdatePlanDetails>, _expanded: boolean, theme: Theme): Text | Box {
+export function renderUpdatePlanResult(result: AgentToolResult<UpdatePlanDetails>, _expanded: boolean, theme: Theme): Text {
   const details = result.details;
   const lines = formatPlanUpdateLines(details);
-  const box = new Box(1, 1, (value: string) => theme.bg("customMessageBg", value));
-  lines.forEach((line, index) => {
-    box.addChild(new Text(colorPlanLine(line, index, theme), 0, 0));
-  });
-  return box;
+  // Plain Text, no backgrounded Box — matches claude-ui's native-tool look.
+  return new Text(lines.map((line, index) => colorPlanLine(line, index, theme)).join("\n"), 0, 0);
 }
 
 function colorPlanLine(line: string, index: number, theme: Theme): string {
