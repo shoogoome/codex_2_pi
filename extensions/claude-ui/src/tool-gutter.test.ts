@@ -19,29 +19,46 @@ const theme = {
 };
 
 describe("buildToolHead", () => {
-  it("renders dot gutter + bold name + dim args on one line", () => {
-    const head = buildToolHead("bash", "ls -la", theme);
-    expect(head).toContain(`${GLYPH_DOT} `);
-    expect(head).toContain("<b>bash</b>");
-    expect(head).toContain("<dim>ls -la</dim>");
+  it("renders dot + bold name + parenthesized args in the default text color", () => {
+    const head = buildToolHead("Bash", "ls -la", theme);
+    expect(head).toContain(GLYPH_DOT);
+    expect(head).toContain("<b>Bash</b>");
+    // Args sit in parens immediately after the name, NOT dim.
+    expect(head).toContain("<b>Bash</b>(<text>ls -la</text>)");
     expect(head).not.toContain("\n");
   });
 
-  it("omits the args segment when there is no summary", () => {
-    const head = buildToolHead("read", undefined, theme);
-    expect(head).toContain("<b>read</b>");
-    expect(head).not.toContain("<dim>");
+  it("omits the parens when there is no summary", () => {
+    const head = buildToolHead("Read", undefined, theme);
+    expect(head).toContain("<b>Read</b>");
+    expect(head).not.toContain("(");
+  });
+
+  it("colors the dot by lifecycle state (Claude ToolUseLoader)", () => {
+    expect(buildToolHead("Read", "a.ts", theme, "pending")).toContain(
+      `<dim>${GLYPH_DOT}</dim>`,
+    );
+    expect(buildToolHead("Read", "a.ts", theme, "success")).toContain(
+      `<success>${GLYPH_DOT}</success>`,
+    );
+    expect(buildToolHead("Read", "a.ts", theme, "error")).toContain(
+      `<error>${GLYPH_DOT}</error>`,
+    );
+    // The default state is pending.
+    expect(buildToolHead("Read", "a.ts", theme)).toContain(
+      `<dim>${GLYPH_DOT}</dim>`,
+    );
   });
 });
 
 describe("buildResultLines", () => {
-  it("prefixes the first line with the ⎿ connector and indents the rest", () => {
+  it("prefixes the first line with the dim ⎿ connector and keeps content in the text color", () => {
     const lines = buildResultLines("first\nsecond", theme);
     expect(lines).toHaveLength(2);
     expect(lines[0]).toContain(GLYPH_CONNECTOR);
-    expect(lines[0]).toContain("<dim>first</dim>");
+    expect(lines[0]).toContain("<text>first</text>");
     expect(lines[1].startsWith("     ")).toBe(true);
-    expect(lines[1]).toContain("<dim>second</dim>");
+    expect(lines[1]).toContain("<text>second</text>");
   });
 
   it("returns an empty array for blank output", () => {
@@ -107,7 +124,7 @@ describe("folding long output", () => {
     const lines = buildResultLines("a\nb\nc\nd", theme);
     expect(lines).toHaveLength(4);
     expect(lines.join("\n")).not.toContain("expand");
-    expect(lines[3]).toContain("<dim>d</dim>");
+    expect(lines[3]).toContain("<text>d</text>");
   });
 
   it("foldLines returns cap+1 lines and no hint when only one line overflows", () => {

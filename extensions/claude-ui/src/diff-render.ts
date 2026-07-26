@@ -7,24 +7,33 @@
  *   " <n> <content>"   context
  *   " <pad> ..."       elided context region
  *
- * The Claude look drops the +/- markers and distinguishes rows by a full
- * background color: added #225C2B / removed #7A2936, with a brighter word-level
- * second layer (#38A660 / #B3596B). Context is dim with no background.
+ * The Claude look (StructuredDiff/Fallback.tsx) right-aligns line numbers,
+ * keeps a +/-/space sigil after them, and distinguishes rows by a FULL-WIDTH
+ * background bar: added #225C2B / removed #7A2936, with a brighter word-level
+ * second layer (#38A660 / #B3596B). Context is dim with no background. The
+ * first result row is the `Added N lines, removed M lines` summary (bold
+ * counts), mirroring FileEditToolUpdatedMessage.
  */
 import { Text, type Component } from "@earendil-works/pi-tui";
+import {
+  getLanguageFromPath,
+  highlightCode,
+} from "@earendil-works/pi-coding-agent";
 import {
   DEFAULT_MAX_DIFF_LINES,
   GLYPH_ELLIPSIS,
   LINE_ADDED,
   LINE_REMOVED,
-  RESULT_INDENT,
-  RESULT_PREFIX,
   WORD_ADDED,
   WORD_REMOVED,
 } from "./constants.js";
 import { bgTrueColor, nestedWordBg } from "./bg.js";
 import { FoldableText } from "./foldable-text.js";
-import { type FoldOptions } from "./tool-gutter.js";
+import {
+  prefixResultRows,
+  styledSegments,
+  type FoldOptions,
+} from "./tool-gutter.js";
 import type { ClaudeUiTheme } from "./theme-types.js";
 
 export type DiffLineKind = "add" | "del" | "context" | "meta";
@@ -97,38 +106,96 @@ export function computeWordDiff(del: string, add: string): WordDiff {
   };
 }
 
-function padLineNo(lineNo: string): string {
-  return lineNo ? `${lineNo}  ` : "";
+const SIGIL: Record<DiffLineKind, string> = {
+  add: "+",
+  del: "-",
+  context: " ",
+  meta: " ",
+};
+
+/**
+ * Gutter prefix for one diff row: line number right-aligned to `numberWidth`,
+ * one space, the sigil, one space — e.g. ` 42 + `. Blank for meta rows.
+ */
+function gutter(line: DiffLine, numberWidth: number): string {
+  if (line.kind === "meta") {
+    return "";
+  }
+  const no = line.lineNo.padStart(numberWidth);
+  return `${no} ${SIGIL[line.kind]} `;
+}
+
+/** Count add/del rows for the `Added N lines, removed M lines` summary. */
+export function countDiffChanges(lines: DiffLine[]): {
+  added: number;
+  removed: number;
+} {
+  let added = 0;
+  let removed = 0;
+  for (const line of lines) {
+    if (line.kind === "add") {
+      added++;
+    } else if (line.kind === "del") {
+      removed++;
+    }
+  }
+  return { added, removed };
+}
+
+/**
+ * Claude FileEditToolUpdatedMessage's first row:
+ *   `Added **N** lines, removed **M** lines`
+ * (segments omitted when zero; "Removed" capitalized when it leads).
+ */
+export function buildEditSummary(lines: DiffLine[], theme: ClaudeUiTheme): string {
+  const { added, removed } = countDiffChanges(lines);
+  const segments: Array<string | { bold: string }> = [];
+  if (added > 0) {
+    segments.push("Added ", { bold: String(added) }, added === 1 ? " line" : " lines");
+  }
+  if (added > 0 && removed > 0) {
+    segments.push(", ");
+  }
+  if (removed > 0) {
+    segments.push(
+      added === 0 ? "Removed " : "removed ",
+      { bold: String(removed) },
+      removed === 1 ? " line" : " lines",
+    );
+  }
+  return styledSegments(theme, segments);
 }
 
 /**
  * Build the final styled strings (background colors embedded) for a parsed
- * diff. The first row carries the "  ⎿  " connector; the rest indent to
- * column 6. Added/removed rows carry integer backgrounds and never show +/-.
+ * diff. Added/removed rows carry full-row backgrounds (padded to terminal
+ * width later by FoldableText) and show the +/- sigil after the right-aligned
+ * line number; context rows are dim without a background. Rows carry NO ⎿
+ * connector/indent — callers compose the result gutter via prefixResultRows
+ * so a summary line can take the connector slot.
  */
 export function buildDiffLineStrings(
   lines: DiffLine[],
   theme: ClaudeUiTheme,
 ): string[] {
   const out: string[] = [];
-  let first = true;
+  const numberWidth = lines.reduce(
+    (width, line) => Math.max(width, line.lineNo.length),
+    0,
+  );
 
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
-    const prefix = first
-      ? theme.fg("dim", RESULT_PREFIX)
-      : RESULT_INDENT;
-    first = false;
 
     if (line.kind === "meta") {
-      out.push(`${prefix}${theme.fg("dim", GLYPH_ELLIPSIS)}`);
+      out.push(theme.fg("dim", GLYPH_ELLIPSIS));
       continue;
     }
 
+    const head = gutter(line, numberWidth);
+
     if (line.kind === "context") {
-      out.push(
-        `${prefix}${theme.fg("toolDiffContext", `${padLineNo(line.lineNo)}${line.text}`)}`,
-      );
+      out.push(theme.fg("toolDiffContext", `${head}${line.text}`));
       continue;
     }
 
@@ -151,33 +218,36 @@ export function buildDiffLineStrings(
       content = line.text;
     }
 
-    const body = `${padLineNo(line.lineNo)}${content}`;
-    out.push(`${prefix}${bgTrueColor(lineBg)(body)}`);
+    out.push(bgTrueColor(lineBg)(`${head}${content}`));
   }
 
   return out;
 }
 
-function linesToComponent(
-  strings: string[],
-  theme: ClaudeUiTheme,
-  fold: FoldOptions,
-): Component {
-  if (strings.length === 0) {
-    return new Text("", 0, 0);
-  }
-  // Join into one visual-row-aware component so a single minified/code line
-  // cannot expand into an unbounded number of terminal rows.
-  return new FoldableText(strings.join("\n"), theme, fold);
-}
-
 /**
  * Diffs fold at `DEFAULT_MAX_DIFF_LINES` (10, matching Claude's FileWriteTool
- * `MAX_LINES_TO_RENDER`) unless the caller pins an explicit `maxLines` (e.g. the
- * env-resolved value from `resolveMaxLines`).
+ * `MAX_LINES_TO_RENDER`) unless the caller pins an explicit `maxLines` (e.g.
+ * the env-resolved value from `resolveMaxLines`). The summary row rides on
+ * top of the cap (+1) so it stays visible.
  */
 function withDiffFoldDefault(fold: FoldOptions): FoldOptions {
   return { maxLines: DEFAULT_MAX_DIFF_LINES, ...fold };
+}
+
+function diffComponent(
+  summary: string,
+  rows: string[],
+  theme: ClaudeUiTheme,
+  fold: FoldOptions,
+): Component {
+  const resolved = withDiffFoldDefault(fold);
+  const maxLines = Math.max(1, resolved.maxLines ?? DEFAULT_MAX_DIFF_LINES);
+  const all = prefixResultRows([summary, ...rows], theme);
+  return new FoldableText(all.join("\n"), theme, {
+    ...resolved,
+    maxLines: maxLines + 1, // summary row stays visible above the fold
+    padRowsToWidth: true,
+  });
 }
 
 /** Render an edit result diff. Falls back to dim text when no diff is present. */
@@ -192,40 +262,65 @@ export function renderEditDiff(
     const fallback = fallbackText?.trim();
     return new Text(fallback ? theme.fg("dim", fallback) : "", 0, 0);
   }
-  const resolvedFold = withDiffFoldDefault(fold);
-  return linesToComponent(buildDiffLineStrings(parsed, theme), theme, resolvedFold);
+  return diffComponent(
+    buildEditSummary(parsed, theme),
+    buildDiffLineStrings(parsed, theme),
+    theme,
+    fold,
+  );
 }
 
-/** Turn write content into an all-added diff (no structured diff available). */
-export function buildWriteDiffLines(content: string | undefined): DiffLine[] {
-  if (!content) {
-    return [];
+/**
+ * Render a write result the way Claude's FileWriteToolCreatedMessage does:
+ *   `Wrote **N** lines to **path**`
+ * followed by up to MAX_LINES_TO_RENDER (10) content lines — syntax
+ * highlighted when the language is known, plain text otherwise, NO green
+ * background (backgrounds are an edit-diff-only device in Claude).
+ */
+export function renderWriteResult(
+  content: string | undefined,
+  displayPath: string,
+  filePath: string | undefined,
+  theme: ClaudeUiTheme,
+  fallbackText?: string,
+  fold: FoldOptions = {},
+): Component {
+  if (!content || content.trim().length === 0) {
+    const fallback = fallbackText?.trim();
+    return new Text(fallback ? theme.fg("dim", fallback) : "", 0, 0);
   }
   const lines = content.replace(/\r/g, "").split("\n");
   while (lines.length > 0 && lines[lines.length - 1] === "") {
     lines.pop();
   }
-  return lines.map((text, index) => ({
-    kind: "add" as const,
-    lineNo: String(index + 1),
-    text,
-  }));
+  const summary = styledSegments(theme, [
+    "Wrote ",
+    { bold: String(lines.length) },
+    lines.length === 1 ? " line" : " lines",
+    " to ",
+    { bold: displayPath },
+  ]);
+  const body = highlightLines(lines, filePath, theme);
+  return diffComponent(summary, body, theme, fold);
 }
 
-/** Render a write result as a full-green added block. */
-export function renderWriteDiff(
-  content: string | undefined,
+/** Syntax-highlight when the language is known; degrade to plain text. */
+function highlightLines(
+  lines: string[],
+  filePath: string | undefined,
   theme: ClaudeUiTheme,
-  fallbackText?: string,
-  fold: FoldOptions = {},
-): Component {
-  const parsed = buildWriteDiffLines(content);
-  if (parsed.length === 0) {
-    const fallback = fallbackText?.trim();
-    return new Text(fallback ? theme.fg("dim", fallback) : "", 0, 0);
+): string[] {
+  if (filePath) {
+    try {
+      const lang = getLanguageFromPath(filePath);
+      if (lang) {
+        return highlightCode(lines.join("\n"), lang);
+      }
+    } catch {
+      // fall through to plain text
+    }
   }
-  const resolvedFold = withDiffFoldDefault(fold);
-  return linesToComponent(buildDiffLineStrings(parsed, theme), theme, resolvedFold);
+  return lines.map((line) => theme.fg("text", line));
 }
 
 // Backwards-compatible alias for the planned public name.

@@ -1,9 +1,11 @@
 import {
   truncateToWidth,
+  visibleWidth,
   wrapTextWithAnsi,
   type Component,
 } from "@earendil-works/pi-tui";
 import { DEFAULT_MAX_RESULT_LINES, GLYPH_ELLIPSIS } from "./constants.js";
+import { BG_RESET } from "./bg.js";
 import { buildFoldHint, type FoldOptions } from "./tool-gutter.js";
 import type { ClaudeUiTheme } from "./theme-types.js";
 
@@ -12,6 +14,25 @@ interface VisualFoldOptions extends FoldOptions {
   widthOffset?: number;
   /** Prefix displayed before a width-truncated single-line summary. */
   overflowMarker?: string;
+  /**
+   * Right-pad every emitted row to the full content width. Rows ending in a
+   * background reset (diff add/del bars) are padded BEFORE the reset so the
+   * background fills the whole terminal row, matching Claude's StructuredDiff
+   * full-width bars.
+   */
+  padRowsToWidth?: boolean;
+}
+
+/** Pad one styled row to `width` columns, keeping any trailing bg reset last. */
+function padRow(row: string, width: number): string {
+  const missing = width - visibleWidth(row);
+  if (missing <= 0) {
+    return row;
+  }
+  const padding = " ".repeat(missing);
+  return row.endsWith(BG_RESET)
+    ? `${row.slice(0, -BG_RESET.length)}${padding}${BG_RESET}`
+    : `${row}${padding}`;
 }
 
 /** Wrap ANSI text into terminal rows without splitting wide/combined characters. */
@@ -65,7 +86,7 @@ export class FoldableText implements Component {
     } = this.options;
     const limit = Math.max(1, maxLines);
     if (expanded || rows.length <= limit) {
-      return rows;
+      return this.finish(rows, contentWidth);
     }
 
     const hidden = rows.length - limit;
@@ -75,14 +96,22 @@ export class FoldableText implements Component {
     }
 
     if (hidden === 1) {
-      return rows.slice(0, limit + 1);
+      return this.finish(rows.slice(0, limit + 1), contentWidth);
     }
 
     const hint = buildFoldHint(hidden, this.theme, expandHint);
-    return [
-      ...rows.slice(0, limit),
-      truncateToWidth(hint, contentWidth, GLYPH_ELLIPSIS),
-    ];
+    return this.finish(
+      [...rows.slice(0, limit), truncateToWidth(hint, contentWidth, GLYPH_ELLIPSIS)],
+      contentWidth,
+    );
+  }
+
+  /** Apply the optional full-width padding to the final rows. */
+  private finish(rows: string[], contentWidth: number): string[] {
+    if (!this.options.padRowsToWidth) {
+      return rows;
+    }
+    return rows.map((row) => padRow(row, contentWidth));
   }
 
   invalidate(): void {

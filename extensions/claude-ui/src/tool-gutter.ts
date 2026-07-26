@@ -1,8 +1,8 @@
 /**
  * Pure string builders for the frameless tool header and result lines.
  *
- *   head:   "● <name>  <args>"   (dot text, name bold, args dim)
- *   result: "  ⎿  <first>"        then continuation lines indent to column 6
+ *   head:   "● Name(args)"   (dot colored by state, name bold, args in parens)
+ *   result: "  ⎿  <first>"    then continuation lines indent to column 6
  */
 import {
   DEFAULT_MAX_DIFF_LINES,
@@ -124,22 +124,75 @@ export function foldLines(
   return shown;
 }
 
-/** Single-line tool head: dot gutter + bold tool name + dim argument summary. */
+/** Tool lifecycle state used to color the head dot (Claude ToolUseLoader). */
+export type ToolState = "pending" | "success" | "error";
+
+const DOT_COLOR: Record<ToolState, string> = {
+  pending: "dim",
+  success: "success",
+  error: "error",
+};
+
+/**
+ * Single-line tool head, aligned with Claude Code's AssistantToolUseMessage:
+ *
+ *   ● **Name**(arg summary)
+ *
+ * The dot carries the lifecycle color — dim while pending, `success` green
+ * once resolved, `error` red on failure (pi re-invokes renderCall when the
+ * result lands, so the color flips in place). The name is bold; the argument
+ * summary sits inside parentheses immediately after it in the default text
+ * color (NOT dim). No summary → no parens.
+ */
 export function buildToolHead(
   name: string,
   argSummary: string | undefined,
   theme: ClaudeUiTheme,
+  state: ToolState = "pending",
 ): string {
-  const head = `${theme.fg("text", `${GLYPH_DOT} `)}${theme.bold(name)}`;
+  const head = `${theme.fg(DOT_COLOR[state], GLYPH_DOT)} ${theme.bold(name)}`;
   const summary = argSummary?.trim();
-  return summary ? `${head} ${theme.fg("dim", summary)}` : head;
+  return summary ? `${head}(${theme.fg("text", summary)})` : head;
+}
+
+/** A segment of a one-line result summary; `{ bold }` renders bold. */
+export type SummarySegment = string | { bold: string };
+
+/**
+ * Render summary segments into one styled string (default text color, bold
+ * for `{ bold }` segments) — e.g. Claude's `Read **245** lines` /
+ * `Added **5** lines, removed **2** lines`.
+ */
+export function styledSegments(
+  theme: ClaudeUiTheme,
+  segments: SummarySegment[],
+): string {
+  return theme.fg(
+    "text",
+    segments
+      .map((segment) =>
+        typeof segment === "string" ? segment : theme.bold(segment.bold),
+      )
+      .join(""),
+  );
 }
 
 /**
- * Result lines: the first gets the "  ⎿  " connector prefix, the rest indent to
- * column 6. All content is dim. Empty output yields an empty array. When
- * collapsed (`!options.expanded`) the output is folded to `maxLines` with a
- * "… +K lines" hint; when expanded, all lines are rendered.
+ * Attach the result gutter to an array of pre-styled rows: the first row
+ * gets the dim "  ⎿  " connector prefix, the rest indent to column 6.
+ */
+export function prefixResultRows(rows: string[], theme: ClaudeUiTheme): string[] {
+  return rows.map((row, index) =>
+    index === 0 ? `${theme.fg("dim", RESULT_PREFIX)}${row}` : `${RESULT_INDENT}${row}`,
+  );
+}
+
+/**
+ * Result lines: the first gets the dim "  ⎿  " connector prefix, the rest
+ * indent to column 6. Content keeps the default text color — Claude renders
+ * bash stdout un-dimmed (only the ⎿ gutter is dim). Empty output yields an
+ * empty array. When collapsed (`!options.expanded`) the output is folded to
+ * `maxLines` with a "… +K lines" hint; when expanded, all lines are rendered.
  */
 export function buildResultLines(
   text: string,
@@ -153,12 +206,9 @@ export function buildResultLines(
   if (lines.length === 0) {
     return [];
   }
-  const styled = lines.map((line, index) => {
-    const body = theme.fg("dim", line);
-    if (index === 0) {
-      return `${theme.fg("dim", RESULT_PREFIX)}${body}`;
-    }
-    return `${RESULT_INDENT}${body}`;
-  });
+  const styled = prefixResultRows(
+    lines.map((line) => theme.fg("text", line)),
+    theme,
+  );
   return foldLines(styled, theme, options);
 }

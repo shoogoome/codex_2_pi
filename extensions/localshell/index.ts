@@ -228,7 +228,14 @@ export default function localshellExtension(pi: ExtensionAPI): void {
 
         const summary = summarizeTaskBashOutput(text);
         if (!summary.hasMore) {
-          return new Text(headColored, 0, 0);
+          // Short output (≤2 lines) doesn't fold — render it fully. Building
+          // from `lines` (not just headColored) keeps a lone stdout line
+          // visible instead of being silently swallowed.
+          if (lines.length <= 1) {
+            return new Text(headColored, 0, 0);
+          }
+          const body = lines.slice(1).join("\n");
+          return new Text(`${headColored}\n${t.fg("dim", body)}`, 0, 0);
         }
         const hidden = t.fg(
           "dim",

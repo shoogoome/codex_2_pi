@@ -22,9 +22,20 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
+import { isAbsolute, relative, resolve } from "node:path";
 import { FoldableText } from "./foldable-text.js";
-import { buildResultLines, buildToolHead, resolveMaxLines, type FoldOptions } from "./tool-gutter.js";
-import { renderEditDiff, renderWriteDiff } from "./diff-render.js";
+import {
+  buildResultLines,
+  buildToolHead,
+  prefixResultRows,
+  resolveMaxLines,
+  styledSegments,
+  type FoldOptions,
+  type SummarySegment,
+  type ToolState,
+} from "./tool-gutter.js";
+import { renderEditDiff, renderWriteResult } from "./diff-render.js";
+import { DEFAULT_MAX_ERROR_LINES, RESULT_PREFIX } from "./constants.js";
 import type { ClaudeUiTheme } from "./theme-types.js";
 
 interface BuiltInTools {
@@ -116,11 +127,6 @@ function getStringField(value: unknown, field: string): string | undefined {
   return typeof raw === "string" ? raw : undefined;
 }
 
-function getNumericField(value: unknown, field: string): number | undefined {
-  const raw = toRecord(value)[field];
-  return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
-}
-
 function getPathArg(value: unknown): string | undefined {
   return getStringField(value, "file_path") ?? getStringField(value, "path");
 }
@@ -131,6 +137,87 @@ function shortenPath(inputPath: string | undefined): string {
   }
   const home = homedir();
   return inputPath.startsWith(home) ? `~${inputPath.slice(home.length)}` : inputPath;
+}
+
+/**
+ * Claude's getDisplayPath: paths inside the cwd render relative to it;
+ * outside paths fall back to ~-shortened absolute.
+ */
+function displayPath(inputPath: string | undefined, cwd: string): string {
+  if (!inputPath) {
+    return "";
+  }
+  const absolute = isAbsolute(inputPath) ? inputPath : resolve(cwd, inputPath);
+  const rel = relative(cwd, absolute);
+  if (rel === "") {
+    return ".";
+  }
+  if (!rel.startsWith("..") && !isAbsolute(rel)) {
+    return rel;
+  }
+  return shortenPath(absolute);
+}
+
+/** Strip pi's trailing model-facing notices ("\n\n[Showing lines …]" etc.). */
+function stripTrailingNotices(text: string): string {
+  return text.replace(/\n\n\[[^\]\n]*(?:\][^\[\n]*)*\]\s*$/, "");
+}
+
+/** Count the content lines of a read result (notices excluded). */
+function countReadLines(text: string): number {
+  const stripped = stripTrailingNotices(text.replace(/\r/g, ""));
+  if (stripped.trim().length === 0) {
+    return 0;
+  }
+  return stripped.split("\n").length;
+}
+
+/** Count grep match lines (`path:line: content`); context lines don't match. */
+function countGrepMatches(text: string): number {
+  const stripped = stripTrailingNotices(text.replace(/\r/g, ""));
+  if (stripped.trim().length === 0 || stripped.trim() === "No matches found") {
+    return 0;
+  }
+  const matches = stripped
+    .split("\n")
+    .filter((line) => /^.+?:\d+: /.test(line)).length;
+  // Fall back to counting non-empty lines when the format is unexpected.
+  return matches > 0
+    ? matches
+    : stripped.split("\n").filter((line) => line.trim().length > 0).length;
+}
+
+/** Count non-empty lines (find results are one path per line). */
+function countNonEmptyLines(text: string): number {
+  const stripped = stripTrailingNotices(text.replace(/\r/g, ""));
+  return stripped.split("\n").filter((line) => line.trim().length > 0).length;
+}
+
+/** A single summary row with the ⎿ connector, e.g. `⎿  Read **245** lines`. */
+function summaryComponent(
+  segments: SummarySegment[],
+  theme: ClaudeUiTheme,
+): Component {
+  const [row] = prefixResultRows([styledSegments(theme, segments)], theme);
+  return new Text(row, 0, 0);
+}
+
+/** Bash command summary: full command, max 2 lines / 160 chars, then `…`. */
+const MAX_COMMAND_DISPLAY_LINES = 2;
+const MAX_COMMAND_DISPLAY_CHARS = 160;
+
+function summarizeCommand(command: string): string {
+  const normalized = command.replace(/\r/g, "");
+  const lines = normalized.split("\n");
+  if (lines.length <= MAX_COMMAND_DISPLAY_LINES &&
+      normalized.length <= MAX_COMMAND_DISPLAY_CHARS) {
+    return normalized.trim();
+  }
+  let truncated = lines.slice(0, MAX_COMMAND_DISPLAY_LINES).join("\n");
+  if (truncated.length > MAX_COMMAND_DISPLAY_CHARS) {
+    truncated = truncated.slice(0, MAX_COMMAND_DISPLAY_CHARS);
+  }
+  return `${truncated.trim()}…`;
 }
 
 function extractTextOutput(result: unknown): string {
@@ -185,64 +272,82 @@ function resultComponent(
   return new FoldableText(lines.join("\n"), theme, fold);
 }
 
-/** Render error output in the error color, folded by visual terminal rows. */
+
+/** Render error output in the error color with the ⎿ connector, folded by visual terminal rows. */
 function errorComponent(text: string, theme: ClaudeUiTheme, fold: FoldOptions): Component {
-  const styled = text.replace(/\r/g, "").split("\n").map((line) => theme.fg("error", line));
+  const styled = prefixResultRows(
+    text.replace(/\r/g, "").split("\n").map((line) => theme.fg("error", line)),
+    theme,
+  );
   return new FoldableText(styled.join("\n"), theme, fold);
 }
 
 interface OverrideSpec {
-  argSummary: (args: unknown, theme: ClaudeUiTheme) => string | undefined;
+  argSummary: (args: unknown, cwd: string) => string | undefined;
 }
 
 const OVERRIDES: Record<BuiltInName, OverrideSpec> = {
   read: {
-    argSummary: (args) => {
-      const path = shortenPath(getPathArg(args)) || "...";
-      const offset = getNumericField(args, "offset");
-      const limit = getNumericField(args, "limit");
-      if (offset !== undefined || limit !== undefined) {
-        const from = offset ?? 1;
-        const to = limit !== undefined ? from + limit - 1 : undefined;
-        return `${path}:${from}${to ? `-${to}` : ""}`;
-      }
-      return path;
-    },
+    // Claude: the display path only (line ranges surface in verbose mode).
+    argSummary: (args, cwd) => displayPath(getPathArg(args), cwd) || "...",
   },
   grep: {
-    argSummary: (args) => {
+    // Claude: `pattern: "…"` plus `path: "…"` when a scope was given.
+    argSummary: (args, cwd) => {
       const pattern = getStringField(args, "pattern") ?? "";
-      const scope = shortenPath(getStringField(args, "path") || ".");
-      const glob = getStringField(args, "glob");
-      return `/${pattern}/ in ${scope}${glob ? ` (${glob})` : ""}`;
+      if (!pattern) {
+        return undefined;
+      }
+      const parts = [`pattern: "${pattern}"`];
+      const scope = getStringField(args, "path");
+      if (scope && scope !== ".") {
+        parts.push(`path: "${displayPath(scope, cwd)}"`);
+      }
+      return parts.join(", ");
     },
   },
   find: {
-    argSummary: (args) => {
+    argSummary: (args, cwd) => {
       const pattern = getStringField(args, "pattern") ?? "";
-      const scope = shortenPath(getStringField(args, "path") || ".");
-      return `${pattern} in ${scope}`;
+      if (!pattern) {
+        return undefined;
+      }
+      const parts = [`pattern: "${pattern}"`];
+      const scope = getStringField(args, "path");
+      if (scope && scope !== ".") {
+        parts.push(`path: "${displayPath(scope, cwd)}"`);
+      }
+      return parts.join(", ");
     },
   },
   ls: {
-    argSummary: (args) => shortenPath(getStringField(args, "path") || "."),
+    argSummary: (args, cwd) => displayPath(getStringField(args, "path") || ".", cwd),
   },
   bash: {
+    // Claude: the full command (2 lines / 160 chars max), not just line one.
     argSummary: (args) => {
       const command = getStringField(args, "command") ?? "";
-      const firstLine = command.replace(/\r/g, "").split("\n")[0] ?? "";
-      return firstLine.trim();
+      return command.trim().length > 0 ? summarizeCommand(command) : undefined;
     },
   },
   edit: {
-    argSummary: (args) => shortenPath(getPathArg(args)) || "...",
+    argSummary: (args, cwd) => displayPath(getPathArg(args), cwd) || "...",
   },
   write: {
-    argSummary: (args) => shortenPath(getPathArg(args)) || "...",
+    argSummary: (args, cwd) => displayPath(getPathArg(args), cwd) || "...",
   },
 };
 
-const RESULT_HIDDEN: ReadonlySet<BuiltInName> = new Set(["read", "grep", "find", "ls"]);
+/** Claude's user-facing tool names (userFacingName in claude/tools/*). */
+const DISPLAY_NAMES: Record<BuiltInName, string> = {
+  read: "Read",
+  grep: "Search", // GrepTool userFacingName
+  find: "Search", // GlobTool userFacingName
+  ls: "LS",
+  bash: "Bash",
+  edit: "Update", // FileEditTool userFacingName for existing files
+  write: "Write",
+};
 
 export function registerToolOverrides(pi: ExtensionAPI, isEnabled: () => boolean): void {
   const bootstrap = getBuiltInTools(process.cwd());
@@ -281,8 +386,22 @@ export function registerToolOverrides(pi: ExtensionAPI, isEnabled: () => boolean
           onUpdate as never,
         );
       },
-      renderCall(args, theme) {
-        const head = buildToolHead(name, spec.argSummary(args, theme), theme);
+      renderCall(args, theme, context) {
+        // pi re-invokes renderCall when the result lands, so the dot color
+        // tracks the lifecycle like Claude's ToolUseLoader: dim while the
+        // call is in flight, green on success, red on error.
+        const state: ToolState =
+          context?.isPartial !== false
+            ? "pending"
+            : context.isError
+              ? "error"
+              : "success";
+        const head = buildToolHead(
+          DISPLAY_NAMES[name],
+          spec.argSummary(args, context?.cwd ?? process.cwd()),
+          theme,
+          state,
+        );
         return new FoldableText(head, theme, {
           maxLines: 1,
           overflowMarker: "…",
@@ -313,20 +432,22 @@ export function registerToolOverrides(pi: ExtensionAPI, isEnabled: () => boolean
 
         const errored = isErrorResult(result, context?.isError);
         const fallback = extractTextOutput(result);
+        const cwd = context?.cwd ?? process.cwd();
 
         // Collapsed views fold with a "ctrl+o to expand" hint; expanded views
-        // render everything. General/error output folds at the result cap
-        // (Claude MAX_LINES_TO_SHOW=3); edit/write diffs fold at the diff cap
-        // (Claude MAX_LINES_TO_RENDER=10). Both caps are env-overridable.
+        // render everything. General output folds at the result cap (Claude
+        // MAX_LINES_TO_SHOW=3); edit/write previews and error output fold at
+        // 10 (Claude MAX_LINES_TO_RENDER / MAX_RENDERED_LINES).
         const limits = resolveMaxLines();
         const base: FoldOptions = options.expanded
           ? { expanded: true }
           : { expanded: false, expandHint: resolveExpandHint() };
         const resultFold: FoldOptions = { ...base, maxLines: limits.result };
         const diffFold: FoldOptions = { ...base, maxLines: limits.diff };
+        const errorFold: FoldOptions = { ...base, maxLines: DEFAULT_MAX_ERROR_LINES };
 
         if (errored) {
-          return errorComponent(fallback || `${name} failed.`, theme, resultFold);
+          return errorComponent(fallback || `${name} failed.`, theme, errorFold);
         }
 
         if (name === "edit") {
@@ -335,18 +456,60 @@ export function registerToolOverrides(pi: ExtensionAPI, isEnabled: () => boolean
         }
         if (name === "write") {
           const content = getStringField(context?.args, "content");
-          return renderWriteDiff(content, theme, fallback, diffFold);
+          const rawPath = getPathArg(context?.args);
+          return renderWriteResult(
+            content,
+            displayPath(rawPath, cwd) || "...",
+            rawPath,
+            theme,
+            fallback,
+            diffFold,
+          );
         }
 
-        if (RESULT_HIDDEN.has(name)) {
-          // Search/read results are shown as a concise connector line only.
-          const lineCount = fallback
-            ? fallback.replace(/\r/g, "").split("\n").filter((l) => l.length > 0).length
-            : 0;
-          if (lineCount === 0) {
-            return new Text("", 0, 0);
+        // Claude never echoes search/read content back — it shows a summary
+        // row with a bold count: `Read 245 lines` / `Found 3 lines` /
+        // `Found 12 files`.
+        if (name === "read") {
+          const hasImage =
+            result &&
+            typeof result === "object" &&
+            Array.isArray((result as { content?: unknown[] }).content) &&
+            (result as { content: Array<{ type?: unknown }> }).content.some(
+              (block) => block?.type === "image",
+            );
+          if (hasImage) {
+            return summaryComponent(["Read image"], theme);
           }
-          return resultComponent(fallback, theme, resultFold);
+          const lineCount = countReadLines(fallback);
+          return summaryComponent(
+            ["Read ", { bold: String(lineCount) }, lineCount === 1 ? " line" : " lines"],
+            theme,
+          );
+        }
+        if (name === "grep") {
+          const matches = countGrepMatches(fallback);
+          return summaryComponent(
+            ["Found ", { bold: String(matches) }, matches === 1 ? " line" : " lines"],
+            theme,
+          );
+        }
+        if (name === "find") {
+          const files = countNonEmptyLines(fallback);
+          return summaryComponent(
+            ["Found ", { bold: String(files) }, files === 1 ? " file" : " files"],
+            theme,
+          );
+        }
+
+        if (name === "bash" && fallback.trim().length === 0) {
+          // Claude BashToolResultMessage: dim `(No output)` when the command
+          // produced nothing.
+          return new Text(
+            `${theme.fg("dim", RESULT_PREFIX)}${theme.fg("dim", "(No output)")}`,
+            0,
+            0,
+          );
         }
 
         return resultComponent(fallback, theme, resultFold);

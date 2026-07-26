@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   buildDiffLineStrings,
-  buildWriteDiffLines,
+  buildEditSummary,
   computeWordDiff,
+  countDiffChanges,
   parseEditDiff,
   parseUnifiedDiff,
-  renderWriteDiff,
+  renderWriteResult,
 } from "./diff-render.js";
 import { LINE_ADDED, LINE_REMOVED, WORD_ADDED, DEFAULT_MAX_DIFF_LINES } from "./constants.js";
 import { bgOpen } from "./bg.js";
@@ -14,6 +15,10 @@ const theme = {
   fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
   bold: (text: string) => `<b>${text}</b>`,
 };
+
+function stripAnsi(text: string): string {
+  return text.replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, "");
+}
 
 describe("parseEditDiff", () => {
   it("classifies add / del / context / skip lines", () => {
@@ -59,17 +64,48 @@ describe("computeWordDiff", () => {
   });
 });
 
+describe("buildEditSummary / countDiffChanges", () => {
+  it("counts add/del rows and ignores context", () => {
+    const parsed = parseEditDiff(["-1 a", "-2 b", "+1 c", " 3 d"].join("\n"));
+    expect(countDiffChanges(parsed)).toEqual({ added: 1, removed: 2 });
+  });
+
+  it("renders `Added N lines, removed M lines` with bold counts", () => {
+    const parsed = parseEditDiff(["-1 a", "+1 b", "+2 c"].join("\n"));
+    const summary = buildEditSummary(parsed, theme);
+    expect(summary).toContain("Added ");
+    expect(summary).toContain("<b>2</b>");
+    expect(summary).toContain(", removed ");
+    expect(summary).toContain("<b>1</b>");
+  });
+
+  it("capitalizes Removed when there are no additions", () => {
+    const parsed = parseEditDiff("-1 a");
+    expect(buildEditSummary(parsed, theme)).toContain("Removed ");
+    expect(buildEditSummary(parsed, theme)).not.toContain("Added");
+  });
+});
+
 describe("buildDiffLineStrings", () => {
-  it("uses integer row backgrounds and never emits literal +/-", () => {
+  it("uses full-row backgrounds and keeps the +/- sigil after the line number", () => {
     const diff = ["-42 old", "+42 new", " 43 ctx"].join("\n");
     const rows = buildDiffLineStrings(parseEditDiff(diff), theme);
     const joined = rows.join("\n");
     expect(joined).toContain(bgOpen(LINE_REMOVED));
     expect(joined).toContain(bgOpen(LINE_ADDED));
-    // No leading +/- markers survive.
-    for (const row of rows) {
-      expect(/(^|\n)[+-]/.test(row)).toBe(false);
-    }
+    // Claude StructuredDiff: right-aligned line number, then sigil, then code
+    // (word-level bg escapes may sit between gutter and code — compare visible text).
+    expect(stripAnsi(rows[0])).toBe("42 - old");
+    expect(stripAnsi(rows[1])).toBe("42 + new");
+    // Context rows are dim (fake-theme tagged, not ANSI) — match the visible body.
+    expect(rows[2]).toContain("43   ctx");
+  });
+
+  it("right-aligns line numbers to the widest number in the diff", () => {
+    const diff = ["-9 a", "+100 b"].join("\n");
+    const rows = buildDiffLineStrings(parseEditDiff(diff), theme);
+    expect(stripAnsi(rows[0])).toBe("  9 - a");
+    expect(stripAnsi(rows[1])).toBe("100 + b");
   });
 
   it("adds a word-level highlight for paired del/add rows", () => {
@@ -77,24 +113,33 @@ describe("buildDiffLineStrings", () => {
     const rows = buildDiffLineStrings(parseEditDiff(diff), theme);
     expect(rows.join("\n")).toContain(bgOpen(WORD_ADDED));
   });
+});
 
-  it("renders write content as an all-added green block", () => {
-    const lines = buildWriteDiffLines("line one\nline two\n");
-    expect(lines).toHaveLength(2);
-    expect(lines.every((line) => line.kind === "add")).toBe(true);
-    const rows = buildDiffLineStrings(lines, theme);
+describe("renderWriteResult", () => {
+  it("leads with `Wrote N lines to path` (bold count and path), no green background", () => {
+    const rows = (renderWriteResult("one\ntwo", "src/a.txt", undefined, theme) as {
+      render(w: number): string[];
+    }).render(2000);
     const joined = rows.join("\n");
-    expect(joined).toContain(bgOpen(LINE_ADDED));
-    expect(joined).not.toContain(bgOpen(LINE_REMOVED));
-    expect(joined).not.toMatch(/[+-]line/);
+    expect(joined).toContain("Wrote ");
+    expect(joined).toContain("<b>2</b>");
+    expect(joined).toContain(" lines to ");
+    expect(joined).toContain("<b>src/a.txt</b>");
+    // Write previews are NOT background-filled (backgrounds are edit-diff only).
+    expect(joined).not.toContain(bgOpen(LINE_ADDED));
+    // Content is shown under the summary.
+    expect(joined).toContain("one");
+    expect(joined).toContain("two");
   });
 });
 
 describe("folding long diffs", () => {
   const content = Array.from({ length: 60 }, (_, i) => `row ${i + 1}`).join("\n");
 
-  it("renderWriteDiff folds a long diff and shows an expand hint when collapsed", () => {
-    const rows = (renderWriteDiff(content, theme, undefined, { expanded: false }) as {
+  it("renderWriteResult folds a long preview and shows an expand hint when collapsed", () => {
+    const rows = (renderWriteResult(content, "a.txt", undefined, theme, undefined, {
+      expanded: false,
+    }) as {
       render(w: number): string[];
     }).render(2000);
     const joined = rows.join("\n");
@@ -102,10 +147,14 @@ describe("folding long diffs", () => {
     expect(joined).toMatch(/\+\d+ lines/);
     // The elided tail is hidden.
     expect(joined).not.toContain("row 60");
+    // The summary stays visible above the fold.
+    expect(joined).toContain("Wrote ");
   });
 
-  it("renderWriteDiff renders the full diff and no hint when expanded", () => {
-    const rows = (renderWriteDiff(content, theme, undefined, { expanded: true }) as {
+  it("renderWriteResult renders the full preview and no hint when expanded", () => {
+    const rows = (renderWriteResult(content, "a.txt", undefined, theme, undefined, {
+      expanded: true,
+    }) as {
       render(w: number): string[];
     }).render(2000);
     const joined = rows.join("\n");
@@ -116,18 +165,20 @@ describe("folding long diffs", () => {
   it("defaults the collapsed diff cap to DEFAULT_MAX_DIFF_LINES (10, Claude MAX_LINES_TO_RENDER)", () => {
     // 20 rows, no explicit maxLines → diff default of 10 applies.
     const twenty = Array.from({ length: 20 }, (_, i) => `row ${i + 1}`).join("\n");
-    const rows = (renderWriteDiff(twenty, theme, undefined, { expanded: false }) as {
+    const rows = (renderWriteResult(twenty, "a.txt", undefined, theme, undefined, {
+      expanded: false,
+    }) as {
       render(w: number): string[];
     }).render(2000);
     const joined = rows.join("\n");
-    expect(joined).toContain("row 10"); // last shown diff row
+    expect(joined).toContain("row 10"); // last shown content row
     expect(joined).not.toContain("row 11"); // first hidden row
     expect(joined).toContain(`+${20 - DEFAULT_MAX_DIFF_LINES} lines`);
   });
 
   it("lets the caller pin an explicit diff cap (env-resolved value wins over the default)", () => {
     const twenty = Array.from({ length: 20 }, (_, i) => `row ${i + 1}`).join("\n");
-    const rows = (renderWriteDiff(twenty, theme, undefined, {
+    const rows = (renderWriteResult(twenty, "a.txt", undefined, theme, undefined, {
       expanded: false,
       maxLines: 5,
     }) as { render(w: number): string[] }).render(2000);

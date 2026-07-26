@@ -80,4 +80,25 @@ describe("FoldableText", () => {
     });
     expect(component.render(15)).toEqual(["xxxxxxxxxx", "xxxxxxxxxx"]);
   });
+
+  it("pads rows to full width, keeping a trailing bg reset last (diff bars)", () => {
+    const bgReset = "\x1b[49m";
+    const bgOpenSeq = "\x1b[48;2;34;92;43m";
+    const component = new FoldableText(`${bgOpenSeq}code${bgReset}`, theme, {
+      maxLines: 5,
+      padRowsToWidth: true,
+    });
+    const rows = component.render(20);
+    expect(rows).toHaveLength(1);
+    // 16 spaces of padding are inserted BEFORE the bg reset so the bar is solid.
+    expect(rows[0]).toBe(`${bgOpenSeq}code${" ".repeat(16)}${bgReset}`);
+  });
+
+  it("pads plain rows with trailing spaces when padRowsToWidth is on", () => {
+    const component = new FoldableText("ab", theme, {
+      maxLines: 5,
+      padRowsToWidth: true,
+    });
+    expect(component.render(6)).toEqual([`ab${" ".repeat(4)}`]);
+  });
 });

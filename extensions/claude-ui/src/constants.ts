@@ -45,6 +45,12 @@ export const DEFAULT_MAX_RESULT_LINES = 3;
  */
 export const DEFAULT_MAX_DIFF_LINES = 10;
 
+/**
+ * Number of error-output lines shown when collapsed, aligned to Claude
+ * Code's `MAX_RENDERED_LINES = 10` in `components/FallbackToolUseErrorMessage.tsx`.
+ */
+export const DEFAULT_MAX_ERROR_LINES = 10;
+
 /** diff — full-row background for added lines. */
 export const LINE_ADDED = "#225C2B";
 /** diff — full-row background for removed lines. */

@@ -325,6 +325,27 @@ describe("localshellExtension", () => {
       expect(out).not.toMatch(/lines? hidden/);
     });
 
+    it("renderResult on exactly-2-line output keeps the lone stdout line (no swallow)", () => {
+      // Regression: the collapsed !hasMore branch used to render only the
+      // head row, silently dropping the second line.
+      const tool = registerAndGetTaskBash();
+      const comp = tool.renderResult!(
+        {
+          content: [
+            { type: "text", text: "completed (exit 0) taskId=t1\nonly-stdout-line" },
+          ],
+          details: {},
+        },
+        { expanded: false, isPartial: false },
+        mockTheme,
+        {},
+      );
+      const out = renderToString(comp);
+      expect(out).toContain("completed (exit 0)");
+      expect(out).toContain("only-stdout-line");
+      expect(out).not.toMatch(/lines? hidden/);
+    });
+
     it("renderResult collapsed: status glyph colored, tool name bold (claudecode palette)", () => {
       // Color-token regression — task_bash result was previously painted
       // entirely in dim; users complained "everything looks the same". The
