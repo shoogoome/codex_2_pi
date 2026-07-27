@@ -1,0 +1,13 @@
+{
+  "name": "codebuddy-reasoning",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.ts",
+  "pi": {
+    "extensions": ["dist/index.js"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

@@ -42,6 +42,7 @@
 | `extensions/resume-picker` | 会话恢复选择器 + 跨项目会话全文检索（rg），命中后切回历史会话。 | `/resume-picker [--all] [过滤词]` · `/search <关键词>` |
 | `extensions/autopilot` | 自主续跑控制器:自动注入隐藏 follow-up 连续推进，按预算/轮数/收益递减停止。 | `/autopilot [on [目标]\|off\|status]` |
 | `extensions/local-models` | 发现本地大模型运行时（Ollama、LM Studio）并注册为 localhost OpenAI 兼容 provider。 | `/local-models [list\|pull\|ensure_ready]` · `/ollama` · `/lm` |
+| `extensions/codebuddy-reasoning` | 对齐 CodeBuddy 原生 `gpt-5.6-sol` 请求参数，使 High thinking 返回并展示可见推理摘要。 | （无命令，自动生效） |
 | `extensions/webfetch` | 客户端联网抓取（移植 Claude WebFetch）:URL→fetch→HTML 转 markdown 交模型阅读;SSRF 防护(私有段+连接前 DNS 守卫)、10MB 流式截断、15min 缓存。 | 工具 `webfetch` · `--webfetch`（默认开） |
 | `extensions/mcp` | 内置 MCP 客户端:读 `.pi/mcp.json` 连 server，暴露 `mcp__<server>__<tool>`，审批由 approvals 兜底。 | `/mcp [list\|status\|add\|remove\|reconnect]` |
 | `extensions/plugin-loader` | Claude 风格插件管理器：Marketplace、安装/更新/卸载、user/project/local scope，并接入 skills/commands/themes/styles/hooks/agents/MCP。 | `/plugin` · `/plugin marketplace …` · `/plugin install\|remove\|update …` |

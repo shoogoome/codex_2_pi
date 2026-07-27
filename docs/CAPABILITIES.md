@@ -46,6 +46,7 @@
 | 扩展 | 一句话能力 | 主要命令 / 入口 | 详情 |
 |---|---|---|---|
 | `local-models` | 发现本地大模型运行时（Ollama、LM Studio）并注册为指向 localhost 的 OpenAI 兼容 provider，支持列举/拉取/就绪检查。 | `/local-models`（`list`/`pull`/`ensure_ready`）· 别名 `/ollama` `/lm` | [local-models.md](extensions/local-models.md) |
+| `codebuddy-reasoning` | 对齐 CodeBuddy 原生 `gpt-5.6-sol` 请求参数，使 High thinking 返回并展示可见推理摘要。 | 无命令，自动生效 | — |
 
 ### 联网
 
