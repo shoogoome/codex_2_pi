@@ -292,6 +292,23 @@
           }
         },
         {
+          "id": "kimi-k3-ioa",
+          "name": "Kimi-K3",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 32000,
+          "cost": {
+            "input": 2.4,
+            "output": 10,
+            "cacheRead": 0.4,
+            "cacheWrite": 0
+          }
+        },
+        {
           "id": "kimi-k2.7-ioa",
           "name": "Kimi-K2.7-Code",
           "reasoning": true,
@@ -333,6 +350,22 @@
             "text"
           ],
           "contextWindow": 1000000,
+          "maxTokens": 48000,
+          "cost": {
+            "input": 0.98,
+            "output": 3.08,
+            "cacheRead": 0.182,
+            "cacheWrite": 0
+          }
+        },
+        {
+          "id": "glm-5.2-internal-ioa",
+          "name": "GLM-5.2-自部署",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 200000,
           "maxTokens": 48000,
           "cost": {
             "input": 0.98,
@@ -440,8 +473,8 @@
           }
         },
         {
-          "id": "hy3-preview-agent-ioa",
-          "name": "Hy3 preview",
+          "id": "hy3-ioa",
+          "name": "Hy3",
           "reasoning": true,
           "input": [
             "text",
@@ -662,6 +695,50 @@
             "input": 5,
             "output": 30,
             "cacheRead": 0.5,
+            "cacheWrite": 0
+          }
+        },
+        {
+          "id": "gpt-5.6-terra",
+          "name": "GPT-5.6-Terra",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 128000,
+          "thinkingLevelMap": {
+            "off": null,
+            "high": "high",
+            "xhigh": "high"
+          },
+          "cost": {
+            "input": 2.5,
+            "output": 15,
+            "cacheRead": 0.25,
+            "cacheWrite": 0
+          }
+        },
+        {
+          "id": "gpt-5.6-luna",
+          "name": "GPT-5.6-Luna",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 128000,
+          "thinkingLevelMap": {
+            "off": null,
+            "high": "high",
+            "xhigh": "high"
+          },
+          "cost": {
+            "input": 1,
+            "output": 6,
+            "cacheRead": 0.1,
             "cacheWrite": 0
           }
         },

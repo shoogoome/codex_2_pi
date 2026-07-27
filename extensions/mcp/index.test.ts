@@ -119,4 +119,52 @@ describe("mcp extension — runtime injection of an illegal server name", () => 
     expect(pi.tools.has("mcp__zhiyan_zhiyan-log_2__query")).toBe(true);
     for (const name of pi.tools.keys()) expect(name).toMatch(OPENAI_FN);
   });
+
+  it("registers tools with foldable frameless renderers (head + folded result)", async () => {
+    const pi = createPi();
+    mcpExtension(pi as any);
+
+    pi.events.emit("mcp:register-server", {
+      name: "zhiyan:zhiyan-log",
+      config: { type: "http", url: "https://example.com/mcp" },
+    });
+    await flush();
+
+    const tool = pi.tools.get("mcp__zhiyan_zhiyan-log__query")!;
+    expect(tool.renderShell).toBe("self");
+    expect(typeof tool.renderCall).toBe("function");
+    expect(typeof tool.renderResult).toBe("function");
+
+    const theme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    };
+
+    // Pending head: `● server:tool(args)` on a single line.
+    const head = tool
+      .renderCall({ q: 1 }, theme, { isPartial: true })
+      .render(120);
+    expect(head).toHaveLength(1);
+    expect(head[0]).toContain("● zhiyan_zhiyan-log:query");
+    expect(head[0]).toContain('{"q":1}');
+
+    // Long results fold to 3 rows + a "+K lines" hint; Ctrl+O expands.
+    const long = {
+      content: [
+        { type: "text", text: Array.from({ length: 9 }, (_, i) => `row${i}`).join("\n") },
+      ],
+      details: { server: "zhiyan_zhiyan-log", tool: "query", isError: false },
+    };
+    const collapsed = tool
+      .renderResult(long, { expanded: false, isPartial: false }, theme, { isError: false })
+      .render(120);
+    expect(collapsed).toHaveLength(4);
+    expect(collapsed[0]).toContain("⎿");
+    expect(collapsed[3]).toContain("… +6 lines");
+
+    const expanded = tool
+      .renderResult(long, { expanded: true, isPartial: false }, theme, { isError: false })
+      .render(120);
+    expect(expanded).toHaveLength(9);
+  });
 });

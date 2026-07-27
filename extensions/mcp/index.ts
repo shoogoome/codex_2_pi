@@ -34,6 +34,7 @@ import { McpClient } from "./src/client.js";
 import { buildToolDefinitions } from "./src/register.js";
 import { sanitizeServerName } from "./src/naming.js";
 import { mcpContentToToolResult } from "./src/result.js";
+import { renderMcpCall, renderMcpResult } from "./src/render.js";
 import {
   McpPanel,
   parseKvPairs,
@@ -139,8 +140,30 @@ export default function mcpExtension(pi: ExtensionAPI): void {
       description: spec.description,
       parameters: spec.parameters,
       executionMode: "parallel",
-      // Self-render like claude-ui's native overrides — no default bg Box.
+      // Self-render like claude-ui's native overrides — no default bg Box —
+      // with a `● server:tool(args)` head and a `⎿` result that folds when
+      // collapsed (Ctrl+O expands), same as the built-in tools.
       renderShell: "self",
+      renderCall(args, theme, context) {
+        const state =
+          context?.isPartial !== false
+            ? "pending"
+            : context.isError
+              ? "error"
+              : "success";
+        return renderMcpCall(spec.label, args, theme, state);
+      },
+      renderResult(result, options, theme, context) {
+        return renderMcpResult(
+          result,
+          {
+            expanded: options.expanded,
+            isPartial: options.isPartial,
+            isError: context?.isError,
+          },
+          theme,
+        );
+      },
       async execute(_toolCallId, params) {
         const entry = registry.get(server);
         const client = entry?.client;
