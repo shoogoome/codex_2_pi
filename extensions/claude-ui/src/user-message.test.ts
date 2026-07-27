@@ -77,4 +77,23 @@ describe("renderUserMessageLines", () => {
   it("returns [] for an empty body", () => {
     expect(renderUserMessageLines(["", "   "], 20, theme)).toEqual([]);
   });
+
+  it("uses Claude's exact dark band color for the built-in dark theme", () => {
+    const darkTheme = { ...theme, name: "dark" };
+    const rows = contentRows(renderUserMessageLines(["hello"], 20, darkTheme));
+    expect(rows[0].startsWith("\x1b[48;2;55;55;55m")).toBe(true); // rgb(55,55,55)
+    expect(rows[0].endsWith(RESET)).toBe(true);
+  });
+
+  it("uses Claude's exact light band color for the built-in light theme", () => {
+    const lightTheme = { ...theme, name: "light" };
+    const rows = contentRows(renderUserMessageLines(["hello"], 20, lightTheme));
+    expect(rows[0].startsWith("\x1b[48;2;240;240;240m")).toBe(true); // rgb(240,240,240)
+  });
+
+  it("keeps the pi theme token for custom (non built-in) theme names", () => {
+    const customTheme = { ...theme, name: "my-custom" };
+    const rows = contentRows(renderUserMessageLines(["hello"], 20, customTheme));
+    expect(rows[0].startsWith(`${BG}:userMessageBg:`)).toBe(true);
+  });
 });

@@ -1,10 +1,17 @@
 /**
  * Frameless Claude-style user message rendering. Instead of compact-ui's
- * ╭─user─╮ border box, the message is a full-width faint-grey (`userMessageBg`
- * #373737) band with no left padding; a slash command gets a subtle ❯ pointer.
+ * ╭─user─╮ border box, the message is a full-width faint-grey band with no
+ * left padding; a slash command gets a subtle ❯ pointer.
+ *
+ * Band color is aligned to Claude Code's exact `userMessageBackground`
+ * (claude/utils/theme.ts): dark `rgb(55,55,55)` / light `rgb(240,240,240)`,
+ * overriding pi's built-in theme values (#343541 / #e8e8e8). Custom pi themes
+ * keep their own `userMessageBg` token. Text stays the terminal default
+ * foreground in both Claude and pi (no fg override).
  */
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { GLYPH_POINTER } from "./constants.js";
+import { bgOpen, BG_RESET } from "./bg.js";
 import {
   isBlankLine,
   sanitizeInlineBackground,
@@ -12,11 +19,26 @@ import {
 import type { ClaudeUiTheme } from "./theme-types.js";
 
 const USER_MESSAGE_BG = "userMessageBg";
-const BG_RESET = "\x1b[49m";
+
+/** Claude Code `userMessageBackground` per built-in pi theme (claude/utils/theme.ts). */
+const CLAUDE_USER_MESSAGE_BG: Record<string, string> = {
+  dark: "#373737", // rgb(55,55,55)
+  light: "#f0f0f0", // rgb(240,240,240)
+};
+
+/** Claude's exact band color for built-in themes; undefined → use the pi theme token. */
+function claudeBgAnsi(theme: ClaudeUiTheme): string | undefined {
+  const hex = theme.name ? CLAUDE_USER_MESSAGE_BG[theme.name] : undefined;
+  return hex ? bgOpen(hex) : undefined;
+}
 
 function applyRowBackground(theme: ClaudeUiTheme | undefined, text: string): string {
   if (!theme) {
     return text;
+  }
+  const claudeAnsi = claudeBgAnsi(theme);
+  if (claudeAnsi) {
+    return `${claudeAnsi}${text}${BG_RESET}`;
   }
   try {
     if (typeof theme.getBgAnsi === "function") {

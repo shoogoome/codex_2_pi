@@ -4,6 +4,8 @@
  * a narrow interface so pure helpers stay testable with light fakes.
  */
 export interface ClaudeUiTheme {
+  /** Built-in pi theme name ("dark" / "light"); absent for fakes/custom shapes. */
+  name?: string;
   fg(color: string, text: string): string;
   bold(text: string): string;
   italic?(text: string): string;
