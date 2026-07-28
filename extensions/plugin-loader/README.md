@@ -24,7 +24,7 @@ Bare `/plugin` opens a small interactive menu. Marketplaces may be local directo
 ## Components
 
 - skills and manifest skill paths
-- commands converted to `/<plugin>_<command>` Pi prompts
+- commands converted to `/<plugin>_<command>` Pi prompts; each command body is wrapped in pi's `<skill name="..." location="...">` block format so invoking it collapses to a one-line `[skill] <plugin>_<command>` row in the TUI (with any trailing args shown as a separate user message) instead of dumping the prompt text
 - themes and output styles
 - agents bridged to the agents extension
 - hooks bridged to hooks-runner, with plugin root/data/user-config variables

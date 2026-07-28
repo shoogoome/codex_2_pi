@@ -178,6 +178,7 @@ function contribute(plugin: DiscoveredPlugin): Contribution {
           commandName,
           source,
           pluginRoot: root,
+          sourcePath: file,
         });
         try {
           fs.writeFileSync(join(promptsDir, out.filename), out.content, "utf8");

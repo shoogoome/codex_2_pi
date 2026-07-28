@@ -1,7 +1,25 @@
 import { describe, it, expect } from "vitest";
-import { transformCommand, parseFrontmatter, namespacedName } from "./commandTransform.js";
+import {
+  transformCommand,
+  parseFrontmatter,
+  namespacedName,
+  wrapBodyAsSkillBlock,
+} from "./commandTransform.js";
 
 const ROOT = "/plugins/demo";
+
+// Same regex pi uses (agent-session parseSkillBlock) to detect a skill block
+// and render it collapsed as `[skill] name`. Keeping this in sync is what
+// guarantees plugin command expansions get the collapsed UI.
+const PI_SKILL_BLOCK_RE = /^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n<\/skill>(?:\n\n([\s\S]+))?$/;
+
+/** Simulate pi: strip template frontmatter, trim body, substitute $@ / ${@:- }. */
+function simulatePiExpansion(templateContent: string, args: string): string {
+  const body = templateContent.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
+  return body
+    .replace(/\$\{@:-([^}]*)\}/g, (_m, def) => (args ? args : def))
+    .replace(/\$@/g, args);
+}
 
 describe("parseFrontmatter", () => {
   it("parses a flat frontmatter block", () => {
@@ -82,7 +100,69 @@ describe("transformCommand", () => {
       pluginRoot: ROOT,
       source: "plain body",
     });
-    expect(out.content).toBe("plain body");
     expect(out.content.startsWith("---")).toBe(false);
+    expect(out.content).toContain("plain body");
+  });
+
+  it("wraps the body in a pi skill block that parseSkillBlock matches", () => {
+    const out = transformCommand({
+      pluginName: "zhiyan",
+      commandName: "query-logs",
+      pluginRoot: ROOT,
+      sourcePath: `${ROOT}/commands/query-logs.md`,
+      source: "---\ndescription: Query logs\n---\nQuery the logs.\n$ARGUMENTS\n",
+    });
+    // No args: tail default keeps the block matchable.
+    const noArgs = simulatePiExpansion(out.content, "");
+    const noArgsMatch = noArgs.match(PI_SKILL_BLOCK_RE);
+    expect(noArgsMatch).not.toBeNull();
+    expect(noArgsMatch?.[1]).toBe("zhiyan_query-logs");
+    expect(noArgsMatch?.[2]).toBe(`${ROOT}/commands/query-logs.md`);
+    expect(noArgsMatch?.[3]).toContain("Query the logs.");
+    expect(noArgsMatch?.[3]).not.toContain("$@");
+    expect((noArgsMatch?.[4] ?? "").trim()).toBe("");
+    // With args: args land outside the block as the user message.
+    const withArgs = simulatePiExpansion(out.content, "查一下错误日志");
+    const withArgsMatch = withArgs.match(PI_SKILL_BLOCK_RE);
+    expect(withArgsMatch).not.toBeNull();
+    expect(withArgsMatch?.[4]).toBe("查一下错误日志");
+  });
+
+  it("keeps a mid-body $@ inside the block", () => {
+    const out = transformCommand({
+      pluginName: "p",
+      commandName: "c",
+      pluginRoot: ROOT,
+      source: "Analyze $@ please",
+    });
+    const expanded = simulatePiExpansion(out.content, "this bug");
+    const match = expanded.match(PI_SKILL_BLOCK_RE);
+    expect(match).not.toBeNull();
+    expect(match?.[3]).toContain("Analyze this bug please");
+    expect(match?.[4]).toBeUndefined();
+  });
+});
+
+describe("wrapBodyAsSkillBlock", () => {
+  const opts = { name: "p_c", location: "/p/commands/c.md", baseDir: "/p" };
+
+  it("moves a trailing $@ line outside the block as ${@:- }", () => {
+    const out = wrapBodyAsSkillBlock("Do a thing.\n$@", opts);
+    expect(out).toBe(
+      `<skill name="p_c" location="/p/commands/c.md">\n` +
+        `References are relative to /p.\n\n` +
+        `Do a thing.\n</skill>\n\n\${@:- }`,
+    );
+  });
+
+  it("omits the args tail when there is no placeholder", () => {
+    const out = wrapBodyAsSkillBlock("Do a thing.", opts);
+    expect(out.endsWith("</skill>")).toBe(true);
+    expect(out).not.toContain("$@");
+  });
+
+  it("trims surrounding whitespace from the body", () => {
+    const out = wrapBodyAsSkillBlock("\nDo a thing.\n\n", opts);
+    expect(out).toContain("\n\nDo a thing.\n</skill>");
   });
 });
