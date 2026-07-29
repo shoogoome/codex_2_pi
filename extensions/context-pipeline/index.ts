@@ -3,10 +3,10 @@
 // Layered context pipeline for pi. All trimming logic lives in pure helpers
 // under src/; this entry only wires pi API events/flags to them.
 //
-// Order (cheap/lossless first, expensive/lossy last), per claude's pipeline:
-//   context event:  ② tool_result budgets  →  ③ microcompact
-//   turn_end/context: ④ autocompact threshold + circuit breaker
-//   session_before_compact: ⑤ structured 9-section summary
+// Order (cheap/lossless first, expensive/lossy last):
+//   context event:  tool_result budgets → optional microcompact
+//   session_before_compact: structured 9-section summary for Pi's native
+//                           automatic/manual compaction
 
 import type {
   ExtensionAPI,
@@ -17,11 +17,6 @@ import { DEFAULT_COMPACTION_SETTINGS, generateSummary } from "@earendil-works/pi
 import { loadConfig } from "./src/config.js";
 import { trimToolResults } from "./src/toolResultTrim.js";
 import { microcompact } from "./src/microcompact.js";
-import {
-  CircuitBreaker,
-  shouldAutocompact,
-  suppressContextLow,
-} from "./src/autocompactGuard.js";
 import { NINE_SECTION_INSTRUCTIONS, stripAnalysis } from "./src/summaryPrompt.js";
 import type { AnyMessage } from "./src/types.js";
 import {
@@ -37,7 +32,6 @@ import {
 } from "./src/prune.js";
 
 const FLAG_OFF = "context-pipeline-off";
-const FLAG_NO_AUTOCOMPACT = "no-autocompact";
 const FLAG_PRUNE_AUTO = "prune-auto";
 const MONITOR_CHANNEL = "monitor:cleanup";
 
@@ -47,11 +41,6 @@ export default function contextPipeline(pi: ExtensionAPI): void {
     default: false,
     description: "Disable the context-pipeline trimming (tool-result budgets + microcompact).",
   });
-  pi.registerFlag(FLAG_NO_AUTOCOMPACT, {
-    type: "boolean",
-    default: false,
-    description: "Disable proactive autocompaction from the context pipeline.",
-  });
   pi.registerFlag(FLAG_PRUNE_AUTO, {
     type: "boolean",
     default: false,
@@ -59,11 +48,6 @@ export default function contextPipeline(pi: ExtensionAPI): void {
       "Enable automatic microcompact pruning of old tool results (default manual: prune only via /prune, or set PI_CTXPIPE_PRUNE_MODE=auto).",
   });
 
-  const breaker = new CircuitBreaker(loadConfig().maxConsecutiveFailures);
-  // Tokens freed by the most recent context-event trimming; subtracted from
-  // usage when deciding whether to autocompact.
-  let lastReleasedTokens = 0;
-  let compactInFlight = false;
   // One-shot "soft prune" arming: when set, the next context event runs an
   // aggressive microcompact (see the /prune command below).
   const softPrune = new OneShotPrune();
@@ -89,48 +73,11 @@ export default function contextPipeline(pi: ExtensionAPI): void {
     }
   };
 
-  const maybeAutocompact = (ctx: ExtensionContext) => {
-    if (pi.getFlag(FLAG_NO_AUTOCOMPACT) === true) return;
-    if (compactInFlight || breaker.tripped) return;
-
-    const usage = ctx.getContextUsage();
-    // tokens === null right after compaction: estimates unreliable → suppress.
-    if (suppressContextLow(usage)) return;
-
-    const cfg = loadConfig();
-    if (!shouldAutocompact(usage, lastReleasedTokens, cfg)) return;
-
-    compactInFlight = true;
-    ctx.compact({
-      customInstructions: NINE_SECTION_INSTRUCTIONS,
-      onComplete: () => {
-        compactInFlight = false;
-        lastReleasedTokens = 0;
-        breaker.recordSuccess();
-      },
-      onError: () => {
-        compactInFlight = false;
-        const tripped = breaker.recordFailure();
-        if (tripped) {
-          try {
-            ctx.ui.notify(
-              "Auto-compaction failed repeatedly; automatic triggering paused. Run /compact manually.",
-              "warning",
-            );
-          } catch {
-            // ignore UI failures (e.g. print/RPC mode).
-          }
-        }
-      },
-    });
-  };
-
-  // ② + ③ : send-time trimming.
-  pi.on("context", (event, ctx) => {
-    if (pi.getFlag(FLAG_OFF) === true) {
-      maybeAutocompact(ctx);
-      return;
-    }
+  // Send-time trimming. Full compaction is deliberately left to Pi core:
+  // ExtensionContext.compact() is the manual-compaction API, which aborts the
+  // active agent and does not resume queued continuation work after finishing.
+  pi.on("context", (event) => {
+    if (pi.getFlag(FLAG_OFF) === true) return;
 
     const cfg = loadConfig();
     const original = event.messages as unknown as AnyMessage[];
@@ -149,7 +96,6 @@ export default function contextPipeline(pi: ExtensionAPI): void {
     // prefix (a cache cold start), so pruning is left to explicit /prune.
     const autoPrune = pi.getFlag(FLAG_PRUNE_AUTO) === true || cfg.pruneMode === "auto";
     let microMessages = trimmed.messages;
-    let microRemovedChars = 0;
     if (autoPrune || aggressive) {
       const microCfg = aggressive ? aggressiveConfig(cfg, AGGRESSIVE_KEEP_RECENT) : cfg;
       // Normal passes trigger only above the high-water mark (batching, see
@@ -168,14 +114,7 @@ export default function contextPipeline(pi: ExtensionAPI): void {
         microHighWater = 0;
       }
       microMessages = micro.messages;
-      microRemovedChars = micro.removedChars;
     }
-
-    const releasedChars = trimmed.removedChars + microRemovedChars;
-    // chars/4 mirrors estimateTokens' conservative approximation.
-    lastReleasedTokens = Math.round(releasedChars / 4);
-
-    maybeAutocompact(ctx);
 
     // trimToolResults always returns a fresh (sliced) array, so array identity
     // vs. `original` can't detect "no change". Instead: nothing changed iff the
@@ -184,12 +123,7 @@ export default function contextPipeline(pi: ExtensionAPI): void {
     return { messages: microMessages as never };
   });
 
-  // ④ : also evaluate the threshold at the end of every turn.
-  pi.on("turn_end", (_event, ctx) => {
-    maybeAutocompact(ctx);
-  });
-
-  // ⑤ : structured 9-section summary. Returns a full compaction result so the
+  // Structured 9-section summary. Returns a full compaction result so the
   // custom prompt takes effect; falls back to pi's default on any failure.
   pi.on("session_before_compact", async (event, ctx) => {
     try {

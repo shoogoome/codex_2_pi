@@ -21,7 +21,7 @@
 
 | 扩展 | 一句话能力 | 主要命令 / 入口 | 详情 |
 |---|---|---|---|
-| `context-pipeline` | 分层上下文管理：发送前按预算截断 tool_result、无 LLM 的 microcompact 清旧工具结果、接近窗口上限时自动结构化压缩。 | `/prune`（`status`/`soft`/`hard`）· `/context-prune` | [context-pipeline.md](extensions/context-pipeline.md) |
+| `context-pipeline` | 分层上下文管理：发送前按预算截断 tool_result、无 LLM 的 microcompact 清旧工具结果，并为 Pi 原生自动/手动压缩生成结构化摘要。 | `/prune`（`status`/`soft`/`hard`）· `/context-prune` | [context-pipeline.md](extensions/context-pipeline.md) |
 | `agents-context` | 补充加载 Pi 原生不加载的 `AGENTS.md`/`CLAUDE.md`、`.claude/rules`、`@include`、条件 paths 规则，去重后隐藏注入。 | `--agents-context`（默认开）· 环境变量 `PI_AGENTS_CONTEXT=0` | [agents-context.md](extensions/agents-context.md) |
 | `settings-env` | 从全局和项目 `settings.json` 的顶层 `env` 读取环境变量并注入 Pi 进程；项目值覆盖全局值，已有启动环境默认优先。 | `env` · `envOverride` | [settings-env.md](extensions/settings-env.md) |
 | `memory` | Claude Code 风格自动长期记忆：按 git 根零配置初始化，召回相关主题，并在命中长期信息时后台提炼、去重更新索引。 | `/memory list\|show\|init` · `/remember <text>`（可选手动入口） | [memory.md](extensions/memory.md) |
@@ -69,7 +69,7 @@
 | 扩展 | 一句话能力 | 主要命令 / 入口 | 详情 |
 |---|---|---|---|
 | `monitor` | 只读效果监控：缓存命中率、上下文构成、清理/压缩回收比，经面板与 footer 展示，不进 LLM 上下文。 | `/monitor` | [monitor.md](extensions/monitor.md) |
-| `cost-usage` | 只读追踪会话美元成本、按模型 token、时长与编辑增删行，面板 + footer $ 状态 + 跨会话持久化。 | `/cost` · 别名 `/usage` | [cost-usage.md](extensions/cost-usage.md) |
+| `cost-usage` | 只读追踪会话美元成本、按模型 token、时长与编辑增删行；OAuth 模式额外展示 Codex 订阅套餐额度、窗口与重置时间。 | `/cost` · 别名 `/usage` | [cost-usage.md](extensions/cost-usage.md) |
 
 ---
 

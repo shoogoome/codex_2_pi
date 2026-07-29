@@ -31,7 +31,7 @@
 |---|---|---|
 | `extensions/claude-ui` | Claude Code 风格无边框 TUI 皮肤:● 助手前导、用户灰底整行、工具去背景盒 ⎿、整行底色 diff、长输出折叠。 | `--claude-ui`（默认开）· `Ctrl+O` 展开 |
 | `extensions/input-history` | 跨会话输入历史持久化 + 反向增量搜索。 | `Alt+R`（可改绑 `ctrl+r`） |
-| `extensions/context-pipeline` | 分层上下文管理:按预算截断 tool_result、microcompact 清旧结果（默认手动，保护 prompt 缓存）、接近上限自动结构化压缩。 | `/prune [status\|soft\|hard]` · `/context-prune` · `--prune-auto` / `PI_CTXPIPE_PRUNE_MODE=auto` 开自动 prune |
+| `extensions/context-pipeline` | 分层上下文管理：按预算截断 tool_result、microcompact 清旧结果（默认手动，保护 prompt 缓存），并为 Pi 原生压缩生成结构化摘要。 | `/prune [status\|soft\|hard]` · `/context-prune` · `--prune-auto` / `PI_CTXPIPE_PRUNE_MODE=auto` 开自动 prune |
 | `extensions/agents-context` | 补充加载 `AGENTS.md`/`CLAUDE.md`、`.claude/rules`、`@include`、条件 paths 规则，去重后隐藏注入。 | `--agents-context`（默认开）· `PI_AGENTS_CONTEXT=0` |
 | `extensions/settings-env` | 从全局和项目 `settings.json` 的顶层 `env` 读取变量并注入 Pi 进程；已有环境默认优先。 | `env` · `envOverride` |
 | `extensions/memory` | Claude Code 风格自动长期记忆：零配置初始化、相关主题召回、每轮按需提炼并去重更新 `.pi/memory`。 | `/memory [list\|show\|init]` · `/remember <text>`（均为可选手动入口） |
@@ -50,7 +50,7 @@
 | `extensions/agents` | 加载 Claude 风格 subagent 角色 `.md` + 内置角色库，应用到当前会话（收敛工具 + 注入系统提示）。 | `/agents [list\|show <name>\|use <name>]` |
 | `extensions/migrate` | 一次性把 Claude/Cursor 的 MCP、subagents、commands、hooks、memory 导入 `.pi/`，只导缺失不覆盖。 | `/migrate [category]` · `--dry-run` |
 | `extensions/monitor` | 只读效果监控:缓存命中率、上下文构成、清理/压缩回收比，面板 + footer 展示。 | `/monitor` |
-| `extensions/cost-usage` | 只读追踪会话美元成本、按模型 token、时长与编辑增删行，面板 + footer $ 状态。 | `/cost` · `/usage` |
+| `extensions/cost-usage` | 只读追踪会话美元成本、按模型 token、时长与编辑增删行，并在 OAuth 模式查看 Codex 订阅套餐额度与重置时间。 | `/cost` · `/usage` |
 
 ## 命令
 

@@ -77,6 +77,14 @@ describe("canonicalModel", () => {
   it("keeps context-window suffix distinct (no normalization)", () => {
     expect(canonicalModel({ model: "claude-opus-4-8[1m]" })).toBe("claude-opus-4-8[1m]");
   });
+  it("qualifies model ids with provider when available", () => {
+    expect(canonicalModel({ provider: "openai-codex", model: "gpt-5.6-sol" })).toBe(
+      "openai-codex/gpt-5.6-sol",
+    );
+    expect(canonicalModel({}, "gpt-5.6-sol", "openai-codex")).toBe(
+      "openai-codex/gpt-5.6-sol",
+    );
+  });
 });
 
 describe("dedupKey", () => {
@@ -146,17 +154,17 @@ describe("rebuildByModelFromBranch", () => {
     { type: "message", message: { role: "user", content: "hi" } },
     { type: "message", message: { role: "assistant", model: "a", stopReason: "stop", usage: { input: 10, output: 5, cacheRead: 80, cacheWrite: 0, totalTokens: 95, cost: { total: 0.1 } } } },
     { type: "message", message: { role: "assistant", model: "a", stopReason: "error", usage: { input: 999, output: 0, totalTokens: 999, cost: { total: 9 } } } },
-    { type: "message", message: { role: "assistant", model: "b", stopReason: "toolUse", usage: { input: 20, output: 2, totalTokens: 22, cost: { total: 0.2 } } } },
+    { type: "message", message: { role: "assistant", provider: "gateway", model: "b", stopReason: "toolUse", usage: { input: 20, output: 2, totalTokens: 22, cost: { total: 0.2 } } } },
     { type: "custom", customType: "cost-usage/snapshot", data: {} },
   ];
 
   it("re-derives per-model buckets, filtering non-countable turns and non-messages", () => {
     const by = rebuildByModelFromBranch(branch);
-    expect(Object.keys(by).sort()).toEqual(["a", "b"]);
+    expect(Object.keys(by).sort()).toEqual(["a", "gateway/b"]);
     expect(by.a.turns).toBe(1); // error turn excluded
     expect(by.a.input).toBe(10);
     expect(by.a.costTotal).toBe(0.1);
-    expect(by.b.costTotal).toBe(0.2);
+    expect(by["gateway/b"].costTotal).toBe(0.2);
   });
 
   it("uses the estimator only when provider cost is missing", () => {

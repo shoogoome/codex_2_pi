@@ -61,7 +61,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 
 ## 何时用哪个
 
-- **上下文快满 / 想压缩**：`/prune`（软清理或全量压缩）；想看构成占比用 `/monitor`；context-pipeline 还会自动截断 tool_result 并自动压缩。
+- **上下文快满 / 想压缩**：`/prune`（软清理或手动全量压缩）；想看构成占比用 `/monitor`；context-pipeline 会自动截断 tool_result，并为 Pi 原生自动压缩生成结构化摘要。
 - **控制“能不能执行某工具/命令”**：`/approvals`（规则 + default/acceptEdits/bypass 模式，保护 .git/.pi/~/.ssh，拦 rm -rf/sudo 等）。
 - **想先看方案再动手**：`/plan`（只读探查→提交计划→批准后恢复写工具）。
 - **想让 agent 不停手连续推进长任务**：`/autopilot on [目标]`（有预算/轮数/收益递减停止）。

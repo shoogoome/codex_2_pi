@@ -12,8 +12,10 @@
 //   ② session duration (start→last activity) + optional edit/write line churn.
 //   ③ /cost and /usage (alias) toggle a non-focused panel above the editor;
 //      a distinct footer "$" status line (STATUS_KEY="cost").
-//   ④ cross-session persistence via appendEntry; restore from branch on start.
-//   ⑤ shutdown overview printout + UI teardown.
+//   ④ when openai-codex uses OAuth, fetch the official subscription quota
+//      snapshot (plan, windows, reset times); never persist credentials/identity.
+//   ⑤ cross-session persistence via appendEntry; restore from branch on start.
+//   ⑥ shutdown overview printout + UI teardown.
 
 import type {
   ExtensionAPI,
@@ -22,6 +24,10 @@ import type {
 import { isEditToolResult, isWriteToolResult } from "@earendil-works/pi-coding-agent";
 import { calculateCost } from "@earendil-works/pi-ai";
 
+import {
+  fetchCodexSubscriptionUsage,
+  type CodexSubscriptionState,
+} from "./src/codex-subscription.js";
 import { buildOverviewLines, footerLine } from "./src/format.js";
 import { addChurn, countWriteLines, parseDiffChurn } from "./src/lines.js";
 import { buildCostPanelComponent, type CostPanelComponent } from "./src/panel.js";
@@ -60,6 +66,8 @@ interface CostState {
   panelOpen: boolean;
 }
 
+const CODEX_USAGE_TTL_MS = 60_000;
+
 function freshState(sessionId: string): CostState {
   return {
     sessionId,
@@ -74,6 +82,8 @@ function freshState(sessionId: string): CostState {
 
 export default function costUsageExtension(pi: ExtensionAPI): void {
   let state = freshState("");
+  let codexSubscription: CodexSubscriptionState = { status: "idle" };
+  let codexFetchVersion = 0;
 
   /** Build a bound cost estimator from ctx.model (fallback when provider cost absent). */
   function makeEstimator(ctx: ExtensionContext): ((u: UsageLike) => number) | undefined {
@@ -138,7 +148,11 @@ export default function costUsageExtension(pi: ExtensionAPI): void {
       const themeFg = (theme as { fg?: (c: string, t: string) => string }).fg;
       const overlayTheme =
         typeof themeFg === "function" ? { fg: (c: string, t: string) => themeFg.call(theme, c, t) } : undefined;
-      return buildCostPanelComponent({ getSnapshot: () => snapshot(), theme: overlayTheme });
+      return buildCostPanelComponent({
+        getSnapshot: () => snapshot(),
+        getCodexSubscription: () => codexSubscription,
+        theme: overlayTheme,
+      });
     };
   }
 
@@ -166,6 +180,72 @@ export default function costUsageExtension(pi: ExtensionAPI): void {
     showPanel(ctx);
   }
 
+  /** Fetch Codex subscription quotas only for the official OAuth provider. */
+  async function refreshCodexSubscription(ctx: ExtensionContext, force = false): Promise<void> {
+    const currentModel = ctx.model;
+    const model = currentModel?.provider === "openai-codex"
+      ? currentModel
+      : ctx.modelRegistry.getAll().find((candidate) => candidate.provider === "openai-codex");
+    const version = ++codexFetchVersion;
+
+    if (!model) {
+      codexSubscription = {
+        status: "unavailable",
+        reason: "openai-codex provider unavailable",
+      };
+      refreshPanel(ctx);
+      return;
+    }
+    const activeModelKey = `${model.provider}:${model.id}`;
+    if (!ctx.modelRegistry.isUsingOAuth(model)) {
+      codexSubscription = {
+        status: "unavailable",
+        reason: "current Codex auth is API key, not subscription OAuth",
+        modelKey: activeModelKey,
+      };
+      refreshPanel(ctx);
+      return;
+    }
+    if (
+      !force &&
+      codexSubscription.status === "ready" &&
+      codexSubscription.modelKey === activeModelKey &&
+      Date.now() - codexSubscription.usage.fetchedAt < CODEX_USAGE_TTL_MS
+    ) {
+      return;
+    }
+
+    codexSubscription = { status: "loading" };
+    refreshPanel(ctx);
+    try {
+      const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+      if (version !== codexFetchVersion) return;
+      if (!auth.ok || !auth.apiKey) {
+        codexSubscription = {
+          status: "error",
+          message: auth.ok ? "Codex OAuth token unavailable" : auth.error,
+          modelKey: activeModelKey,
+        };
+        refreshPanel(ctx);
+        return;
+      }
+      const usage = await fetchCodexSubscriptionUsage({
+        accessToken: auth.apiKey,
+        baseUrl: model.baseUrl,
+      });
+      if (version !== codexFetchVersion) return;
+      codexSubscription = { status: "ready", usage, modelKey: activeModelKey };
+    } catch (error) {
+      if (version !== codexFetchVersion) return;
+      codexSubscription = {
+        status: "error",
+        message: error instanceof Error ? error.message : "Codex usage request failed",
+        modelKey: activeModelKey,
+      };
+    }
+    refreshPanel(ctx);
+  }
+
   function touchActivity(now: number): void {
     if (state.startedAt === 0 || now < state.startedAt) state.startedAt = now;
     if (now > state.lastActivityAt) state.lastActivityAt = now;
@@ -188,13 +268,14 @@ export default function costUsageExtension(pi: ExtensionAPI): void {
       const now = Date.now();
       touchActivity(now);
 
-      const model = canonicalModel(message, ctx.model?.id);
+      const model = canonicalModel(message, ctx.model?.id, ctx.model?.provider);
       const cost = costOf(usage, makeEstimator(ctx));
       state.byModel = accumulateModel(state.byModel, model, usage, cost);
 
       persist();
       setFooter(ctx);
       refreshPanel(ctx);
+      if (state.panelOpen) void refreshCodexSubscription(ctx);
     } catch {
       // never let a metric failure break the agent loop
     }
@@ -257,10 +338,20 @@ export default function costUsageExtension(pi: ExtensionAPI): void {
         startedAt: restored.startedAt || Date.now(),
         lastActivityAt: restored.lastActivityAt || restored.startedAt || Date.now(),
       };
+      codexSubscription = { status: "idle" };
+      codexFetchVersion += 1;
       setFooter(ctx);
     } catch {
       // ignore
     }
+    return undefined;
+  });
+
+  // Keep the quota section tied to the selected model and discard stale fetches.
+  pi.on("model_select", (_event, ctx) => {
+    codexSubscription = { status: "idle" };
+    codexFetchVersion += 1;
+    if (state.panelOpen) void refreshCodexSubscription(ctx, true);
     return undefined;
   });
 
@@ -296,6 +387,8 @@ export default function costUsageExtension(pi: ExtensionAPI): void {
         console.log(lines.join("\n"));
       }
       state.panelOpen = false;
+      codexFetchVersion += 1;
+      codexSubscription = { status: "idle" };
     } catch {
       // ignore
     }
@@ -324,14 +417,15 @@ export default function costUsageExtension(pi: ExtensionAPI): void {
     }
     state.panelOpen = true;
     showPanel(ctx);
+    await refreshCodexSubscription(ctx, true);
   };
 
   pi.registerCommand("cost", {
-    description: "Toggle the cost & usage panel (total USD, per-model tokens, duration, edit churn).",
+    description: "Toggle cost, token, edit, and Codex OAuth subscription-quota panel.",
     handler: toggle,
   });
   pi.registerCommand("usage", {
-    description: "Alias of /cost — toggle the cost & usage panel.",
+    description: "Alias of /cost — toggle cost and Codex subscription usage panel.",
     handler: toggle,
   });
 }

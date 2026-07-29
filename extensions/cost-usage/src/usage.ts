@@ -49,18 +49,26 @@ export function coerceUsage(raw: unknown): UsageLike | null {
 }
 
 /**
- * Canonical aggregation key for a message: prefer `model`, then `responseModel`,
- * then the caller-supplied fallback (e.g. ctx.model?.id), then "unknown".
- * The raw model id is kept as-is so differently-priced context windows
- * (e.g. "claude-opus-4-8[1m]") stay separate.
+ * Canonical aggregation key for a message: `provider/model` when provider is
+ * available, otherwise the raw model id. This keeps same-named models on OAuth,
+ * API-key, and gateway providers visibly distinct in the panel.
  */
-export function canonicalModel(message: unknown, fallback?: string): string {
+export function canonicalModel(
+  message: unknown,
+  fallbackModel?: string,
+  fallbackProvider?: string,
+): string {
+  let model: string | undefined;
+  let provider: string | undefined;
   if (isRecord(message)) {
-    if (isString(message.model) && message.model.length > 0) return message.model;
-    if (isString(message.responseModel) && message.responseModel.length > 0) return message.responseModel;
+    if (isString(message.model) && message.model.length > 0) model = message.model;
+    else if (isString(message.responseModel) && message.responseModel.length > 0) model = message.responseModel;
+    if (isString(message.provider) && message.provider.length > 0) provider = message.provider;
   }
-  if (isString(fallback) && fallback.length > 0) return fallback;
-  return UNKNOWN_MODEL;
+  if (!model && isString(fallbackModel) && fallbackModel.length > 0) model = fallbackModel;
+  if (!provider && isString(fallbackProvider) && fallbackProvider.length > 0) provider = fallbackProvider;
+  if (!model) return UNKNOWN_MODEL;
+  return provider ? `${provider}/${model}` : model;
 }
 
 /**

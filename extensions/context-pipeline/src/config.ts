@@ -23,12 +23,6 @@ export interface PipelineConfig {
   microBatchSize: number;
   /** Idle gap (ms) since last assistant message that triggers microcompact. */
   gapMs: number;
-  /** Tokens reserved for model output, subtracted from context window. */
-  reserveOutput: number;
-  /** Extra buffer subtracted to derive the autocompact threshold. */
-  thresholdBuffer: number;
-  /** Consecutive compaction failures before the circuit breaker trips. */
-  maxConsecutiveFailures: number;
   /** Lowercased tool names whose results may be microcompacted. */
   compactableTools: string[];
   /**
@@ -48,9 +42,6 @@ export const DEFAULTS: PipelineConfig = {
   microCountThreshold: 30,
   microBatchSize: 30,
   gapMs: 3600000,
-  reserveOutput: 20000,
-  thresholdBuffer: 13000,
-  maxConsecutiveFailures: 3,
   compactableTools: ["read", "bash", "grep", "glob", "find", "ls", "webfetch"],
   pruneMode: "manual",
 };
@@ -83,9 +74,6 @@ export function loadConfig(env: EnvLike = process.env): PipelineConfig {
     microCountThreshold: num(env.PI_CTXPIPE_MICRO_COUNT, DEFAULTS.microCountThreshold),
     microBatchSize: num(env.PI_CTXPIPE_MICRO_BATCH, DEFAULTS.microBatchSize),
     gapMs: num(env.PI_CTXPIPE_GAP_MS, DEFAULTS.gapMs),
-    reserveOutput: num(env.PI_CTXPIPE_RESERVE_OUTPUT, DEFAULTS.reserveOutput),
-    thresholdBuffer: num(env.PI_CTXPIPE_THRESHOLD_BUFFER, DEFAULTS.thresholdBuffer),
-    maxConsecutiveFailures: num(env.PI_CTXPIPE_MAX_FAILS, DEFAULTS.maxConsecutiveFailures),
     compactableTools,
     pruneMode: (() => {
       const raw = (env.PI_CTXPIPE_PRUNE_MODE ?? "").trim().toLowerCase();

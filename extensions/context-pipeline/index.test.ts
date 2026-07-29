@@ -5,7 +5,7 @@
 // trimmed structure it returns plus the monitor:cleanup reports it emits on
 // pi.events. All trimming logic itself is unit-tested in src/*.test.ts; here we
 // only verify the index.ts wiring (flags, event return shape, event-bus report,
-// autocompact guard).
+// and that full compaction remains owned by Pi core).
 
 import { describe, it, expect, vi } from "vitest";
 import contextPipeline from "./index.js";
@@ -57,7 +57,7 @@ function toolResult(id: string, text: string, tool = "bash"): any {
   };
 }
 
-/** ctx whose usage never trips autocompaction. */
+/** Minimal extension context for send-time trimming. */
 function idleCtx(): any {
   return {
     getContextUsage: () => ({ tokens: 1000, contextWindow: 200000, percent: 1 }),
@@ -103,7 +103,7 @@ describe("context event wiring", () => {
     expect(cleanup.some((e) => e.data.stage === "tool-result-trim" && e.data.removedChars === 4000)).toBe(
       true,
     );
-    // No autocompaction at low usage.
+    // Send-time trimming must never invoke the manual compaction API.
     expect(ctx.compact).not.toHaveBeenCalled();
   });
 
@@ -251,43 +251,9 @@ describe("context event wiring", () => {
     expect([...(messages[0].content[0] as any).text].length).toBe(DEFAULTS.perBlockChars + 4000);
   });
 
-  it("triggers autocompaction with the 9-section instructions when usage crosses the threshold", () => {
-    const { pi, handlers } = makePi();
-    contextPipeline(pi);
-    const handler = handlers.get("context")!;
-
-    const compact = vi.fn();
-    const ctx = {
-      // 200000 window → threshold 167000; well above it.
-      getContextUsage: () => ({ tokens: 190000, contextWindow: 200000, percent: 95 }),
-      compact,
-    };
-    handler({ type: "context", messages: [toolResult("t1", "small")] }, ctx);
-
-    expect(compact).toHaveBeenCalledTimes(1);
-    const opts = compact.mock.calls[0][0];
-    expect(typeof opts.customInstructions).toBe("string");
-    expect(opts.customInstructions).toContain("Primary Request and Intent");
-  });
-
-  it("suppresses autocompaction while token usage is unknown (post-compaction)", () => {
-    const { pi, handlers } = makePi();
-    contextPipeline(pi);
-    const handler = handlers.get("context")!;
-
-    const compact = vi.fn();
-    const ctx = {
-      getContextUsage: () => ({ tokens: null, contextWindow: 200000, percent: null }),
-      compact,
-    };
-    handler({ type: "context", messages: [toolResult("t1", "small")] }, ctx);
-    expect(compact).not.toHaveBeenCalled();
-  });
-
-  it("does not autocompact when the no-autocompact flag is set", () => {
+  it("never invokes manual compaction at high usage and leaves auto-compaction to Pi core", () => {
     const { pi, handlers, flags } = makePi();
     contextPipeline(pi);
-    flags.set("no-autocompact", true);
     const handler = handlers.get("context")!;
 
     const compact = vi.fn();
@@ -295,8 +261,12 @@ describe("context event wiring", () => {
       getContextUsage: () => ({ tokens: 190000, contextWindow: 200000, percent: 95 }),
       compact,
     };
-    handler({ type: "context", messages: [toolResult("t1", "small")] }, ctx);
+    const result = handler({ type: "context", messages: [toolResult("t1", "small")] }, ctx);
+
+    expect(result).toBeUndefined();
     expect(compact).not.toHaveBeenCalled();
+    expect(handlers.has("turn_end")).toBe(false);
+    expect(flags.has("no-autocompact")).toBe(false);
   });
 });
 

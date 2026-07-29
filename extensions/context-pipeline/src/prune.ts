@@ -50,7 +50,7 @@ export function parsePruneArgs(args: string): ParsedPrune {
 
 /**
  * chars→tokens approximation. Mirrors the conservative chars/4 accounting used
- * by index.ts (`lastReleasedTokens`) and the monitor extension (CHARS_PER_TOKEN).
+ * by the monitor extension (CHARS_PER_TOKEN).
  */
 export function estimateTokens(chars: number): number {
   return Math.max(0, Math.round(chars / 4));

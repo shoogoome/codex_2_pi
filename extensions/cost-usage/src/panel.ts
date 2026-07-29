@@ -7,6 +7,7 @@
 // widget is NOT focused, so it needs no keyboard handling — /cost toggles it.
 
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import type { CodexSubscriptionState } from "./codex-subscription.js";
 import { buildOverviewLines, type OverviewTheme } from "./format.js";
 import type { CostSnapshot } from "./types.js";
 
@@ -18,6 +19,7 @@ export interface CostPanelComponent {
 
 export interface BuildPanelOptions {
   getSnapshot: () => CostSnapshot | null;
+  getCodexSubscription?: () => CodexSubscriptionState;
   theme?: OverviewTheme;
 }
 
@@ -25,7 +27,10 @@ export function buildCostPanelComponent(opts: BuildPanelOptions): CostPanelCompo
   function render(width: number): string[] {
     const w = Math.max(20, Math.floor(Number.isFinite(width) ? width : 80));
     const snap = opts.getSnapshot();
-    return buildOverviewLines(snap, { theme: opts.theme }).map((line) => truncateToWidth(line, w, "…"));
+    return buildOverviewLines(snap, {
+      theme: opts.theme,
+      codexSubscription: opts.getCodexSubscription?.(),
+    }).map((line) => truncateToWidth(line, w, "…"));
   }
 
   return {
