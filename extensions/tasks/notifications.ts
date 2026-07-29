@@ -46,8 +46,10 @@ export { TASK_NOTIFICATION_CUSTOM_TYPE };
 export interface TaskNotificationDetails {
   taskId: string;
   taskType: TaskType;
-  status: "completed" | "failed" | "killed";
+  status: "running" | "completed" | "failed" | "killed";
   description: string;
+  /** Human-facing one-line summary; mirrors Claude's <summary> payload. */
+  summary?: string;
   outputFile: string;
   toolUseId?: string;
   exitCode?: number;
@@ -71,6 +73,8 @@ export interface NotifyTaskTerminalOptions {
   worktreePath?: string;
   worktreeBranch?: string;
   durationMs?: number;
+  /** 终态 task 在内存中保留多久，供 task_status/task_list 查询。默认 30s。 */
+  retainMs?: number;
   /** 自定义文案,覆盖默认 status 模板。 */
   summary?: string;
   /**
@@ -90,8 +94,8 @@ export interface NotifyTaskTerminalOptions {
    * 是否让该通知进入 LLM context。默认 true。
    * 传 false 时消息照常发(TUI/RPC/JSONL 保留),但 tasks/index.ts 安装的
    * notification context 过滤器会把它从 provider payload 剥离。
-   * 用于同步完成的 local_bash — 工具结果已携带终态/exitCode/输出,
-   * 再注一块 XML 是纯噪声。
+   * 用于只需要 TUI/RPC/JSONL 留痕、不应打断或污染模型上下文的通知
+   * （例如默认非唤醒模式下的后台 local_bash 终态）。
    */
   llmVisible?: boolean;
   /**
@@ -114,7 +118,11 @@ export interface NotifyTaskTerminalOptions {
  * 等价 Claude `claude/tasks/RemoteAgentTask/RemoteAgentTask.tsx:markTaskNotified`,
  * 但本期不限定 task type — 任何 TaskStateBase 都可被 mark。
  */
-export function markTaskNotified(taskId: string, store: TaskStore): boolean {
+export function markTaskNotified(
+  taskId: string,
+  store: TaskStore,
+  retainMs: number = PANEL_GRACE_MS,
+): boolean {
   let flipped = false;
   store.set((prev) => {
     const task = prev[taskId];
@@ -125,11 +133,11 @@ export function markTaskNotified(taskId: string, store: TaskStore): boolean {
       [taskId]: {
         ...task,
         notified: true,
-        // Grace period — let LLM inspect the task via task_status / task_list
-        // for ~PANEL_GRACE_MS after the terminal notification fires. Framework's
-        // existing 'retain' + 'evictAfter' duck-typing will defer eviction.
+        // Grace period — let callers inspect the task via task_status/task_list
+        // after notification. Framework's existing retain + evictAfter
+        // duck-typing defers eviction; callers may override the default 30s.
         retain: true,
-        evictAfter: Date.now() + PANEL_GRACE_MS,
+        evictAfter: Date.now() + Math.max(0, retainMs),
       } as TaskStateBase,
     };
   });
@@ -202,8 +210,7 @@ function buildSendMessageOptions(opts: NotifyTaskTerminalOptions): {
 /**
  * 把 task 终态广播出去 — CAS + sendMessage。
  *
- * **重复调用静默跳过**(CAS)— 这是为什么 LocalShell 的 result handler 与
- * TaskStopTool 同时调用它都不会双发。
+ * **重复调用静默跳过**(CAS)— 多个异步完成/停止路径并发抵达时只会发一次。
  *
  * 默认行为(opts.triggerTurn / opts.deliverAs 都不传):立即渲染、不主动开 turn。
  * 后台 task 完成时调用方应传 `triggerTurn: true` 主动唤醒 LLM。**不要传**
@@ -215,7 +222,7 @@ export function notifyTaskTerminal(
   store: TaskStore,
   opts: NotifyTaskTerminalOptions,
 ): void {
-  if (!markTaskNotified(opts.taskId, store)) return;
+  if (!markTaskNotified(opts.taskId, store, opts.retainMs)) return;
   const content = buildTaskNotificationXml(opts);
   const llmVisible = opts.llmVisible !== false;
   const details: TaskNotificationDetails = {
@@ -223,6 +230,7 @@ export function notifyTaskTerminal(
     taskType: opts.taskType,
     status: opts.status,
     description: opts.description,
+    summary: opts.summary ?? `${opts.description} ${statusText(opts.status)}`,
     outputFile: opts.outputFile,
     toolUseId: opts.toolUseId,
     exitCode: opts.exitCode,
@@ -258,9 +266,9 @@ export function notifyTaskTerminal(
 }
 
 /**
- * 剥离 llmVisible:false 的 tasks/notification — 同步完成的 local_bash 终态
- * 已由工具结果告知 LLM,这条通知只是给 TUI/RPC/JSONL 的记录,不该再占
- * LLM 上下文。其余 notification(后台终态唤醒、stall-prompt、kill 等)不受影响。
+ * 剥离 llmVisible:false 的 tasks/notification。这类通知仍给 TUI/RPC/JSONL
+ * 留痕，但不进入 LLM 上下文；显式唤醒的后台终态、stall-prompt、agent 结果等
+ * llmVisible 通知不受影响。
  */
 export function installTaskNotificationContextFilter(
   pi: Pick<ExtensionAPI, "on">,
@@ -273,23 +281,18 @@ export function installTaskNotificationContextFilter(
 
 // ---------- TUI Renderer ----------
 
-const STATUS_ICON: Record<NotifyTaskTerminalOptions["status"], string> = {
-  completed: "✓",
-  failed: "✗",
-  killed: "■",
-};
-
-const STATUS_COLOR: Record<NotifyTaskTerminalOptions["status"], ThemeColor> = {
+const STATUS_COLOR: Record<TaskNotificationDetails["status"], ThemeColor> = {
+  running: "warning",
   completed: "success",
   failed: "error",
-  killed: "dim",
+  killed: "warning",
 };
 
 /**
  * 注册 task-notification 的 TUI 渲染器。
  *
- * - 折叠:单行 `{icon} {description} {statusText}{exitCode?}` 带状态色。
- * - 展开:多行 — description / task_id+type+status / output / 完整 XML。
+ * - 折叠:对齐 Claude UserAgentNotificationMessage：状态色 `●` + 默认色 summary。
+ * - 展开:多行 — summary / task_id+type+status / output / 完整 XML。
  *
  * 风格对齐 pi-tui Text + Box + theme.fg/bg pattern。
  */
@@ -302,18 +305,29 @@ export function registerTaskNotificationRenderer(pi: ExtensionAPI): void {
         const text = typeof message.content === "string" ? message.content : "";
         return new Text(theme.fg("toolOutput", text), 0, 0);
       }
-      const icon = STATUS_ICON[details.status];
       const colorKey = STATUS_COLOR[details.status];
-      const headline =
-        `${icon} ${details.description} ${statusText(details.status)}` +
-        (details.exitCode !== undefined ? ` (exit ${details.exitCode})` : "");
+      const summary =
+        details.summary ??
+        (details.status === "running"
+          ? details.description
+          : `${details.description} ${statusText(details.status)}` +
+            (details.exitCode !== undefined ? ` (exit ${details.exitCode})` : ""));
+      // Claude UserAgentNotificationMessage: a status-colored black circle,
+      // followed by summary text in the normal foreground color.
+      const headline = `${theme.fg(colorKey, "●")} ${theme.fg("text", summary)}`;
 
       if (!expanded) {
-        return new Text(theme.fg(colorKey, headline), 0, 0);
+        return new Text(headline, 0, 0);
       }
 
       const box = new Box(1, 1, (value: string) => theme.bg("customMessageBg", value));
-      box.addChild(new Text(theme.fg(colorKey, theme.bold(headline)), 0, 0));
+      box.addChild(
+        new Text(
+          `${theme.fg(colorKey, "●")} ${theme.bold(theme.fg("text", summary))}`,
+          0,
+          0,
+        ),
+      );
       box.addChild(
         new Text(
           theme.fg(

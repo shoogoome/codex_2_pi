@@ -109,6 +109,7 @@ export function startStallWatchdog(
             taskType: "local_bash",
             status: "running" as const,
             description,
+            summary: `Background command "${description}" appears to be waiting for interactive input`,
             outputFile,
             timestamp: Date.now(),
             extra: { kind: "stall-prompt" },

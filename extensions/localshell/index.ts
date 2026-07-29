@@ -8,10 +8,28 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import {
+  errorComponent,
+  resolveExpandHint,
+  resultComponent,
+  summarizeCommand,
+} from "../claude-ui/src/tool-overrides.js";
+import { FoldableText } from "../claude-ui/src/foldable-text.js";
+import {
+  DEFAULT_MAX_ERROR_LINES,
+  RESULT_PREFIX,
+} from "../claude-ui/src/constants.js";
+import { buildToolHead, resolveMaxLines } from "../claude-ui/src/tool-gutter.js";
+import type { ClaudeUiTheme } from "../claude-ui/src/theme-types.js";
 import { getTasksHandle } from "../tasks/handle.js";
 import { getRunningTasks } from "../tasks/framework.js";
-import { _bindPi, _unbindPi, LocalShellTask, spawnLocalShell } from "./localShellTask.js";
-import { summarizeTaskBashOutput } from "./taskBashDisplay.js";
+import {
+  _bindPi,
+  _setLocalShellAgentStreaming,
+  _unbindPi,
+  LocalShellTask,
+  spawnLocalShell,
+} from "./localShellTask.js";
 
 const TaskBashParams = Type.Object({
   command: Type.String({ description: "Shell command to execute." }),
@@ -20,11 +38,6 @@ const TaskBashParams = Type.Object({
     Type.Number({ description: "Auto-background after this many ms (default 60000)." }),
   ),
 });
-
-interface RenderTheme {
-  fg(color: string, text: string): string;
-  bold(text: string): string;
-}
 
 interface TaskBashResultDetails {
   isBackgrounded?: boolean;
@@ -37,14 +50,22 @@ interface TaskBashResultDetails {
 interface MinimalToolResult {
   content?: Array<{ type?: string; text?: string }>;
   details?: unknown;
+  isError?: boolean;
 }
 
 function extractText(result: MinimalToolResult): string {
-  const first = result.content?.[0];
-  return typeof first?.text === "string" ? first.text : "";
+  return (result.content ?? [])
+    .filter(
+      (block): block is { type?: string; text: string } =>
+        typeof block?.text === "string",
+    )
+    .map((block) => block.text)
+    .join("\n");
 }
 
 export default function localshellExtension(pi: ExtensionAPI): void {
+  let agentEpoch = 0;
+
   pi.registerFlag("keep-builtin-bash", {
     type: "boolean",
     default: false,
@@ -59,9 +80,9 @@ export default function localshellExtension(pi: ExtensionAPI): void {
 
     pi.registerTool({
       name: "task_bash",
-      label: "Run shell task",
+      label: "Bash",
       description:
-        "Run a shell command as a tracked task. Use ONLY for long-running, interactive, or backgroundable commands; for short one-shot commands use the regular `bash` tool. Auto-backgrounds after timeout_ms (default 60000).",
+        "Run a shell command. Short commands finish in the foreground; commands still running after timeout_ms become tracked background tasks (default 60000). Use task_status/task_kill to inspect or stop background tasks.",
       parameters: TaskBashParams,
       executionMode: "parallel",
       // Match claude-ui's native-tool overrides: render without Pi's default
@@ -76,15 +97,14 @@ export default function localshellExtension(pi: ExtensionAPI): void {
 
         // Honor the abort signal: when the user hits Esc Pi raises this, and
         // we must propagate the cancellation to the running shell process.
-        // We capture the running task id from the first onProgress snapshot
-        // and route to LocalShellTask.kill(taskId), which kills the spawned
-        // process and flips the task state to "killed".
+        // onStart exposes the task id before the process can emit output, so
+        // even silent commands route Esc to LocalShellTask.kill(taskId).
         let runningTaskId: string | undefined;
         const onAbort = (): void => {
           if (runningTaskId === undefined) return;
           void LocalShellTask.kill(runningTaskId, handle.store).catch(
             () => {
-              // killTeammate already logs internally via tasks/logging.
+              // killLocalShellTask already logs internally via tasks/logging.
             },
           );
         };
@@ -103,31 +123,39 @@ export default function localshellExtension(pi: ExtensionAPI): void {
         // Last-wins coalesce: at most one onUpdate flush per ~100ms keeps the
         // tool result block stable when bash spits hundreds of lines/sec.
         const FLUSH_INTERVAL_MS = 100;
-        let pending: string | null = null;
+        let pending: { output: string; taskId: string; bytesReceived: number } | null = null;
         let lastSent = 0;
         let timer: ReturnType<typeof setTimeout> | undefined;
-        const sendNow = (cumulative: string): void => {
+        const sendNow = (snapshot: {
+          output: string;
+          taskId: string;
+          bytesReceived: number;
+        }): void => {
           pending = null;
           lastSent = Date.now();
           try {
             onUpdate?.({
-              content: [{ type: "text", text: `▶ ${description}\n${cumulative}` }],
+              content: [{ type: "text", text: snapshot.output }],
               details: {
                 action: "task_bash",
-                taskId: undefined,
+                taskId: snapshot.taskId,
                 status: "running",
-                bytesReceived: cumulative.length,
+                bytesReceived: snapshot.bytesReceived,
               },
             });
           } catch {
             // onUpdate failure must not propagate
           }
         };
-        const scheduleFlush = (cumulative: string): void => {
-          pending = cumulative;
+        const scheduleFlush = (snapshot: {
+          output: string;
+          taskId: string;
+          bytesReceived: number;
+        }): void => {
+          pending = snapshot;
           const sinceLast = Date.now() - lastSent;
           if (sinceLast >= FLUSH_INTERVAL_MS) {
-            sendNow(cumulative);
+            sendNow(snapshot);
             return;
           }
           if (timer) return;
@@ -141,110 +169,116 @@ export default function localshellExtension(pi: ExtensionAPI): void {
           command,
           description,
           timeoutMs: timeout_ms,
+          onStart: (taskId) => {
+            // Capture immediately, before any stdout arrives. Silent commands
+            // such as `sleep` must still be cancellable with Esc.
+            runningTaskId = taskId;
+            if (signal?.aborted) onAbort();
+          },
           onProgress: (snap) => {
-            // Capture the task id on the first snapshot so an abort that
-            // arrives mid-execution can target the right running task.
-            if (runningTaskId === undefined) {
-              runningTaskId = snap.taskId;
-              // If the abort fired *before* the first snapshot reached us
-              // (unlikely but possible), kill immediately now that we know
-              // the id.
-              if (signal?.aborted) {
-                onAbort();
-              }
-            }
-            scheduleFlush(snap.cumulative);
+            scheduleFlush({
+              output: snap.cumulative,
+              taskId: snap.taskId,
+              bytesReceived: snap.bytesReceived,
+            });
           },
         });
         if (timer) clearTimeout(timer);
         if (signal) signal.removeEventListener("abort", onAbort);
-        const head = result.backgrounded
-          ? `Backgrounded (taskId=${result.taskId}). Last ${result.output.length} bytes:\n`
-          : `${result.status}${result.exitCode !== undefined ? ` (exit ${result.exitCode})` : ""} taskId=${result.taskId}\n`;
+
+        const isError = result.status === "failed" || result.status === "killed";
+        let text: string;
+        if (result.backgrounded) {
+          text =
+            `Backgrounded (taskId=${result.taskId}). ` +
+            `Output is being written to ${result.outputFile}.`;
+        } else if (result.status === "failed") {
+          text = [
+            result.output.trimEnd(),
+            result.exitCode !== undefined ? `Exit code ${result.exitCode}` : "Command failed",
+          ]
+            .filter(Boolean)
+            .join("\n");
+        } else if (result.status === "killed") {
+          text = [result.output.trimEnd(), "Command was aborted before completion"]
+            .filter(Boolean)
+            .join("\n");
+        } else {
+          text = result.output;
+        }
         return {
-          content: [{ type: "text", text: head + result.output }],
+          content: [{ type: "text", text }],
+          isError: isError || undefined,
           details: { action: "task_bash", ...result },
         };
       },
-      renderCall(args, theme) {
-        // Compact one-liner replacing Pi's verbose default — claudecode style.
-        const description =
-          typeof (args as { description?: unknown }).description === "string"
-            ? ((args as { description: string }).description)
-            : "";
+      renderCall(args, theme, context) {
         const command =
           typeof (args as { command?: unknown }).command === "string"
-            ? ((args as { command: string }).command)
+            ? (args as { command: string }).command
             : "";
-        const summary =
-          (description || command.slice(0, 60) || "").trim();
-        const t = theme as unknown as RenderTheme;
-        const label = t.bold(t.fg("toolTitle", "task_bash"));
-        const tail = summary ? ` ${t.fg("dim", summary)}` : "";
-        return new Text(`${label}${tail}`, 0, 0);
+        const t = theme as unknown as ClaudeUiTheme;
+        const state =
+          context?.isPartial !== false
+            ? "pending"
+            : context.isError
+              ? "error"
+              : "success";
+        const head = buildToolHead(
+          "Bash",
+          command.trim().length > 0 ? summarizeCommand(command) : undefined,
+          t,
+          state,
+        );
+        return new FoldableText(head, t, {
+          maxLines: 2,
+          overflowMarker: "…",
+        });
       },
-      renderResult(result, options, theme) {
-        const t = theme as unknown as RenderTheme;
+      renderResult(result, options, theme, context) {
+        const t = theme as unknown as ClaudeUiTheme;
         const r = result as MinimalToolResult;
         const details = (r.details ?? {}) as TaskBashResultDetails;
         const text = extractText(r);
 
-        // Background mode — full stdout is on disk, anchor with one dim line.
+        // Match claude-ui's native Bash progress row exactly.
+        if (options.isPartial) {
+          return new Text(t.fg("dim", "running…"), 0, 0);
+        }
+
+        // Background completion belongs to the task panel/notification. The
+        // originating tool row only says that the process is still running.
         if (details.isBackgrounded === true || details.backgrounded === true) {
           const tid = details.taskId ?? "?";
           return new Text(
-            t.fg("dim", `task_bash backgrounded (taskId=${tid})`),
+            `${t.fg("dim", RESULT_PREFIX)}${t.fg(
+              "dim",
+              `Running in the background (taskId=${tid})`,
+            )}`,
             0,
             0,
           );
         }
 
-        // Streaming/in-progress.
-        if (options.isPartial) {
-          return new Text(t.fg("dim", "task_bash running…"), 0, 0);
+        const errored = context?.isError === true || r.isError === true;
+        const limits = resolveMaxLines();
+        const fold = {
+          expanded: options.expanded,
+          maxLines: errored ? DEFAULT_MAX_ERROR_LINES : limits.result,
+          expandHint: resolveExpandHint(),
+        };
+
+        if (errored) {
+          return errorComponent(text || "Command failed.", t, fold);
         }
-
-        const status = details.status;
-        const exitCode = details.exitCode;
-        const { glyph, color } = bashStatusGlyph(status, exitCode);
-
-        const lines = text.split(/\r?\n/);
-        const headRaw = lines[0] ?? "";
-        // Compose a claudecode-style head row:
-        //   [glyph] task_bash · [headRaw]
-        // glyph is colored by outcome, tool name is bold accent, the actual
-        // status text (e.g. "completed (exit 0) taskId=...") stays dim.
-        const headColored =
-          `${t.fg(color, glyph)} ` +
-          `${t.bold(t.fg("toolTitle", "task_bash"))} ` +
-          `${t.fg("dim", "·")} ` +
-          `${t.fg("dim", headRaw)}`;
-
-        // Foreground / blocking finished, expanded.
-        if (options.expanded) {
-          if (lines.length <= 1) {
-            return new Text(headColored, 0, 0);
-          }
-          const body = lines.slice(1).join("\n");
-          return new Text(`${headColored}\n${t.fg("dim", body)}`, 0, 0);
+        if (text.trim().length === 0) {
+          return new Text(
+            `${t.fg("dim", RESULT_PREFIX)}${t.fg("dim", "(No output)")}`,
+            0,
+            0,
+          );
         }
-
-        const summary = summarizeTaskBashOutput(text);
-        if (!summary.hasMore) {
-          // Short output (≤2 lines) doesn't fold — render it fully. Building
-          // from `lines` (not just headColored) keeps a lone stdout line
-          // visible instead of being silently swallowed.
-          if (lines.length <= 1) {
-            return new Text(headColored, 0, 0);
-          }
-          const body = lines.slice(1).join("\n");
-          return new Text(`${headColored}\n${t.fg("dim", body)}`, 0, 0);
-        }
-        const hidden = t.fg(
-          "dim",
-          `… (${summary.hiddenCount} lines hidden · Ctrl+O to expand)`,
-        );
-        return new Text(`${headColored}\n${hidden}`, 0, 0);
+        return resultComponent(text, t, fold);
       },
     });
 
@@ -255,6 +289,25 @@ export default function localshellExtension(pi: ExtensionAPI): void {
     }
   });
 
+  pi.on("agent_start", () => {
+    agentEpoch += 1;
+    _setLocalShellAgentStreaming(true);
+  });
+
+  pi.on("agent_end", () => {
+    const completedEpoch = agentEpoch;
+    // Run after Pi finishes dispatching agent_end so sendMessage observes an
+    // idle session and appends normally instead of turning the row into steer.
+    const timer = setTimeout(() => {
+      // A follow-up agent may already have started; in that case keep waiting
+      // for its own agent_end rather than flushing into the new stream.
+      if (agentEpoch === completedEpoch) {
+        _setLocalShellAgentStreaming(false);
+      }
+    }, 0);
+    timer.unref?.();
+  });
+
   pi.on("session_shutdown", async () => {
     const handle = getTasksHandle(pi);
     const running = getRunningTasks(handle.store.get()).filter((t) => t.type === "local_bash");
@@ -262,17 +315,4 @@ export default function localshellExtension(pi: ExtensionAPI): void {
     handle.unregisterTaskType("local_bash");
     _unbindPi();
   });
-}
-
-function bashStatusGlyph(
-  status: string | undefined,
-  exitCode: number | undefined,
-): { glyph: string; color: string } {
-  if (status === "killed") return { glyph: "■", color: "warning" };
-  if (status === "failed" || (typeof exitCode === "number" && exitCode !== 0)) {
-    return { glyph: "✗", color: "error" };
-  }
-  if (status === "completed") return { glyph: "✓", color: "success" };
-  if (status === "running") return { glyph: "◐", color: "warning" };
-  return { glyph: "○", color: "muted" };
 }

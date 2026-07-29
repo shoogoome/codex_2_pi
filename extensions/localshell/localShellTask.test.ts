@@ -12,7 +12,12 @@ import {
   createTaskStore,
   type TaskStore,
 } from "../tasks/taskStore.js";
-import { spawnLocalShell, LocalShellTask, _bindPi } from "./localShellTask.js";
+import {
+  spawnLocalShell,
+  LocalShellTask,
+  _bindPi,
+  _setLocalShellAgentStreaming,
+} from "./localShellTask.js";
 import { createFakeBashOps } from "./_test/fakeBashOperations.js";
 import { _setDefaultTaskStoreForTest } from "../tasks/taskStore.js";
 
@@ -116,43 +121,51 @@ describe("spawnLocalShell — sync finish path", () => {
     expect(result.status).toBe("killed");
   });
 
-  it("calls notifyTaskTerminal exactly once on sync finish", async () => {
+  it("sync finish emits no task notification/progress and unregisters foreground state", async () => {
     const fake = createFakeBashOps();
     const promise = spawnLocalShell(pi as never, store, {
       command: "echo hi", description: "say hi", operations: fake.ops,
     });
     await Promise.resolve();
+    const taskId = Object.keys(store.get())[0]!;
     fake.finish(0);
-    await promise;
-    // Filter to terminal notification only — progress messages (task_start/task_end) also go through sendMessage.
-    const notifications = pi.sendMessage.mock.calls.filter(
-      ([msg]: unknown[]) =>
-        (msg as { customType?: string }).customType === "tasks/notification",
-    );
-    expect(notifications).toHaveLength(1);
+    const result = await promise;
+    expect(result.status).toBe("completed");
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+    expect(store.getTask(taskId)).toBeUndefined();
   });
 
-  it("emits tasks/progress task_start + task_end on sync finish", async () => {
+  it("calls onStart synchronously before silent commands emit output", async () => {
     const fake = createFakeBashOps();
+    const onStart = vi.fn();
     const promise = spawnLocalShell(pi as never, store, {
-      command: "echo hi", description: "say hi", operations: fake.ops,
+      command: "sleep 999",
+      description: "silent",
+      operations: fake.ops,
+      onStart,
     });
-    await Promise.resolve();
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(onStart).toHaveBeenCalledWith(Object.keys(store.get())[0]);
     fake.finish(0);
     await promise;
-    const progressCalls = pi.sendMessage.mock.calls.filter(
-      ([msg]: unknown[]) =>
-        (msg as { customType?: string }).customType === "tasks/progress",
-    );
-    const kinds = progressCalls.map(
-      ([msg]: unknown[]) => (msg as { details: { kind: string } }).details.kind,
-    );
-    expect(kinds).toContain("task_start");
-    expect(kinds).toContain("task_end");
-    // Each progress message uses triggerTurn:false (no deliverAs).
-    for (const call of progressCalls) {
-      expect(call[1]).toEqual({ triggerTurn: false });
-    }
+  });
+
+  it("bounds the in-memory progress snapshot while full output remains on disk", async () => {
+    const fake = createFakeBashOps();
+    const onProgress = vi.fn();
+    const promise = spawnLocalShell(pi as never, store, {
+      command: "yes",
+      description: "firehose",
+      operations: fake.ops,
+      onProgress,
+    });
+    fake.emit(Buffer.from("A".repeat(40_000)));
+    fake.finish(0);
+    const result = await promise;
+    const last = onProgress.mock.calls.at(-1)?.[0] as { cumulative: string };
+    expect(last.cumulative).toContain("bytes of earlier output omitted");
+    expect(last.cumulative.length).toBeLessThan(31_000);
+    expect(result.output).toContain("of earlier output omitted");
   });
 
   it("output is truncated to 30000 bytes (head + truncated marker + tail)", async () => {
@@ -209,7 +222,7 @@ describe("spawnLocalShell — timeout path", () => {
     expect(notificationsAfterFinish).toHaveLength(1);
   });
 
-  it("backgrounded then killed → status='killed', no double notify", async () => {
+  it("backgrounded then killed → caller result is sufficient, no duplicate notification", async () => {
     const fake = createFakeBashOps();
     vi.useFakeTimers();
     const promise = spawnLocalShell(pi as never, store, {
@@ -219,14 +232,10 @@ describe("spawnLocalShell — timeout path", () => {
     const r = await promise;
     vi.useRealTimers();
     await LocalShellTask.kill(r.taskId, store);
+    expect(store.getTask(r.taskId)?.status).toBe("killed");
     fake.finish(0);
     await new Promise((res) => setTimeout(res, 50));
-    const notifications = pi.sendMessage.mock.calls.filter(
-      ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/notification",
-    );
-    expect(notifications).toHaveLength(1);
-    const msg = notifications[0]![0] as { content: string };
-    expect(msg.content).toContain("<status>killed</status>");
+    expect(pi.sendMessage).not.toHaveBeenCalled();
   });
 });
 
@@ -289,7 +298,7 @@ describe("spawnLocalShell — error path", () => {
     expect(cancelled).toHaveBeenCalled();
   });
 
-  it("evictTaskOutput called after terminal", async () => {
+  it("foreground task is unregistered after terminal", async () => {
     const fake = createFakeBashOps();
     const promise = spawnLocalShell(pi as never, store, {
       command: "echo hi", description: "say hi", operations: fake.ops,
@@ -298,84 +307,87 @@ describe("spawnLocalShell — error path", () => {
     fake.finish(0);
     const result = await promise;
     expect(result.status).toBe("completed");
-    expect(store.getTask(result.taskId)).toBeDefined();
+    expect(store.getTask(result.taskId)).toBeUndefined();
   });
 });
 
-describe("spawnLocalShell — triggerTurn behaviour", () => {
-  it("sync finish notification has triggerTurn=false (LLM already mid-turn)", async () => {
+describe("spawnLocalShell — background notification delivery", () => {
+  it("sync finish has no notification at all", async () => {
     const fake = createFakeBashOps();
     const promise = spawnLocalShell(pi as never, store, {
       command: "echo hi", description: "say hi", operations: fake.ops,
     });
-    await Promise.resolve();
     fake.finish(0);
     await promise;
-    // 找到 notification 那条调用(progress 调用也用 sendMessage)
-    const notifyCall = pi.sendMessage.mock.calls.find(
-      ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/notification",
-    );
-    expect(notifyCall).toBeDefined();
-    const opts = notifyCall![1] as { triggerTurn?: boolean } | undefined;
-    expect(opts?.triggerTurn).toBeFalsy(); // false 或 undefined
+    expect(pi.sendMessage).not.toHaveBeenCalled();
   });
 
-  it("backgrounded terminal notification has triggerTurn=true (LLM has walked away)", async () => {
-    const fake = createFakeBashOps();
-    vi.useFakeTimers();
-    const promise = spawnLocalShell(pi as never, store, {
-      command: "sleep 999", description: "long", timeoutMs: 100, operations: fake.ops,
-    });
-    await vi.advanceTimersByTimeAsync(150);
-    await promise;
-    vi.useRealTimers();
-    fake.finish(0);
-    await new Promise((r) => setTimeout(r, 50));
-    const notifyCall = pi.sendMessage.mock.calls.find(
-      ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/notification",
-    );
-    expect(notifyCall).toBeDefined();
-    const opts = notifyCall![1] as { triggerTurn?: boolean } | undefined;
-    expect(opts?.triggerTurn).toBe(true);
-  });
-
-  it("sync finish notification is marked llmVisible:false (stripped from LLM context)", async () => {
-    const fake = createFakeBashOps();
-    const promise = spawnLocalShell(pi as never, store, {
-      command: "echo hi", description: "say hi", operations: fake.ops,
-    });
-    await Promise.resolve();
-    fake.finish(0);
-    await promise;
-    const notifyCall = pi.sendMessage.mock.calls.find(
-      ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/notification",
-    );
-    expect(notifyCall).toBeDefined();
-    const details = notifyCall![0].details as { extra?: { llmVisible?: boolean } };
-    expect(details.extra?.llmVisible).toBe(false);
-  });
-
-  it("backgrounded terminal is NOT marked llmVisible:false (LLM must learn the result)", async () => {
-    const fake = createFakeBashOps();
-    vi.useFakeTimers();
-    const promise = spawnLocalShell(pi as never, store, {
-      command: "sleep 999", description: "long", timeoutMs: 100, operations: fake.ops,
-    });
-    await vi.advanceTimersByTimeAsync(150);
-    await promise;
-    vi.useRealTimers();
-    fake.finish(0);
-    await new Promise((r) => setTimeout(r, 50));
-    const notifyCall = pi.sendMessage.mock.calls.find(
-      ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/notification",
-    );
-    const details = notifyCall![0].details as { extra?: { llmVisible?: boolean } };
-    expect(details.extra?.llmVisible).toBeUndefined();
-  });
-
-  it("PI_TASKS_WAKE_ON_BACKGROUND=0 → backgrounded terminal does not wake but still displays", async () => {
+  it("default background completion updates TUI immediately but neither wakes nor enters LLM context", async () => {
     const prev = process.env.PI_TASKS_WAKE_ON_BACKGROUND;
-    process.env.PI_TASKS_WAKE_ON_BACKGROUND = "0";
+    delete process.env.PI_TASKS_WAKE_ON_BACKGROUND;
+    try {
+      const fake = createFakeBashOps();
+      vi.useFakeTimers();
+      const promise = spawnLocalShell(pi as never, store, {
+        command: "sleep 999", description: "long", timeoutMs: 100, operations: fake.ops,
+      });
+      await vi.advanceTimersByTimeAsync(150);
+      const backgrounded = await promise;
+      vi.useRealTimers();
+      fake.finish(0);
+      await new Promise((r) => setTimeout(r, 50));
+
+      const notifyCall = pi.sendMessage.mock.calls.find(
+        ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/notification",
+      );
+      expect(notifyCall).toBeDefined();
+      expect((notifyCall![0] as { display?: boolean }).display).toBe(true);
+      expect((notifyCall![1] as { triggerTurn?: boolean }).triggerTurn).toBe(false);
+      const details = notifyCall![0].details as { extra?: { llmVisible?: boolean } };
+      expect(details.extra?.llmVisible).toBe(false);
+
+      // Codex keeps background terminals queryable; the no-wake path retains
+      // terminal metadata for five minutes instead of the generic 30s grace.
+      const task = store.getTask(backgrounded.taskId) as { evictAfter?: number };
+      expect(task.evictAfter! - Date.now()).toBeGreaterThan(4 * 60_000);
+    } finally {
+      if (prev === undefined) delete process.env.PI_TASKS_WAKE_ON_BACKGROUND;
+      else process.env.PI_TASKS_WAKE_ON_BACKGROUND = prev;
+    }
+  });
+
+  it("defers a no-wake completion during streaming, then flushes it at agent_end", async () => {
+    const prev = process.env.PI_TASKS_WAKE_ON_BACKGROUND;
+    delete process.env.PI_TASKS_WAKE_ON_BACKGROUND;
+    try {
+      _setLocalShellAgentStreaming(true);
+      const fake = createFakeBashOps();
+      vi.useFakeTimers();
+      const promise = spawnLocalShell(pi as never, store, {
+        command: "sleep 999", description: "long", timeoutMs: 100, operations: fake.ops,
+      });
+      await vi.advanceTimersByTimeAsync(150);
+      await promise;
+      vi.useRealTimers();
+      fake.finish(0);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(pi.sendMessage).not.toHaveBeenCalled();
+
+      _setLocalShellAgentStreaming(false);
+      expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+      expect((pi.sendMessage.mock.calls[0]![1] as { triggerTurn?: boolean }).triggerTurn).toBe(
+        false,
+      );
+    } finally {
+      _setLocalShellAgentStreaming(false);
+      if (prev === undefined) delete process.env.PI_TASKS_WAKE_ON_BACKGROUND;
+      else process.env.PI_TASKS_WAKE_ON_BACKGROUND = prev;
+    }
+  });
+
+  it("PI_TASKS_WAKE_ON_BACKGROUND=1 restores Claude-style LLM wakeup", async () => {
+    const prev = process.env.PI_TASKS_WAKE_ON_BACKGROUND;
+    process.env.PI_TASKS_WAKE_ON_BACKGROUND = "1";
     try {
       const fake = createFakeBashOps();
       vi.useFakeTimers();
@@ -391,10 +403,10 @@ describe("spawnLocalShell — triggerTurn behaviour", () => {
         ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/notification",
       );
       expect(notifyCall).toBeDefined();
-      const opts = notifyCall![1] as { triggerTurn?: boolean } | undefined;
-      expect(opts?.triggerTurn).toBe(false);
-      // display 与 triggerTurn 解耦 — 不唤醒但 TUI 仍画一行终态
+      expect((notifyCall![1] as { triggerTurn?: boolean }).triggerTurn).toBe(true);
       expect((notifyCall![0] as { display?: boolean }).display).toBe(true);
+      const details = notifyCall![0].details as { extra?: { llmVisible?: boolean } };
+      expect(details.extra?.llmVisible).toBeUndefined();
     } finally {
       if (prev === undefined) delete process.env.PI_TASKS_WAKE_ON_BACKGROUND;
       else process.env.PI_TASKS_WAKE_ON_BACKGROUND = prev;

@@ -206,7 +206,7 @@ function summaryComponent(
 const MAX_COMMAND_DISPLAY_LINES = 2;
 const MAX_COMMAND_DISPLAY_CHARS = 160;
 
-function summarizeCommand(command: string): string {
+export function summarizeCommand(command: string): string {
   const normalized = command.replace(/\r/g, "");
   const lines = normalized.split("\n");
   if (lines.length <= MAX_COMMAND_DISPLAY_LINES &&
@@ -245,7 +245,7 @@ function isErrorResult(result: unknown, isError: boolean | undefined): boolean {
  * config; degrades to a literal string if the keybinding registry is
  * unavailable (e.g. very early render / tests).
  */
-function resolveExpandHint(): string {
+export function resolveExpandHint(): string {
   try {
     const keys = keyText("app.tools.expand");
     if (keys.trim().length > 0) {
@@ -258,7 +258,7 @@ function resolveExpandHint(): string {
 }
 
 /** Compact a result by rendered terminal rows, not only literal newlines. */
-function resultComponent(
+export function resultComponent(
   text: string,
   theme: ClaudeUiTheme,
   fold: FoldOptions = {},
@@ -274,7 +274,7 @@ function resultComponent(
 
 
 /** Render error output in the error color with the ⎿ connector, folded by visual terminal rows. */
-function errorComponent(text: string, theme: ClaudeUiTheme, fold: FoldOptions): Component {
+export function errorComponent(text: string, theme: ClaudeUiTheme, fold: FoldOptions): Component {
   const styled = prefixResultRows(
     text.replace(/\r/g, "").split("\n").map((line) => theme.fg("error", line)),
     theme,
@@ -403,7 +403,9 @@ export function registerToolOverrides(pi: ExtensionAPI, isEnabled: () => boolean
           state,
         );
         return new FoldableText(head, theme, {
-          maxLines: 1,
+          // Claude BashTool UI keeps up to two command lines / 160 chars;
+          // path/search/edit headers remain single-line.
+          maxLines: name === "bash" ? MAX_COMMAND_DISPLAY_LINES : 1,
           overflowMarker: "…",
         });
       },

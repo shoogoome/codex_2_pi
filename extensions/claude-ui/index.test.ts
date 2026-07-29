@@ -7,6 +7,7 @@ interface RegisteredTool {
   renderShell?: string;
   parameters: unknown;
   execute: unknown;
+  renderCall?: (args: unknown, theme: unknown, context: unknown) => unknown;
 }
 
 function createFakeApi() {
@@ -49,6 +50,25 @@ describe("claude-ui extension activation", () => {
       expect(typeof tool.execute).toBe("function");
       expect(tool.parameters).toBeTruthy();
     }
+  });
+
+  it("native Bash override keeps the Claude two-line command preview", () => {
+    const { api, tools } = createFakeApi();
+    activateClaudeUi(api as never);
+    const bash = tools.find((tool) => tool.name === "bash")!;
+    const component = bash.renderCall!(
+      { command: "echo one\necho two\necho three" },
+      {
+        fg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      },
+      { isPartial: true, cwd: process.cwd() },
+    ) as { render(width: number): string[] };
+    const output = component.render(200).join("\n");
+    expect(output).toContain("echo one");
+    expect(output).toContain("echo two");
+    expect(output).not.toContain("echo three");
+    expect(output).toContain("…");
   });
 
   it("subscribes to session_start and before_agent_start to (re)capture the theme", () => {

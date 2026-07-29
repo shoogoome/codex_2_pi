@@ -1,24 +1,23 @@
 // LocalShellTask.kill 行为:
 //   - 已不存在 / 已终态 → 早返回;
-//   - cancel watchdog → abort exec → flush 盘缓冲 → 翻 status='killed' / endTime → notifyTaskTerminal(CAS) → evict。
+//   - cancel watchdog → abort exec → flush 盘缓冲 → 翻 status='killed' / endTime → evict。
 //
-// notifyTaskTerminal 自带 CAS,所以二次 kill 不会双发通知(测试覆盖)。
+// kill 由 Esc/task_kill/session shutdown 发起，调用方已经知道结果；和 Claude 的
+// stopTask 一样不再额外发送 task_notification，避免一份 kill 显示两次。
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isTerminalTaskStatus } from "../tasks/Task.js";
 import type { TaskStore } from "../tasks/taskStore.js";
-import { updateTaskState } from "../tasks/framework.js";
+import { PANEL_GRACE_MS, updateTaskState } from "../tasks/framework.js";
 import {
   evictTaskOutput,
   flushTaskOutput,
 } from "../tasks/diskOutput.js";
-import { notifyTaskTerminal } from "../tasks/notifications.js";
-import { emitTaskProgress } from "../tasks/progress.js";
 import { logError } from "../tasks/logging.js";
 import type { LocalShellTaskState } from "./localShellTask.js";
 
 export async function killLocalShellTask(
-  pi: ExtensionAPI,
+  _pi: ExtensionAPI,
   store: TaskStore,
   taskId: string,
 ): Promise<void> {
@@ -40,25 +39,16 @@ export async function killLocalShellTask(
 
   updateTaskState<LocalShellTaskState>(taskId, store, (t) =>
     t.status === "running"
-      ? { ...t, status: "killed", endTime: Date.now() }
+      ? {
+          ...t,
+          status: "killed",
+          endTime: Date.now(),
+          notified: true,
+          retain: true,
+          evictAfter: Date.now() + PANEL_GRACE_MS,
+        }
       : t,
   );
-
-  notifyTaskTerminal(pi, store, {
-    taskId,
-    taskType: "local_bash",
-    status: "killed",
-    description: task.description,
-    outputFile: task.outputFile,
-    toolUseId: task.toolUseId,
-  });
-  emitTaskProgress(pi, {
-    taskId,
-    taskType: "local_bash",
-    kind: "kill",
-    summary: "killed by user request",
-    description: task.description,
-  });
 
   void evictTaskOutput(taskId);
 }

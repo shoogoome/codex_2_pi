@@ -226,19 +226,48 @@ describe("localshellExtension", () => {
       expect(typeof tool.renderResult).toBe("function");
     });
 
-    it("renderCall prints `task_bash <description>`", () => {
+    it("renderCall matches Claude Bash: `● Bash(command)` instead of task_bash description", () => {
       const tool = registerAndGetTaskBash();
       const comp = tool.renderCall!(
         { command: "echo hi", description: "smoke test" },
         mockTheme,
-        {},
+        { isPartial: true },
       );
       const out = renderToString(comp);
-      expect(out).toContain("task_bash");
-      expect(out).toContain("smoke test");
+      expect(out).toContain("● Bash(echo hi)");
+      expect(out).not.toContain("task_bash");
+      expect(out).not.toContain("smoke test");
     });
 
-    it("renderResult on backgrounded mode shows backgrounded line, no full text", () => {
+    it("renderCall keeps Claude's two-line Bash command preview", () => {
+      const tool = registerAndGetTaskBash();
+      const comp = tool.renderCall!(
+        { command: "echo one\necho two\necho three" },
+        mockTheme,
+        { isPartial: true },
+      );
+      const out = renderToString(comp);
+      expect(out).toContain("echo one");
+      expect(out).toContain("echo two");
+      expect(out).not.toContain("echo three");
+      expect(out).toContain("…");
+    });
+
+    it("renderCall colors the Claude lifecycle dot for pending/success/error", () => {
+      const tagTheme = {
+        fg: (color: string, text: string) => `[${color}]${text}`,
+        bold: (text: string) => `<b>${text}</b>`,
+      };
+      const tool = registerAndGetTaskBash();
+      const render = (ctx: unknown) =>
+        renderToString(tool.renderCall!({ command: "echo hi" }, tagTheme, ctx));
+      expect(render({ isPartial: true })).toContain("[dim]●");
+      expect(render({ isPartial: false, isError: false })).toContain("[success]●");
+      expect(render({ isPartial: false, isError: true })).toContain("[error]●");
+      expect(render({ isPartial: false })).toContain("<b>Bash</b>([text]echo hi)");
+    });
+
+    it("renderResult on backgrounded mode uses the Bash result gutter, no full text", () => {
       const tool = registerAndGetTaskBash();
       const comp = tool.renderResult!(
         {
@@ -250,32 +279,26 @@ describe("localshellExtension", () => {
         {},
       );
       const out = renderToString(comp);
-      expect(out).toContain("backgrounded");
+      expect(out).toContain("⎿");
+      expect(out).toContain("Running in the background");
       expect(out).toContain("tid-bg-1");
-      // Critically: no full-stdout dump.
       expect(out).not.toContain("LOTS OF STDOUT");
     });
 
-    it("renderResult on isPartial=true shows running line", () => {
+    it("renderResult on isPartial=true matches native Bash running row", () => {
       const tool = registerAndGetTaskBash();
       const comp = tool.renderResult!(
-        { content: [{ type: "text", text: "▶ doing..." }], details: {} },
+        { content: [{ type: "text", text: "doing..." }], details: {} },
         { expanded: false, isPartial: true },
         mockTheme,
         {},
       );
-      const out = renderToString(comp);
-      expect(out).toContain("running");
+      expect(renderToString(comp).trim()).toBe("running…");
     });
 
-    it("renderResult collapsed: head + lines hidden + Ctrl+O hint", () => {
+    it("renderResult collapsed uses Claude's 3-line cap and ctrl+o hint", () => {
       const tool = registerAndGetTaskBash();
-      const text = [
-        "completed (exit 0) taskId=t1",
-        "stdout-line-1",
-        "stdout-line-2",
-        "stdout-line-3",
-      ].join("\n");
+      const text = ["line-1", "line-2", "line-3", "line-4", "line-5"].join("\n");
       const comp = tool.renderResult!(
         { content: [{ type: "text", text }], details: {} },
         { expanded: false, isPartial: false },
@@ -283,20 +306,16 @@ describe("localshellExtension", () => {
         {},
       );
       const out = renderToString(comp);
-      expect(out).toContain("completed (exit 0)");
-      expect(out).toMatch(/lines? hidden/);
-      expect(out).toContain("Ctrl+O");
-      // Hidden lines should NOT appear when collapsed.
-      expect(out).not.toContain("stdout-line-2");
+      expect(out).toContain("⎿");
+      expect(out).toContain("line-1");
+      expect(out).toContain("+2 lines");
+      expect(out.toLowerCase()).toContain("ctrl+o");
+      expect(out).not.toContain("line-4");
     });
 
-    it("renderResult expanded: full text rendered", () => {
+    it("renderResult expanded renders all stdout", () => {
       const tool = registerAndGetTaskBash();
-      const text = [
-        "completed (exit 0) taskId=t1",
-        "stdout-line-1",
-        "stdout-line-2",
-      ].join("\n");
+      const text = ["stdout-line-1", "stdout-line-2", "stdout-line-3"].join("\n");
       const comp = tool.renderResult!(
         { content: [{ type: "text", text }], details: {} },
         { expanded: true, isPartial: false },
@@ -304,100 +323,62 @@ describe("localshellExtension", () => {
         {},
       );
       const out = renderToString(comp);
-      expect(out).toContain("completed (exit 0)");
       expect(out).toContain("stdout-line-1");
       expect(out).toContain("stdout-line-2");
+      expect(out).toContain("stdout-line-3");
+      expect(out).not.toContain("expand");
     });
 
-    it("renderResult on short output (<=2 lines) renders inline without hidden hint", () => {
-      const tool = registerAndGetTaskBash();
-      const comp = tool.renderResult!(
-        {
-          content: [{ type: "text", text: "completed (exit 0) taskId=t1" }],
-          details: {},
-        },
-        { expanded: false, isPartial: false },
-        mockTheme,
-        {},
-      );
-      const out = renderToString(comp);
-      expect(out).toContain("completed (exit 0)");
-      expect(out).not.toMatch(/lines? hidden/);
-    });
-
-    it("renderResult on exactly-2-line output keeps the lone stdout line (no swallow)", () => {
-      // Regression: the collapsed !hasMore branch used to render only the
-      // head row, silently dropping the second line.
-      const tool = registerAndGetTaskBash();
-      const comp = tool.renderResult!(
-        {
-          content: [
-            { type: "text", text: "completed (exit 0) taskId=t1\nonly-stdout-line" },
-          ],
-          details: {},
-        },
-        { expanded: false, isPartial: false },
-        mockTheme,
-        {},
-      );
-      const out = renderToString(comp);
-      expect(out).toContain("completed (exit 0)");
-      expect(out).toContain("only-stdout-line");
-      expect(out).not.toMatch(/lines? hidden/);
-    });
-
-    it("renderResult collapsed: status glyph colored, tool name bold (claudecode palette)", () => {
-      // Color-token regression — task_bash result was previously painted
-      // entirely in dim; users complained "everything looks the same". The
-      // status glyph now colors by outcome and the tool name uses the
-      // toolTitle accent slot.
+    it("renderResult keeps short stdout in default text color", () => {
       const tagTheme = {
         fg: (color: string, text: string) => `[${color}]${text}`,
         bold: (text: string) => `<b>${text}</b>`,
-        bg: (_color: string, text: string) => text,
       };
       const tool = registerAndGetTaskBash();
-      const text = [
-        "completed (exit 0) taskId=t1",
-        "stdout-line-1",
-        "stdout-line-2",
-        "stdout-line-3",
-      ].join("\n");
       const comp = tool.renderResult!(
-        {
-          content: [{ type: "text", text }],
-          details: { status: "completed", exitCode: 0, taskId: "t1" },
-        },
+        { content: [{ type: "text", text: "hello\nworld" }], details: {} },
         { expanded: false, isPartial: false },
         tagTheme,
         {},
       );
       const out = renderToString(comp);
-      expect(out).toContain("[success]✓");
-      expect(out).toContain("[toolTitle]task_bash");
-      expect(out).toContain("<b>");
-      expect(out).toContain("Ctrl+O");
+      expect(out).toContain("[dim]  ⎿  [text]hello");
+      expect(out).toContain("[text]world");
+      expect(out).not.toContain("lines hidden");
     });
 
-    it("renderResult collapsed: failed exit code paints the glyph in error color", () => {
-      const tagTheme = {
-        fg: (color: string, text: string) => `[${color}]${text}`,
-        bold: (text: string) => `<b>${text}</b>`,
-        bg: (_color: string, text: string) => text,
-      };
+    it("renderResult shows Claude's dim `(No output)` row for empty stdout", () => {
       const tool = registerAndGetTaskBash();
-      const text = ["failed (exit 1) taskId=t2", "boom1", "boom2"].join("\n");
       const comp = tool.renderResult!(
-        {
-          content: [{ type: "text", text }],
-          details: { status: "failed", exitCode: 1, taskId: "t2" },
-        },
+        { content: [{ type: "text", text: "" }], details: {} },
         { expanded: false, isPartial: false },
-        tagTheme,
+        mockTheme,
         {},
       );
       const out = renderToString(comp);
-      expect(out).toContain("[error]✗");
+      expect(out).toContain("⎿");
+      expect(out).toContain("(No output)");
+    });
+
+    it("renderResult paints failed output red and folds it independently", () => {
+      const tagTheme = {
+        fg: (color: string, text: string) => `[${color}]${text}`,
+        bold: (text: string) => `<b>${text}</b>`,
+      };
+      const tool = registerAndGetTaskBash();
+      const comp = tool.renderResult!(
+        {
+          content: [{ type: "text", text: "boom\nExit code 1" }],
+          details: { status: "failed", exitCode: 1 },
+          isError: true,
+        },
+        { expanded: false, isPartial: false },
+        tagTheme,
+        { isError: true },
+      );
+      const out = renderToString(comp);
+      expect(out).toContain("[dim]  ⎿  [error]boom");
+      expect(out).toContain("[error]Exit code 1");
     });
   });
 });

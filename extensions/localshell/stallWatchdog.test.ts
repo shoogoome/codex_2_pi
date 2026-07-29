@@ -84,7 +84,9 @@ describe("startStallWatchdog", () => {
     await vi.advanceTimersByTimeAsync(50_000);
     expect(pi.sendMessage).toHaveBeenCalledTimes(1);
     const msg = pi.sendMessage.mock.calls[0]![0];
-    expect((msg.details as { extra?: { kind?: string } }).extra?.kind).toBe("stall-prompt");
+    const details = msg.details as { extra?: { kind?: string }; summary?: string };
+    expect(details.extra?.kind).toBe("stall-prompt");
+    expect(details.summary).toContain("waiting for interactive input");
     cancel();
   });
 

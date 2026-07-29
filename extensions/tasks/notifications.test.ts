@@ -72,6 +72,15 @@ describe("markTaskNotified", () => {
     expect(t.evictAfter).toBeLessThanOrEqual(Date.now() + PANEL_GRACE_MS + 100);
   });
 
+  it("accepts a custom retention window for non-waking background tasks", () => {
+    const store = createTaskStore();
+    registerTask(sample("babcdefgh"), store);
+    const before = Date.now();
+    markTaskNotified("babcdefgh", store, 300_000);
+    const task = store.getTask("babcdefgh") as { evictAfter?: number };
+    expect(task.evictAfter).toBeGreaterThanOrEqual(before + 299_900);
+  });
+
   it("second markTaskNotified does NOT update evictAfter (already-notified short-circuit)", () => {
     const store = createTaskStore();
     registerTask({ ...sample("babcdefgh"), notified: true } as never, store);
@@ -338,6 +347,11 @@ describe("registerTaskNotificationRenderer", () => {
     };
   }
 
+  function renderToString(component: unknown): string {
+    const render = (component as { render?: (width: number) => string[] }).render;
+    return typeof render === "function" ? render.call(component, 200).join("\n") : "";
+  }
+
   it("registers a renderer for the task-notification customType", () => {
     const pi = {
       registerMessageRenderer: vi.fn(),
@@ -377,6 +391,81 @@ describe("registerTaskNotificationRenderer", () => {
       buildFakeTheme(),
     );
     expect(result).toBeDefined();
+  });
+
+  it("collapsed render matches Claude: colored ● plus normal summary text", () => {
+    const pi = {
+      registerMessageRenderer: vi.fn(),
+    } as unknown as Parameters<typeof registerTaskNotificationRenderer>[0] & {
+      registerMessageRenderer: ReturnType<typeof vi.fn>;
+    };
+    registerTaskNotificationRenderer(pi);
+    const renderer = pi.registerMessageRenderer.mock.calls[0]![1] as (
+      m: { content: string; details: TaskNotificationDetails },
+      o: { expanded: boolean },
+      t: unknown,
+    ) => unknown;
+    const tagTheme = {
+      fg: (color: string, value: string) => `[${color}]${value}`,
+      bg: (_color: string, value: string) => value,
+      bold: (value: string) => `<b>${value}</b>`,
+    };
+    const result = renderer(
+      {
+        content: "",
+        details: {
+          taskId: "b1",
+          taskType: "local_bash",
+          status: "completed",
+          description: "build",
+          summary: 'Background command "build" completed (exit code 0)',
+          outputFile: "/tmp/b1.output",
+          timestamp: 0,
+        },
+      },
+      { expanded: false },
+      tagTheme,
+    );
+    const output = renderToString(result);
+    expect(output).toContain("[success]● [text]Background command");
+    expect(output).not.toContain("✓");
+  });
+
+  it("renders a running stall prompt with warning circle instead of undefined status", () => {
+    const pi = { registerMessageRenderer: vi.fn() } as unknown as Parameters<
+      typeof registerTaskNotificationRenderer
+    >[0] & { registerMessageRenderer: ReturnType<typeof vi.fn> };
+    registerTaskNotificationRenderer(pi);
+    const renderer = pi.registerMessageRenderer.mock.calls[0]![1] as (
+      m: { content: string; details: TaskNotificationDetails },
+      o: { expanded: boolean },
+      t: unknown,
+    ) => unknown;
+    const tagTheme = {
+      fg: (color: string, value: string) => `[${color}]${value}`,
+      bg: (_color: string, value: string) => value,
+      bold: (value: string) => value,
+    };
+    const result = renderer(
+      {
+        content: "",
+        details: {
+          taskId: "b1",
+          taskType: "local_bash",
+          status: "running",
+          description: "install",
+          summary: 'Background command "install" appears to be waiting for interactive input',
+          outputFile: "/tmp/b1.output",
+          timestamp: 0,
+        },
+      },
+      { expanded: false },
+      tagTheme,
+    );
+    const output = renderToString(result);
+    expect(output).toContain("[warning]●");
+    expect(output).toContain("waiting for interactive input");
+    expect(output).not.toContain("undefined");
   });
 
   it("expanded render produces a Box with multiple children (smoke test)", () => {

@@ -1,11 +1,10 @@
 // LocalShellTask — `local_bash` 的 Task 接口实现 + spawnLocalShell。
 //
-// 时间线见 spec §3:
+// 生命周期:
 //   - exec 启动后 race 两个事件:60s timeout 或 exec 自然结束。
-//   - timeout 命中 → state.isBackgrounded=true,LLM 收 partial。
-//   - exec 结束:read state.status,根据 'killed' / 已 background / sync race winner 三路径分发。
-//
-// notifyTaskTerminal 用上一期 CAS 确保多路径只发一次终态。
+//   - 60s 内完成 → 返回唯一工具结果并 unregister foreground，不发 task 消息。
+//   - timeout 命中 → state.isBackgrounded=true，工具返回 taskId/outputFile。
+//   - 真后台自然结束 → notifyTaskTerminal(CAS) 即时更新 TUI；默认不唤醒/注入 LLM。
 //
 // 实现注意:spawnLocalShell 是普通函数(非 async),保证 registerTask 和 ops.exec
 // 在调用方看到 Promise 之前同步执行完毕,使测试中 `await Promise.resolve()` 即可
@@ -31,8 +30,10 @@ import {
 } from "../tasks/diskOutput.js";
 import { getTaskOutputPath } from "../tasks/outputPath.js";
 import { generateTaskId } from "../tasks/Task.js";
-import { notifyTaskTerminal } from "../tasks/notifications.js";
-import { emitTaskProgress } from "../tasks/progress.js";
+import {
+  notifyTaskTerminal,
+  type NotifyTaskTerminalOptions,
+} from "../tasks/notifications.js";
 import { logError } from "../tasks/logging.js";
 import { startStallWatchdog } from "./stallWatchdog.js";
 import { killLocalShellTask } from "./kill.js";
@@ -45,6 +46,8 @@ export interface LocalShellTaskState extends TaskStateBase {
   abortController: AbortController;
   cancelStallWatchdog?: () => void;
   isBackgrounded: boolean;
+  retain?: boolean;
+  evictAfter?: number;
   result?: { exitCode: number | null; killed: boolean };
 }
 
@@ -55,14 +58,15 @@ export interface SpawnLocalShellOptions {
   timeoutMs?: number;
   cwd?: string;
   operations?: BashOperations;
+  /** Called synchronously after registration and before the process starts. */
+  onStart?: (taskId: string) => void;
   /**
    * Stream channel — invoked on each output chunk (from `onData`) so callers
    * (the task_bash tool's `execute`) can pipe live output into Pi's
    * `tool_execution_update` event via the tool's onUpdate callback.
    *
-   * Snapshot includes the cumulative output so far and the latest chunk.
-   * Throttle / coalesce logic should live in the caller; here we forward each
-   * chunk as it arrives.
+   * Snapshot includes a bounded display tail and the latest chunk. Throttle /
+   * coalesce logic should live in the caller; here we forward each chunk.
    */
   onProgress?: (snap: SpawnLocalShellProgressSnapshot) => void;
 }
@@ -70,7 +74,7 @@ export interface SpawnLocalShellOptions {
 export interface SpawnLocalShellProgressSnapshot {
   taskId: string;
   description: string;
-  /** Cumulative output bytes seen so far (string-decoded). */
+  /** Bounded display tail; may begin with an earlier-output omission marker. */
   cumulative: string;
   /** Just the most recent chunk that triggered this snapshot. */
   chunk: string;
@@ -89,6 +93,22 @@ export interface SpawnLocalShellResult {
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
+const BACKGROUND_TERMINAL_RETAIN_MS = 5 * 60_000;
+const STREAM_DISPLAY_MAX_CHARS = 30_000;
+
+interface PendingTerminalNotification {
+  pi: ExtensionAPI;
+  store: TaskStore;
+  options: NotifyTaskTerminalOptions;
+}
+
+// Pi sendMessage steers whenever an agent is streaming, even when
+// triggerTurn:false. Hold default no-wake shell completions until agent_end so
+// they become ordinary immediate custom entries instead of hidden steering
+// messages. This delay is bounded by the active run (unlike nextTurn, which can
+// surface hours later after the next user prompt).
+let _agentStreaming = false;
+const _pendingTerminalNotifications = new Map<string, PendingTerminalNotification>();
 
 /**
  * 默认 sync 等待时长 — 可被 PI_TASK_BASH_TIMEOUT_MS 覆盖(慢机器一次性调大,
@@ -101,12 +121,12 @@ function getDefaultTimeoutMs(): number {
 }
 
 /**
- * 后台任务终态是否唤醒 LLM。PI_TASKS_WAKE_ON_BACKGROUND=0/false 时不抢 turn,
- * 通知仍进上下文 + TUI 画一行(display:true),下一轮自然被看到。
+ * 后台任务终态是否唤醒 LLM。默认关闭，避免每个 shell completion 都抢一个
+ * agent turn；PI_TASKS_WAKE_ON_BACKGROUND=1/true 可恢复 Claude 式主动唤醒。
  */
 function shouldWakeOnBackgroundTerminal(): boolean {
-  const raw = process.env.PI_TASKS_WAKE_ON_BACKGROUND?.toLowerCase();
-  return raw !== "0" && raw !== "false";
+  const raw = process.env.PI_TASKS_WAKE_ON_BACKGROUND?.trim().toLowerCase();
+  return raw === "1" || raw === "true";
 }
 
 /**
@@ -146,15 +166,11 @@ export function spawnLocalShell(
     isBackgrounded: false,
   };
   registerTask(initial, store);
-
-  // Emit task_start progress to TUI/RPC (NOT into LLM context).
-  emitTaskProgress(pi, {
-    taskId,
-    taskType: "local_bash",
-    kind: "task_start",
-    summary: opts.description,
-    description: opts.description,
-  });
+  try {
+    opts.onStart?.(taskId);
+  } catch (e) {
+    logError(e, "spawnLocalShell onStart");
+  }
 
   // initTaskOutput fire-and-forget — appendTaskOutput 内部 O_CREAT 兜底。
   // 竞争中 appendTaskOutput 可能先建文件,此时 O_EXCL 会 EEXIST,属预期,静默忽略。
@@ -165,9 +181,10 @@ export function spawnLocalShell(
 
   let resultRef: { exitCode: number | null } | null = null;
   let resolved = false;
-  // Cumulative output buffer for streaming snapshots — kept in-memory only for
-  // onProgress; the durable copy goes to disk via appendTaskOutput.
-  let cumulative = "";
+  // Keep only a bounded display tail in memory. The durable/full output lives
+  // on disk; this avoids O(n²) string growth while a foreground command emits
+  // a firehose (Codex likewise uses a bounded head/tail transcript).
+  let streamTail = "";
   let bytesReceived = 0;
 
   // 同步启动 exec(使 fake.finish/emit 立即可用)
@@ -175,13 +192,22 @@ export function spawnLocalShell(
     .exec(opts.command, cwd, {
       onData: (buf) => {
         const chunk = buf.toString("utf8");
-        cumulative += chunk;
         bytesReceived += buf.length;
+        streamTail += chunk;
+        if (streamTail.length > STREAM_DISPLAY_MAX_CHARS) {
+          streamTail = streamTail.slice(-STREAM_DISPLAY_MAX_CHARS);
+        }
         try {
           appendTaskOutput(taskId, chunk);
         } catch (e) {
           logError(e, "spawnLocalShell appendTaskOutput");
         }
+        const tailBytes = Buffer.byteLength(streamTail, "utf8");
+        const omittedBytes = Math.max(0, bytesReceived - tailBytes);
+        const cumulative =
+          omittedBytes > 0
+            ? `[${omittedBytes} bytes of earlier output omitted]\n${streamTail}`
+            : streamTail;
         try {
           opts.onProgress?.({
             taskId,
@@ -234,52 +260,24 @@ export function spawnLocalShell(
     r: { exitCode: number | null },
   ): Promise<void> {
     const t = store.getTask(taskId) as LocalShellTaskState | undefined;
-    if (t?.status === "killed") {
-      const out = await safeRead();
-      resolve({
-        taskId,
-        status: "killed",
-        backgrounded: false,
-        exitCode: r.exitCode ?? undefined,
-        output: out,
-        outputFile,
-      });
-      return;
-    }
     // 取 store 中最新的 cancelStallWatchdog(测试可能替换过)
-    const latestTask = store.getTask(taskId) as LocalShellTaskState | undefined;
-    const cancelFn = latestTask?.cancelStallWatchdog ?? cancelStallWatchdog;
+    const cancelFn = t?.cancelStallWatchdog ?? cancelStallWatchdog;
     cancelFn();
     try { await flushTaskOutput(taskId); } catch (e) { logError(e, "spawnLocalShell flush"); }
     const finalStatus: SpawnLocalShellResult["status"] =
-      r.exitCode === 0 ? "completed" : r.exitCode === null ? "killed" : "failed";
-    updateTaskState<LocalShellTaskState>(taskId, store, (cur) => ({
-      ...cur,
-      status: finalStatus,
-      endTime: Date.now(),
-      result: { exitCode: r.exitCode, killed: false },
-    }));
-    // 同步完成 — 工具结果已携带终态/exitCode/输出尾部,LLM 不需要再看一块
-    // 重复 XML:llmVisible:false 让该通知只进 TUI/RPC/JSONL,不进 LLM 上下文。
-    notifyTaskTerminal(pi, store, {
-      taskId,
-      taskType: "local_bash",
-      status: finalStatus,
-      description: opts.description,
-      outputFile,
-      toolUseId: opts.toolUseId,
-      exitCode: r.exitCode ?? undefined,
-      llmVisible: false,
-    });
-    emitTaskProgress(pi, {
-      taskId,
-      taskType: "local_bash",
-      kind: "task_end",
-      summary: `${finalStatus}${r.exitCode != null ? ` (exit ${r.exitCode})` : ""}`,
-      description: opts.description,
-      exitCode: r.exitCode ?? undefined,
-    });
+      t?.status === "killed"
+        ? "killed"
+        : r.exitCode === 0
+          ? "completed"
+          : r.exitCode === null
+            ? "killed"
+            : "failed";
     const out = await safeRead();
+
+    // Claude foreground Bash unregisters on completion; Codex finalizes the
+    // existing exec cell. Neither emits a second task-notification. The tool
+    // result below is the single source of truth for status/output.
+    unregisterForegroundTask();
     resolve({
       taskId,
       status: finalStatus,
@@ -326,28 +324,43 @@ export function spawnLocalShell(
       endTime: Date.now(),
       result: { exitCode: r.exitCode, killed: false },
     }));
-    notifyTaskTerminal(pi, store, {
+    const wake = shouldWakeOnBackgroundTerminal();
+    const exitSuffix = r.exitCode !== null ? ` (exit code ${r.exitCode})` : "";
+    const summary =
+      finalStatus === "completed"
+        ? `Background command "${opts.description}" completed${exitSuffix}`
+        : finalStatus === "failed"
+          ? `Background command "${opts.description}" failed${
+              r.exitCode !== null ? ` with exit code ${r.exitCode}` : ""
+            }`
+          : `Background command "${opts.description}" was stopped`;
+    deliverBackgroundTerminal(pi, store, {
       taskId,
       taskType: "local_bash",
       status: finalStatus,
       description: opts.description,
+      summary,
       outputFile,
       toolUseId: opts.toolUseId,
       exitCode: r.exitCode ?? undefined,
-      // LLM 已在 "Backgrounded(taskId)" 后走开,默认需要唤醒;
-      // PI_TASKS_WAKE_ON_BACKGROUND=0 时不抢 turn,仅 TUI 画行 + 进上下文。
-      triggerTurn: shouldWakeOnBackgroundTerminal(),
+      // Default follows Codex's non-interrupting process lifecycle. Opt-in env
+      // restores Claude-style model notification/wakeup.
+      triggerTurn: wake,
       display: true,
-    });
-    emitTaskProgress(pi, {
-      taskId,
-      taskType: "local_bash",
-      kind: "task_end",
-      summary: `${finalStatus}${r.exitCode != null ? ` (exit ${r.exitCode})` : ""}`,
-      description: opts.description,
-      exitCode: r.exitCode ?? undefined,
+      llmVisible: wake,
+      retainMs: wake ? undefined : BACKGROUND_TERMINAL_RETAIN_MS,
     });
     void evictTaskOutput(taskId);
+  }
+
+  function unregisterForegroundTask(): void {
+    store.set((prev) => {
+      const current = prev[taskId] as LocalShellTaskState | undefined;
+      if (!current || current.isBackgrounded) return prev;
+      const next = { ...prev };
+      delete next[taskId];
+      return next;
+    });
   }
 
   async function safeRead(): Promise<string> {
@@ -373,17 +386,49 @@ export const LocalShellTask: Task = {
 
 let _currentPi: ExtensionAPI | undefined;
 
+function deliverBackgroundTerminal(
+  pi: ExtensionAPI,
+  store: TaskStore,
+  options: NotifyTaskTerminalOptions,
+): void {
+  if (options.triggerTurn !== true && _agentStreaming) {
+    _pendingTerminalNotifications.set(options.taskId, { pi, store, options });
+    return;
+  }
+  notifyTaskTerminal(pi, store, options);
+}
+
+function flushPendingTerminalNotifications(): void {
+  const pending = [..._pendingTerminalNotifications.values()];
+  _pendingTerminalNotifications.clear();
+  for (const item of pending) {
+    notifyTaskTerminal(item.pi, item.store, item.options);
+  }
+}
+
+/** Track main-agent lifecycle so non-waking completion rows never become steer messages. */
+export function _setLocalShellAgentStreaming(streaming: boolean): void {
+  _agentStreaming = streaming;
+  if (!streaming) flushPendingTerminalNotifications();
+}
+
 /** Extension entrypoint 在 session_start 内调,把当前 pi 注入给 LocalShellTask.kill。 */
 export function _bindPi(pi: ExtensionAPI): void {
   _currentPi = pi;
+  _agentStreaming = false;
+  _pendingTerminalNotifications.clear();
 }
 
 /** session_shutdown 内调。 */
 export function _unbindPi(): void {
   _currentPi = undefined;
+  _agentStreaming = false;
+  _pendingTerminalNotifications.clear();
 }
 
 /** Test helper. */
 export function _resetLocalShellPiBindingForTest(): void {
   _currentPi = undefined;
+  _agentStreaming = false;
+  _pendingTerminalNotifications.clear();
 }
