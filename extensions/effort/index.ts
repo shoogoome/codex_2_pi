@@ -1,6 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+type ThinkingLevel = Parameters<ExtensionAPI["setThinkingLevel"]>[0];
 
 export default function effortExtension(pi: ExtensionAPI): void {
   pi.registerCommand("effort", {
@@ -19,7 +21,7 @@ export default function effortExtension(pi: ExtensionAPI): void {
         ctx.ui.notify(`Unknown effort level "${level}". Options: ${LEVELS.join(", ")}`, "warning");
         return;
       }
-      pi.setThinkingLevel(level as (typeof LEVELS)[number]);
+      pi.setThinkingLevel(level as ThinkingLevel);
       ctx.ui.notify(`Effort set to ${level} (effective: ${pi.getThinkingLevel()})`, "info");
     },
   });

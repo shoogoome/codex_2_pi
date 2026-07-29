@@ -50,6 +50,15 @@ describe("effort extension", () => {
     expect(notifications[0].msg).toContain("high");
   });
 
+  it("sets pi's native max level", async () => {
+    const { pi, commands } = createPi();
+    effortExtension(pi);
+    const { ctx, notifications } = createCtx();
+    await commands.get("effort").handler("max", ctx);
+    expect(pi.setThinkingLevel).toHaveBeenCalledWith("max");
+    expect(notifications[0].msg).toContain("Effort set to max");
+  });
+
   it("rejects an invalid level", async () => {
     const { pi, commands } = createPi();
     effortExtension(pi);
@@ -62,7 +71,11 @@ describe("effort extension", () => {
   it("provides argument completions", () => {
     const { pi, commands } = createPi();
     effortExtension(pi);
-    const completions = commands.get("effort").getArgumentCompletions("hi");
-    expect(completions).toEqual([{ value: "high", label: "high" }]);
+    expect(commands.get("effort").getArgumentCompletions("hi")).toEqual([
+      { value: "high", label: "high" },
+    ]);
+    expect(commands.get("effort").getArgumentCompletions("ma")).toEqual([
+      { value: "max", label: "max" },
+    ]);
   });
 });
