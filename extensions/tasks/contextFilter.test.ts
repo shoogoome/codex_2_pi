@@ -72,4 +72,47 @@ describe("installCustomTypeContextFilter", () => {
     expect(filtered).toHaveLength(1);
     expect(filtered[0]!.customType).toBe("tasks/exactly-not");
   });
+
+  it("with shouldStrip predicate: drops only matching messages of the customType", () => {
+    let captured: ((event: unknown, ctx?: unknown) => unknown) | undefined;
+    const pi = {
+      on: (_event: string, handler: (e: unknown, ctx?: unknown) => unknown) => {
+        captured = handler;
+      },
+    } as never;
+    installCustomTypeContextFilter(
+      pi,
+      "tasks/notification",
+      (msg) =>
+        (msg.details as { extra?: { llmVisible?: boolean } } | undefined)?.extra
+          ?.llmVisible === false,
+    );
+    const messages = [
+      {
+        role: "custom",
+        customType: "tasks/notification",
+        content: "llm-invisible",
+        details: { extra: { llmVisible: false } },
+      },
+      {
+        role: "custom",
+        customType: "tasks/notification",
+        content: "llm-visible",
+        details: {},
+      },
+      {
+        role: "custom",
+        customType: "tasks/notification",
+        content: "no-details",
+      },
+      { role: "user", content: "hi" },
+    ];
+    const result = captured!({ type: "context", messages });
+    const filtered = (result as { messages: typeof messages }).messages;
+    expect(filtered.map((m) => (m as { content: string }).content)).toEqual([
+      "llm-visible",
+      "no-details",
+      "hi",
+    ]);
+  });
 });

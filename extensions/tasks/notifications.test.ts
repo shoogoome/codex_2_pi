@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildTaskNotificationXml,
+  installTaskNotificationContextFilter,
   markTaskNotified,
   notifyTaskTerminal,
   registerTaskNotificationRenderer,
@@ -243,6 +244,88 @@ describe("notifyTaskTerminal", () => {
     notifyTaskTerminal(pi, store, baseOpts({ extra: { reviewProgress: { found: 3 } } }));
     const details = pi.sendMessage.mock.calls[0]![0].details as TaskNotificationDetails;
     expect(details.extra).toEqual({ reviewProgress: { found: 3 } });
+  });
+
+  it("llmVisible:false marks details.extra.llmVisible=false (message still sent)", () => {
+    const pi = createFakePi();
+    const store = createTaskStore();
+    registerTask(sample("babcdefgh"), store);
+    notifyTaskTerminal(pi, store, baseOpts({ llmVisible: false }));
+    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    const details = pi.sendMessage.mock.calls[0]![0].details as TaskNotificationDetails;
+    expect(details.extra?.llmVisible).toBe(false);
+  });
+
+  it("llmVisible:false preserves caller extra alongside the marker", () => {
+    const pi = createFakePi();
+    const store = createTaskStore();
+    registerTask(sample("babcdefgh"), store);
+    notifyTaskTerminal(pi, store, baseOpts({ llmVisible: false, extra: { kind: "x" } }));
+    const details = pi.sendMessage.mock.calls[0]![0].details as TaskNotificationDetails;
+    expect(details.extra).toEqual({ kind: "x", llmVisible: false });
+  });
+
+  it("default (llmVisible unset) does NOT add the marker", () => {
+    const pi = createFakePi();
+    const store = createTaskStore();
+    registerTask(sample("babcdefgh"), store);
+    notifyTaskTerminal(pi, store, baseOpts());
+    const details = pi.sendMessage.mock.calls[0]![0].details as TaskNotificationDetails;
+    expect(details.extra?.llmVisible).toBeUndefined();
+  });
+
+  it("explicit display decouples from triggerTurn (no-wake but still paints a TUI row)", () => {
+    const pi = createFakePi();
+    const store = createTaskStore();
+    registerTask(sample("babcdefgh"), store);
+    notifyTaskTerminal(pi, store, baseOpts({ triggerTurn: false, display: true }));
+    const [msg, opts] = pi.sendMessage.mock.calls[0]!;
+    expect(msg.display).toBe(true);
+    expect(opts).toEqual({ triggerTurn: false });
+  });
+});
+
+describe("installTaskNotificationContextFilter", () => {
+  function captureContextHandler() {
+    let captured: ((event: unknown, ctx?: unknown) => unknown) | undefined;
+    const pi = {
+      on: (_event: string, handler: (e: unknown, ctx?: unknown) => unknown) => {
+        captured = handler;
+      },
+    } as never;
+    return { pi, fire: (messages: unknown[]) => captured!({ type: "context", messages }) };
+  }
+
+  it("strips only llmVisible:false notifications, keeps the rest", () => {
+    const { pi, fire } = captureContextHandler();
+    installTaskNotificationContextFilter(pi);
+    const messages = [
+      {
+        role: "custom",
+        customType: TASK_NOTIFICATION_CUSTOM_TYPE,
+        content: "sync-terminal",
+        details: { extra: { llmVisible: false } },
+      },
+      {
+        role: "custom",
+        customType: TASK_NOTIFICATION_CUSTOM_TYPE,
+        content: "background-wakeup",
+        details: { extra: {} },
+      },
+      {
+        role: "custom",
+        customType: TASK_NOTIFICATION_CUSTOM_TYPE,
+        content: "stall-prompt",
+        details: { extra: { kind: "stall-prompt" } },
+      },
+      { role: "user", content: "hi" },
+    ];
+    const result = fire(messages) as { messages: { content: string }[] };
+    expect(result.messages.map((m) => m.content)).toEqual([
+      "background-wakeup",
+      "stall-prompt",
+      "hi",
+    ]);
   });
 });
 

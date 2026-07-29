@@ -338,4 +338,114 @@ describe("spawnLocalShell — triggerTurn behaviour", () => {
     const opts = notifyCall![1] as { triggerTurn?: boolean } | undefined;
     expect(opts?.triggerTurn).toBe(true);
   });
+
+  it("sync finish notification is marked llmVisible:false (stripped from LLM context)", async () => {
+    const fake = createFakeBashOps();
+    const promise = spawnLocalShell(pi as never, store, {
+      command: "echo hi", description: "say hi", operations: fake.ops,
+    });
+    await Promise.resolve();
+    fake.finish(0);
+    await promise;
+    const notifyCall = pi.sendMessage.mock.calls.find(
+      ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/notification",
+    );
+    expect(notifyCall).toBeDefined();
+    const details = notifyCall![0].details as { extra?: { llmVisible?: boolean } };
+    expect(details.extra?.llmVisible).toBe(false);
+  });
+
+  it("backgrounded terminal is NOT marked llmVisible:false (LLM must learn the result)", async () => {
+    const fake = createFakeBashOps();
+    vi.useFakeTimers();
+    const promise = spawnLocalShell(pi as never, store, {
+      command: "sleep 999", description: "long", timeoutMs: 100, operations: fake.ops,
+    });
+    await vi.advanceTimersByTimeAsync(150);
+    await promise;
+    vi.useRealTimers();
+    fake.finish(0);
+    await new Promise((r) => setTimeout(r, 50));
+    const notifyCall = pi.sendMessage.mock.calls.find(
+      ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/notification",
+    );
+    const details = notifyCall![0].details as { extra?: { llmVisible?: boolean } };
+    expect(details.extra?.llmVisible).toBeUndefined();
+  });
+
+  it("PI_TASKS_WAKE_ON_BACKGROUND=0 → backgrounded terminal does not wake but still displays", async () => {
+    const prev = process.env.PI_TASKS_WAKE_ON_BACKGROUND;
+    process.env.PI_TASKS_WAKE_ON_BACKGROUND = "0";
+    try {
+      const fake = createFakeBashOps();
+      vi.useFakeTimers();
+      const promise = spawnLocalShell(pi as never, store, {
+        command: "sleep 999", description: "long", timeoutMs: 100, operations: fake.ops,
+      });
+      await vi.advanceTimersByTimeAsync(150);
+      await promise;
+      vi.useRealTimers();
+      fake.finish(0);
+      await new Promise((r) => setTimeout(r, 50));
+      const notifyCall = pi.sendMessage.mock.calls.find(
+        ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/notification",
+      );
+      expect(notifyCall).toBeDefined();
+      const opts = notifyCall![1] as { triggerTurn?: boolean } | undefined;
+      expect(opts?.triggerTurn).toBe(false);
+      // display 与 triggerTurn 解耦 — 不唤醒但 TUI 仍画一行终态
+      expect((notifyCall![0] as { display?: boolean }).display).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.PI_TASKS_WAKE_ON_BACKGROUND;
+      else process.env.PI_TASKS_WAKE_ON_BACKGROUND = prev;
+    }
+  });
+});
+
+describe("spawnLocalShell — PI_TASK_BASH_TIMEOUT_MS", () => {
+  it("env overrides the default 60s sync timeout", async () => {
+    const prev = process.env.PI_TASK_BASH_TIMEOUT_MS;
+    process.env.PI_TASK_BASH_TIMEOUT_MS = "100";
+    try {
+      const fake = createFakeBashOps();
+      vi.useFakeTimers();
+      // 不传 timeoutMs — 应读 env 的 100ms 而不是默认 60s
+      const promise = spawnLocalShell(pi as never, store, {
+        command: "sleep 999", description: "long", operations: fake.ops,
+      });
+      await vi.advanceTimersByTimeAsync(150);
+      const result = await promise;
+      expect(result.backgrounded).toBe(true);
+      expect(result.backgroundReason).toBe("timeout");
+      fake.finish(0);
+    } finally {
+      if (prev === undefined) delete process.env.PI_TASK_BASH_TIMEOUT_MS;
+      else process.env.PI_TASK_BASH_TIMEOUT_MS = prev;
+    }
+  });
+
+  it("invalid env value falls back to 60s default", async () => {
+    const prev = process.env.PI_TASK_BASH_TIMEOUT_MS;
+    process.env.PI_TASK_BASH_TIMEOUT_MS = "not-a-number";
+    try {
+      const fake = createFakeBashOps();
+      vi.useFakeTimers();
+      const promise = spawnLocalShell(pi as never, store, {
+        command: "sleep 999", description: "long", operations: fake.ops,
+      });
+      // 无效 env → 默认 60s,150ms 时不应后台化
+      await vi.advanceTimersByTimeAsync(150);
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      fake.finish(0);
+      await promise;
+    } finally {
+      if (prev === undefined) delete process.env.PI_TASK_BASH_TIMEOUT_MS;
+      else process.env.PI_TASK_BASH_TIMEOUT_MS = prev;
+    }
+  });
 });

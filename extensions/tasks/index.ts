@@ -21,7 +21,10 @@ import {
 import { _resetTaskOutputDirForTest } from "./outputPath.js";
 import { startTaskFrameworkPolling, stopTaskFrameworkPolling } from "./framework.js";
 import { _clearOutputsForTest } from "./diskOutput.js";
-import { registerTaskNotificationRenderer } from "./notifications.js";
+import {
+  installTaskNotificationContextFilter,
+  registerTaskNotificationRenderer,
+} from "./notifications.js";
 import {
   installProgressContextFilter,
   registerTaskProgressRenderer,
@@ -87,6 +90,9 @@ export default function tasksExtension(
   installProgressContextFilter(pi);
   registerTaskSummaryRenderer(pi);
   installTaskSummaryContextFilter(pi);
+  // 剥离 llmVisible:false 的终态通知(同步完成的 local_bash) — 工具结果
+  // 已告知 LLM 终态,这类通知只是 TUI/RPC/JSONL 记录,不进 LLM 上下文。
+  installTaskNotificationContextFilter(pi);
 
   // Module-scoped — survives across session_start / session_shutdown
   // reload cycles so we can clean up subscribers from a previous cycle
@@ -371,6 +377,7 @@ export type {
 } from "./notifications.js";
 export {
   buildTaskNotificationXml,
+  installTaskNotificationContextFilter,
   markTaskNotified,
   notifyTaskTerminal,
   registerTaskNotificationRenderer,

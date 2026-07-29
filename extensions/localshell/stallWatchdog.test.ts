@@ -134,4 +134,17 @@ describe("startStallWatchdog", () => {
     expect(pi.sendMessage.mock.calls[0]![0].customType).toBe("tasks/notification");
     cancel();
   });
+
+  it("delivers immediately (triggerTurn:false, no deliverAs:'nextTurn')", async () => {
+    const pi = fakePi();
+    writeFileSync(outputFile, "Continue? ");
+    const cancel = startStallWatchdog(pi as never, "babcdefgh", "do work", outputFile);
+    await vi.advanceTimersByTimeAsync(50_000);
+    // nextTurn 会把消息塞进 pending 队列等用户下次输入,内容可能早已过期。
+    // 立即投递:streaming 中 steer / 空闲时挂 state,下轮自然被看到。
+    const opts = pi.sendMessage.mock.calls[0]![1] as Record<string, unknown>;
+    expect(opts.triggerTurn).toBe(false);
+    expect(opts.deliverAs).toBeUndefined();
+    cancel();
+  });
 });

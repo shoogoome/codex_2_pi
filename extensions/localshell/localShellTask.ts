@@ -91,6 +91,25 @@ export interface SpawnLocalShellResult {
 const DEFAULT_TIMEOUT_MS = 60_000;
 
 /**
+ * 默认 sync 等待时长 — 可被 PI_TASK_BASH_TIMEOUT_MS 覆盖(慢机器一次性调大,
+ * 从源头减少“被 60s 阈值后台化 → 完成时唤醒 LLM”的频率)。每次 spawn 时
+ * 读取,便于测试设置 env。
+ */
+function getDefaultTimeoutMs(): number {
+  const raw = Number(process.env.PI_TASK_BASH_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_MS;
+}
+
+/**
+ * 后台任务终态是否唤醒 LLM。PI_TASKS_WAKE_ON_BACKGROUND=0/false 时不抢 turn,
+ * 通知仍进上下文 + TUI 画一行(display:true),下一轮自然被看到。
+ */
+function shouldWakeOnBackgroundTerminal(): boolean {
+  const raw = process.env.PI_TASKS_WAKE_ON_BACKGROUND?.toLowerCase();
+  return raw !== "0" && raw !== "false";
+}
+
+/**
  * 启动一个 local bash 任务,返回 SpawnLocalShellResult。
  *
  * 注意:本函数是普通函数(非 async),确保 registerTask 和 ops.exec 同步执行,
@@ -188,7 +207,7 @@ export function spawnLocalShell(
     });
 
   return new Promise<SpawnLocalShellResult>((resolve) => {
-    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const timeoutMs = opts.timeoutMs ?? getDefaultTimeoutMs();
     const timer = setTimeout(() => {
       if (resolved) return;
       resolved = true;
@@ -240,6 +259,8 @@ export function spawnLocalShell(
       endTime: Date.now(),
       result: { exitCode: r.exitCode, killed: false },
     }));
+    // 同步完成 — 工具结果已携带终态/exitCode/输出尾部,LLM 不需要再看一块
+    // 重复 XML:llmVisible:false 让该通知只进 TUI/RPC/JSONL,不进 LLM 上下文。
     notifyTaskTerminal(pi, store, {
       taskId,
       taskType: "local_bash",
@@ -248,6 +269,7 @@ export function spawnLocalShell(
       outputFile,
       toolUseId: opts.toolUseId,
       exitCode: r.exitCode ?? undefined,
+      llmVisible: false,
     });
     emitTaskProgress(pi, {
       taskId,
@@ -312,7 +334,10 @@ export function spawnLocalShell(
       outputFile,
       toolUseId: opts.toolUseId,
       exitCode: r.exitCode ?? undefined,
-      triggerTurn: true, // LLM 已在 "Backgrounded(taskId)" 后走开，需要唤醒
+      // LLM 已在 "Backgrounded(taskId)" 后走开,默认需要唤醒;
+      // PI_TASKS_WAKE_ON_BACKGROUND=0 时不抢 turn,仅 TUI 画行 + 进上下文。
+      triggerTurn: shouldWakeOnBackgroundTerminal(),
+      display: true,
     });
     emitTaskProgress(pi, {
       taskId,

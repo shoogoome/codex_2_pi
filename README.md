@@ -21,7 +21,7 @@
 | `extensions/pets` | Codex 风格终端宠物 widget，依 agent 状态切换动画，Kitty graphics/tmux passthrough 可选，其余回退 block-art。 | （无命令，自动 widget） |
 | `extensions/goal` | Codex 风格 thread goal:持久目标 + 预算消耗 + 续跑提示，随 session 保存。 | `get_goal` / `create_goal` / `update_goal` · `/goal <objective>` · `/goal resume` |
 | `extensions/localagent` | 注册 `task_agent` 工具 + `local_agent` 任务类型，进程内后台跑本地子 agent。 | `task_agent` |
-| `extensions/localshell` | 注册 `task_bash` 工具 + LocalShellTask，后台执行 shell 命令（超时自动转后台）。 | `task_bash` |
+| `extensions/localshell` | 注册 `task_bash` 工具 + LocalShellTask，后台执行 shell 命令（超时自动转后台；同步完成的终态通知不进 LLM 上下文，stall 提示立即投递）。 | `task_bash` · `PI_TASK_BASH_TIMEOUT_MS` 调默认超时 · `PI_TASKS_WAKE_ON_BACKGROUND=0` 后台完成不抢 turn |
 | `extensions/tasks` | 任务框架底座:default TaskStore + 背景 agents panel（Ctrl+Y 焦点 / Enter overlay）+ 任务查询管理工具。 | `task_status` / `task_kill` / `task_list` |
 | `extensions/teammate` | 多 agent 团队协作:创建团队、成员间消息、计划审批、团队任务看板。 | `team_create` / `send_message` / `request_plan_approval` / `team_delete` / `team_plan_approve` |
 

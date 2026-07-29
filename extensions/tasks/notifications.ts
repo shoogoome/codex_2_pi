@@ -17,6 +17,7 @@ import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import { Box, Text, type Component } from "@earendil-works/pi-tui";
 import type { TaskStateBase, TaskType } from "./Task.js";
 import type { TaskStore } from "./taskStore.js";
+import { installCustomTypeContextFilter } from "./contextFilter.js";
 import { PANEL_GRACE_MS } from "./framework.js";
 import {
   EXIT_CODE_TAG,
@@ -78,6 +79,21 @@ export interface NotifyTaskTerminalOptions {
    * 后台 task 完成时传 `true` — 主动唤醒 LLM。
    */
   triggerTurn?: boolean;
+  /**
+   * 是否在 TUI 主流渲染一行终态。
+   * 不传(undefined)时默认 `triggerTurn === true`(后台唤醒才画行,同步路径抑制,
+   * 避免与工具自身 renderResult 重复)。显式传入可解耦两者 — 例如后台终态
+   * 不抢 turn(triggerTurn:false)但仍在 TUI 画一行(display:true)。
+   */
+  display?: boolean;
+  /**
+   * 是否让该通知进入 LLM context。默认 true。
+   * 传 false 时消息照常发(TUI/RPC/JSONL 保留),但 tasks/index.ts 安装的
+   * notification context 过滤器会把它从 provider payload 剥离。
+   * 用于同步完成的 local_bash — 工具结果已携带终态/exitCode/输出,
+   * 再注一块 XML 是纯噪声。
+   */
+  llmVisible?: boolean;
   /**
    * 投递语义 — **通常不要传**。
    * 不传(undefined)时立即渲染(推荐)。
@@ -201,6 +217,7 @@ export function notifyTaskTerminal(
 ): void {
   if (!markTaskNotified(opts.taskId, store)) return;
   const content = buildTaskNotificationXml(opts);
+  const llmVisible = opts.llmVisible !== false;
   const details: TaskNotificationDetails = {
     taskId: opts.taskId,
     taskType: opts.taskType,
@@ -214,27 +231,44 @@ export function notifyTaskTerminal(
     worktreeBranch: opts.worktreeBranch,
     durationMs: opts.durationMs,
     timestamp: Date.now(),
-    extra: opts.extra,
+    // llmVisible:false 时打标记 — installTaskNotificationContextFilter 据此
+    // 把本条从 LLM payload 剥离(TUI/RPC/JSONL 不受影响)。
+    extra: llmVisible ? opts.extra : { ...opts.extra, llmVisible: false },
   };
   pi.sendMessage<TaskNotificationDetails>(
     {
       customType: TASK_NOTIFICATION_CUSTOM_TYPE,
       content,
       // Async wakeups (background task completes while the user is
-      // doing something else, opts.triggerTurn===true) paint a row to
-      // the TUI so the completion is visible. Sync paths
-      // (triggerTurn unset/false) suppress: the originating tool's own
-      // renderResult already surfaces the terminal line in the same
-      // conversation slot, and a second customMessage row was the
-      // visible "三块 task_agent 信息" duplication the user reported.
-      // Note: display:false only hides the TUI surface — the LLM
-      // context, RPC stream, and JSONL persistence still receive the
-      // full XML payload via Pi's sendMessage routing.
-      display: opts.triggerTurn === true,
+      // doing something else) paint a row to the TUI so the completion
+      // is visible. Sync paths suppress by default: the originating
+      // tool's own renderResult already surfaces the terminal line in
+      // the same conversation slot, and a second customMessage row was
+      // the visible "三块 task_agent 信息" duplication the user reported.
+      // 显式 opts.display 可解耦 display 与 triggerTurn(例如后台终态
+      // 不抢 turn 但仍画一行)。Note: display:false only hides the TUI
+      // surface — the RPC stream and JSONL persistence still receive
+      // the full XML payload via Pi's sendMessage routing; LLM context
+      // 由 llmVisible 选项 + context 过滤器控制。
+      display: opts.display ?? opts.triggerTurn === true,
       details,
     },
     buildSendMessageOptions(opts),
   );
+}
+
+/**
+ * 剥离 llmVisible:false 的 tasks/notification — 同步完成的 local_bash 终态
+ * 已由工具结果告知 LLM,这条通知只是给 TUI/RPC/JSONL 的记录,不该再占
+ * LLM 上下文。其余 notification(后台终态唤醒、stall-prompt、kill 等)不受影响。
+ */
+export function installTaskNotificationContextFilter(
+  pi: Pick<ExtensionAPI, "on">,
+): void {
+  installCustomTypeContextFilter(pi, TASK_NOTIFICATION_CUSTOM_TYPE, (msg) => {
+    const d = msg.details as TaskNotificationDetails | undefined;
+    return d?.extra?.llmVisible === false;
+  });
 }
 
 // ---------- TUI Renderer ----------

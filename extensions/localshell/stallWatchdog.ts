@@ -95,6 +95,10 @@ export function startStallWatchdog(
       }
       cancelled = true;
       clearInterval(timer);
+      // display:true + triggerTurn:false — 立即渲染 TUI 并进入 LLM 上下文
+      // (streaming 中 steer 进当前 turn;空闲时挂到 state,下轮自然被看到)。
+      // 不用 deliverAs:"nextTurn":那会把消息塞进 pending 队列等用户下次输入,
+      // 可能几小时后才冒出来,内容早已过期(“化石通知”)。
       pi.sendMessage(
         {
           customType: TASK_NOTIFICATION_CUSTOM_TYPE,
@@ -110,7 +114,7 @@ export function startStallWatchdog(
             extra: { kind: "stall-prompt" },
           },
         } as never,
-        { triggerTurn: false, deliverAs: "nextTurn" },
+        { triggerTurn: false },
       );
     } catch {
       // statSync 失败(file not yet exists 等) → 跳过此 tick
