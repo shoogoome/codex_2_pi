@@ -1,3 +1,7 @@
+import {
+  initTheme,
+  UserMessageComponent,
+} from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import activateClaudeUi from "./index.js";
 import { CLAUDE_UI_FLAG } from "./src/constants.js";
@@ -9,9 +13,12 @@ interface RegisteredTool {
   execute: unknown;
 }
 
+type EventHandler = (...args: unknown[]) => unknown;
+
 function createFakeApi() {
   const tools: RegisteredTool[] = [];
   const events: string[] = [];
+  const handlers = new Map<string, EventHandler>();
   const flags: Record<string, { type: string; default?: unknown }> = {};
 
   const api = {
@@ -22,14 +29,34 @@ function createFakeApi() {
       flags[name] = options;
     }),
     getFlag: vi.fn((_name: string) => true),
-    on: vi.fn((event: string, _handler: unknown) => {
+    on: vi.fn((event: string, handler: EventHandler) => {
       events.push(event);
+      handlers.set(event, handler);
     }),
     registerCommand: vi.fn(),
     registerShortcut: vi.fn(),
   };
 
-  return { api, tools, events, flags };
+  return { api, tools, events, handlers, flags };
+}
+
+function snapshotProperties(
+  target: Record<string, unknown>,
+  keys: string[],
+): () => void {
+  const descriptors = new Map(
+    keys.map((key) => [key, Object.getOwnPropertyDescriptor(target, key)]),
+  );
+
+  return () => {
+    for (const [key, descriptor] of descriptors) {
+      if (descriptor) {
+        Object.defineProperty(target, key, descriptor);
+      } else {
+        delete target[key];
+      }
+    }
+  };
 }
 
 describe("claude-ui extension activation", () => {
@@ -56,5 +83,74 @@ describe("claude-ui extension activation", () => {
     activateClaudeUi(api as never);
     expect(events).toContain("session_start");
     expect(events).toContain("before_agent_start");
+  });
+
+  it("does not call a stale extension API while rendering after session replacement", async () => {
+    const prototype = UserMessageComponent.prototype as unknown as Record<
+      string,
+      unknown
+    >;
+    const restore = snapshotProperties(prototype, [
+      "render",
+      "__piUserMessageOriginalRender",
+      "__piClaudeUiUserPatched",
+      "__piClaudeUiUserVersion",
+    ]);
+    const pristine = prototype.__piUserMessageOriginalRender;
+    if (typeof pristine === "function") {
+      prototype.render = pristine;
+    }
+    delete prototype.__piClaudeUiUserPatched;
+    delete prototype.__piClaudeUiUserVersion;
+
+    try {
+      const { api, handlers } = createFakeApi();
+      let stale = false;
+      api.getFlag.mockImplementation(() => {
+        if (stale) {
+          throw new Error("stale extension API");
+        }
+        return true;
+      });
+
+      activateClaudeUi(api as never);
+      const sessionStart = handlers.get("session_start");
+      expect(sessionStart).toBeTypeOf("function");
+      await sessionStart?.({}, {
+        ui: {
+          theme: {
+            name: "test",
+            fg: (_color: string, text: string) => text,
+            bold: (text: string) => text,
+            getBgAnsi: () => "",
+          },
+        },
+      });
+      expect(api.getFlag).toHaveBeenCalledTimes(1);
+
+      stale = true;
+      initTheme("dark", false);
+      const identity = (text: string): string => text;
+      const message = new UserMessageComponent("hello", {
+        heading: identity,
+        link: identity,
+        linkUrl: identity,
+        code: identity,
+        codeBlock: identity,
+        codeBlockBorder: identity,
+        quote: identity,
+        quoteBorder: identity,
+        hr: identity,
+        listBullet: identity,
+        bold: identity,
+        italic: identity,
+        strikethrough: identity,
+        underline: identity,
+      });
+      expect(() => message.render(40)).not.toThrow();
+      expect(api.getFlag).toHaveBeenCalledTimes(1);
+    } finally {
+      restore();
+    }
   });
 });

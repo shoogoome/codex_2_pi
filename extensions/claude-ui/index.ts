@@ -21,8 +21,12 @@ import type { ClaudeUiTheme } from "./src/theme-types.js";
 
 export default function activateClaudeUi(pi: ExtensionAPI): void {
   let activeTheme: ClaudeUiTheme | undefined;
+  let enabled = true;
   const getTheme = (): ClaudeUiTheme | undefined => activeTheme;
-  const isEnabled = (): boolean => pi.getFlag(CLAUDE_UI_FLAG) !== false;
+  const isEnabled = (): boolean => enabled;
+  const refreshEnabled = (): void => {
+    enabled = pi.getFlag(CLAUDE_UI_FLAG) !== false;
+  };
 
   pi.registerFlag(CLAUDE_UI_FLAG, {
     type: "boolean",
@@ -42,11 +46,16 @@ export default function activateClaudeUi(pi: ExtensionAPI): void {
   registerToolOverrides(pi, isEnabled);
 
   pi.on("session_start", async (_event, ctx) => {
+    // Prototype render wrappers outlive a session runtime. Cache the flag while
+    // this extension instance is active so rendering never dereferences a stale
+    // `pi` after /new, /resume, /fork, or /reload replaces the session.
+    refreshEnabled();
     activeTheme = ctx.ui.theme as unknown as ClaudeUiTheme;
     applyPatches();
   });
 
   pi.on("before_agent_start", async () => {
+    refreshEnabled();
     applyPatches();
   });
 }
