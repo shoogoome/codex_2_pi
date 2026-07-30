@@ -41,7 +41,7 @@ export function buildSideMessages(
   options: SideContextOptions = {},
 ): Message[] {
   const resolved = buildSessionContext(session.getEntries(), session.getLeafId()).messages;
-  let inherited = resolved as unknown as AnyMessage[];
+  let inherited = stripMainOnlyCustomMessages(resolved as unknown as AnyMessage[]);
 
   if (options.contextPipelineEnabled !== false) {
     const cfg = loadConfig();
@@ -51,7 +51,7 @@ export function buildSideMessages(
     }
   }
 
-  const inheritedMessages = convertToLlm(inherited as never);
+  const inheritedMessages = detachProviderContinuationState(convertToLlm(inherited as never));
   return fitMessagesToBudget(
     inheritedMessages,
     sideTurns,
@@ -67,39 +67,106 @@ export function sideInputBudget(contextWindow: number, systemPrompt: string): nu
   return Math.max(1024, contextWindow - reserveTokens - estimateTextTokens(systemPrompt));
 }
 
+/** Retry budget after a provider-confirmed overflow: keep at most half the window. */
+export function emergencySideInputBudget(contextWindow: number, systemPrompt: string): number {
+  if (!Number.isFinite(contextWindow) || contextWindow <= 0) return Number.POSITIVE_INFINITY;
+  const systemTokens = estimateTextTokens(systemPrompt);
+  return Math.max(1024, Math.floor(contextWindow / 2) - systemTokens);
+}
+
+/**
+ * Remove provider-specific continuation state from a reference transcript.
+ * Encrypted Codex reasoning items and Responses item IDs are useful only when
+ * continuing the original agent thread. Sending them into an independent side
+ * request both wastes context and can trigger item-pairing validation.
+ */
+export function detachProviderContinuationState(messages: Message[]): Message[] {
+  const detached: Message[] = [];
+  for (const message of messages) {
+    if (message.role === "assistant") {
+      const content: AssistantMessage["content"] = [];
+      for (const block of message.content) {
+        if (block.type === "thinking") continue;
+        if (block.type === "text") {
+          const text = { ...block };
+          delete text.textSignature;
+          content.push(text);
+          continue;
+        }
+        const [callId] = block.id.split("|");
+        const toolCall = { ...block };
+        delete toolCall.thoughtSignature;
+        content.push({ ...toolCall, id: callId });
+      }
+      if (content.length > 0) detached.push({ ...message, content, responseId: undefined });
+      continue;
+    }
+    if (message.role === "toolResult") {
+      const [toolCallId] = message.toolCallId.split("|");
+      detached.push({ ...message, toolCallId });
+      continue;
+    }
+    detached.push(message);
+  }
+  return detached;
+}
+
+function stripMainOnlyCustomMessages(messages: AnyMessage[]): AnyMessage[] {
+  return messages.filter((message) => {
+    const custom = message as {
+      role?: string;
+      customType?: string;
+      details?: { extra?: { llmVisible?: boolean } };
+    };
+    if (custom.role !== "custom") return true;
+    if (
+      custom.customType === "tasks/progress" ||
+      custom.customType === "tasks/summary" ||
+      custom.customType === "teammate/event"
+    ) return false;
+    if (custom.customType === "tasks/notification") {
+      return custom.details?.extra?.llmVisible !== false;
+    }
+    return true;
+  });
+}
+
 function fitMessagesToBudget(
   inheritedMessages: Message[],
   sideTurns: SideTurn[],
   userMessage: UserMessage,
   maxEstimatedTokens: number | undefined,
 ): Message[] {
-  const sideHistory = sideTurns.flatMap((turn) => [turn.userMessage, turn.assistantMessage]);
+  const sideHistory = detachProviderContinuationState(
+    sideTurns.flatMap((turn) => [turn.userMessage, turn.assistantMessage]),
+  );
   const all = [...inheritedMessages, ...sideHistory, userMessage];
   if (maxEstimatedTokens == null || !Number.isFinite(maxEstimatedTokens)) return all;
   if (estimateMessages(all) <= maxEstimatedTokens) return all;
 
   const notice = createOmissionNotice(userMessage.timestamp);
+  const anchor = isCompactionSummary(inheritedMessages[0]) ? [inheritedMessages[0]] : [];
+  const inheritedCandidates = anchor.length > 0 ? inheritedMessages.slice(1) : inheritedMessages;
   const retainedTurns = [...sideTurns];
+  const detachedTurnMessages = () => detachProviderContinuationState(
+    retainedTurns.flatMap((turn) => [turn.userMessage, turn.assistantMessage]),
+  );
   while (
     retainedTurns.length > 0 &&
-    estimateMessages([
-      notice,
-      ...retainedTurns.flatMap((turn) => [turn.userMessage, turn.assistantMessage]),
-      userMessage,
-    ]) > maxEstimatedTokens
+    estimateMessages([notice, ...anchor, ...detachedTurnMessages(), userMessage]) > maxEstimatedTokens
   ) {
     retainedTurns.shift();
   }
 
-  const retainedSideHistory = retainedTurns.flatMap((turn) => [turn.userMessage, turn.assistantMessage]);
-  const fixedTokens = estimateMessages([notice, ...retainedSideHistory, userMessage]);
+  const retainedSideHistory = detachedTurnMessages();
+  const fixedTokens = estimateMessages([notice, ...anchor, ...retainedSideHistory, userMessage]);
   const inheritedBudget = Math.max(0, maxEstimatedTokens - fixedTokens);
-  const inheritedTail = keepRecentCompleteTurns(inheritedMessages, inheritedBudget);
+  const inheritedTail = keepRecentCompleteTurns(inheritedCandidates, inheritedBudget);
 
-  if (estimateMessages([notice, ...inheritedTail, ...retainedSideHistory, userMessage]) > maxEstimatedTokens) {
+  if (estimateMessages([notice, ...anchor, ...inheritedTail, ...retainedSideHistory, userMessage]) > maxEstimatedTokens) {
     return [userMessage];
   }
-  return [notice, ...inheritedTail, ...retainedSideHistory, userMessage];
+  return [notice, ...anchor, ...inheritedTail, ...retainedSideHistory, userMessage];
 }
 
 function keepRecentCompleteTurns(messages: Message[], budget: number): Message[] {
@@ -118,6 +185,14 @@ function keepRecentCompleteTurns(messages: Message[], budget: number): Message[]
   // message preserves tool-call/result pairing for the retained tail.
   while (start < messages.length && messages[start].role !== "user") start++;
   return messages.slice(start);
+}
+
+function isCompactionSummary(message: Message | undefined): boolean {
+  if (!message || message.role !== "user") return false;
+  const text = typeof message.content === "string"
+    ? message.content
+    : message.content.filter((block) => block.type === "text").map((block) => block.text).join("\n");
+  return text.startsWith("The conversation history before this point was compacted");
 }
 
 function createOmissionNotice(timestamp: number): UserMessage {

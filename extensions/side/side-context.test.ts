@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-ai";
-import { buildSideMessages, sideInputBudget, type SideSessionReader } from "./side-context.js";
+import {
+  buildSideMessages,
+  detachProviderContinuationState,
+  emergencySideInputBudget,
+  sideInputBudget,
+  type SideSessionReader,
+} from "./side-context.js";
 
 function user(text: string, timestamp = 1): UserMessage {
   return { role: "user", content: [{ type: "text", text }], timestamp };
@@ -113,6 +119,82 @@ describe("side context construction", () => {
     expect(text).toContain("what happened?");
   });
 
+  it("removes custom messages that the main context hooks mark as LLM-invisible", () => {
+    const entries = [
+      { type: "message", id: "u", parentId: null, timestamp: "2026-01-01", message: user("parent") },
+      {
+        type: "custom_message",
+        id: "progress",
+        parentId: "u",
+        timestamp: "2026-01-01",
+        customType: "tasks/progress",
+        content: "HIDDEN PROGRESS",
+        display: true,
+      },
+      {
+        type: "custom_message",
+        id: "hidden-note",
+        parentId: "progress",
+        timestamp: "2026-01-01",
+        customType: "tasks/notification",
+        content: "HIDDEN NOTIFICATION",
+        display: true,
+        details: { extra: { llmVisible: false } },
+      },
+      {
+        type: "custom_message",
+        id: "visible-note",
+        parentId: "hidden-note",
+        timestamp: "2026-01-01",
+        customType: "tasks/notification",
+        content: "VISIBLE NOTIFICATION",
+        display: true,
+        details: { extra: { llmVisible: true } },
+      },
+    ] as SessionEntry[];
+
+    const text = textOf(buildSideMessages(reader(entries), [], user("side"), {
+      contextPipelineEnabled: false,
+    }));
+
+    expect(text).not.toContain("HIDDEN PROGRESS");
+    expect(text).not.toContain("HIDDEN NOTIFICATION");
+    expect(text).toContain("VISIBLE NOTIFICATION");
+  });
+
+  it("detaches encrypted reasoning and Responses item IDs from reference history", () => {
+    const source = [
+      {
+        ...assistant(""),
+        responseId: "resp-parent",
+        content: [
+          { type: "thinking", thinking: "summary", thinkingSignature: JSON.stringify({ encrypted_content: "x".repeat(10000) }) },
+          { type: "text", text: "visible answer", textSignature: JSON.stringify({ id: "msg-parent" }) },
+          { type: "toolCall", id: "call-1|fc-parent", name: "read", arguments: { path: "a" }, thoughtSignature: "provider-state" },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-1|fc-parent",
+        toolName: "read",
+        content: [{ type: "text", text: "result" }],
+        isError: false,
+        timestamp: 3,
+      },
+    ] as Message[];
+
+    const detached = detachProviderContinuationState(source);
+    const detachedAssistant = detached[0] as AssistantMessage;
+    const detachedTool = detached[1] as Extract<Message, { role: "toolResult" }>;
+
+    expect(detachedAssistant.content.some((block) => block.type === "thinking")).toBe(false);
+    expect(detachedAssistant.responseId).toBeUndefined();
+    expect(detachedAssistant.content.find((block) => block.type === "text")).not.toHaveProperty("textSignature");
+    expect(detachedAssistant.content.find((block) => block.type === "toolCall")).toMatchObject({ id: "call-1" });
+    expect(detachedAssistant.content.find((block) => block.type === "toolCall")).not.toHaveProperty("thoughtSignature");
+    expect(detachedTool.toolCallId).toBe("call-1");
+  });
+
   it("drops old inherited turns locally when the direct side request exceeds its budget", () => {
     const entries = [
       { type: "message", id: "u1", parentId: null, timestamp: "2026-01-01", message: user(`OLD-${"a".repeat(400)}`) },
@@ -133,9 +215,10 @@ describe("side context construction", () => {
     expect(text).toContain("SIDE");
   });
 
-  it("reserves response room from the model context window", () => {
-    const budget = sideInputBudget(272000, "x".repeat(4000));
+  it("reserves response room and provides a stricter overflow-retry budget", () => {
+    const prompt = "x".repeat(4000);
 
-    expect(budget).toBe(272000 - 16384 - 1000);
+    expect(sideInputBudget(272000, prompt)).toBe(272000 - 16384 - 1000);
+    expect(emergencySideInputBudget(272000, prompt)).toBe(136000 - 1000);
   });
 });

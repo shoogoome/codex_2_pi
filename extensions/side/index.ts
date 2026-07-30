@@ -11,8 +11,14 @@ import {
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import { completeSimple, type TextContent, type UserMessage } from "@earendil-works/pi-ai";
-import { buildSideMessages, sideInputBudget, type SideTurn } from "./side-context.js";
+import {
+  buildSideMessages,
+  emergencySideInputBudget,
+  sideInputBudget,
+  type SideTurn,
+} from "./side-context.js";
 import { buildInitialSideMessage } from "./side-prompt.js";
+import { completeSideWithOverflowRetry } from "./side-request.js";
 import {
   SIDE_OVERLAY_MAX_HEIGHT,
   SideOverlay,
@@ -93,22 +99,33 @@ async function runSide(args: string, ctx: ExtensionCommandContext, pi: Extension
     };
 
     const systemPrompt = buildInitialSideMessage("");
-    const messages = buildSideMessages(ctx.sessionManager, sideTurns, userMessage, {
+    const contextOptions = {
       contextPipelineEnabled: pi.getFlag("context-pipeline-off") !== true,
       autoPruneEnabled: pi.getFlag("prune-auto") === true,
+    };
+    const messages = buildSideMessages(ctx.sessionManager, sideTurns, userMessage, {
+      ...contextOptions,
       maxEstimatedTokens: sideInputBudget(model.contextWindow, systemPrompt),
     });
+    const complete = (requestMessages: typeof messages) => completeSimple(
+      model,
+      { systemPrompt, messages: requestMessages, tools: [] },
+      {
+        apiKey: auth.apiKey,
+        headers: auth.headers,
+        signal: controller.signal,
+        maxTokens: Math.min(model.maxTokens > 0 ? model.maxTokens : 16384, 16384),
+      },
+    );
 
     try {
-      const response = await completeSimple(
-        model,
-        { systemPrompt, messages, tools: [] },
-        {
-          apiKey: auth.apiKey,
-          headers: auth.headers,
-          signal: controller.signal,
-          maxTokens: Math.min(model.maxTokens > 0 ? model.maxTokens : 16384, 16384),
-        },
+      const response = await completeSideWithOverflowRetry(
+        messages,
+        () => buildSideMessages(ctx.sessionManager, sideTurns, userMessage, {
+          ...contextOptions,
+          maxEstimatedTokens: emergencySideInputBudget(model.contextWindow, systemPrompt),
+        }),
+        complete,
       );
 
       isRunning = false;

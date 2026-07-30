@@ -97,7 +97,7 @@
 
 `/side [message]` 打开 Codex 风格的临时 side conversation。它在 Pi 原生 overlay 中使用当前主模型发起独立、无工具的临时对话；关闭 overlay（Esc 或 Ctrl+C）会中止请求并丢弃 side 历史，主会话不会切换，也不会收到 side 的历史。
 
-这个实现复刻 Codex `/side` 的核心语义：继承当前 leaf 的上下文作为参考、使用 side boundary 指令、默认只做轻量非修改探索。继承上下文通过 Pi 原生 `buildSessionContext` 重建，遵守已有 compaction 边界，并复用 context-pipeline 的发送前裁剪；若临时 side 历史仍接近模型窗口，会优先丢弃最旧的完整 turn。它不使用系统新终端窗口或 tmux split。
+这个实现复刻 Codex `/side` 的核心语义：继承当前 leaf 的上下文作为参考、使用 side boundary 指令、默认只做轻量非修改探索。继承上下文通过 Pi 原生 `buildSessionContext` 重建，遵守已有 compaction 边界，并复用发送前裁剪/LLM 可见性规则；进入独立 side 请求前会移除父线程专属的 encrypted reasoning 与 Responses item ID。若仍接近模型窗口，会优先丢弃最旧的完整 turn；服务端确认 overflow 时再以半窗口预算自动重试一次。它不使用系统新终端窗口或 tmux split。
 
 ## `/init`
 
