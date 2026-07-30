@@ -94,9 +94,9 @@
 
 ## `/side`
 
-`/side [message]` 打开 Codex 风格的临时 side conversation。它会从当前主会话 leaf fork 一个 Pi session，启动独立 RPC subagent，并在 Pi 原生 overlay 中显示 side 对话。关闭 overlay（Esc 或 Ctrl+C）会终止 side subagent；主会话不会切换，也不会收到 side 的历史。
+`/side [message]` 打开 Codex 风格的临时 side conversation。它在 Pi 原生 overlay 中使用当前主模型发起独立、无工具的临时对话；关闭 overlay（Esc 或 Ctrl+C）会中止请求并丢弃 side 历史，主会话不会切换，也不会收到 side 的历史。
 
-这个实现复刻 Codex `/side` 的核心语义：继承当前上下文作为参考、使用 side boundary 指令、默认只做轻量非修改探索。它不使用系统新终端窗口或 tmux split。
+这个实现复刻 Codex `/side` 的核心语义：继承当前 leaf 的上下文作为参考、使用 side boundary 指令、默认只做轻量非修改探索。继承上下文通过 Pi 原生 `buildSessionContext` 重建，遵守已有 compaction 边界，并复用 context-pipeline 的发送前裁剪；若临时 side 历史仍接近模型窗口，会优先丢弃最旧的完整 turn。它不使用系统新终端窗口或 tmux split。
 
 ## `/init`
 
@@ -217,6 +217,6 @@ npm run typecheck
 
 ## 暂缓内容
 
-`/side` 现在作为 extension-only 版本提供：它使用 fork subagent 和 Pi overlay 复刻 Codex 的临时 side conversation。它不依赖 Pi 核心线程切换，因此 UI 行为不完全等同 Codex 原生实现，但关闭 overlay 即关闭 side 会话。
+`/side` 现在作为 extension-only 版本提供：它使用独立模型请求和 Pi overlay 复刻 Codex 的临时 side conversation。它不依赖 Pi 核心线程切换，因此 UI 行为不完全等同 Codex 原生实现，但关闭 overlay 即关闭 side 会话。
 
 Subagent 的 `fork_context: true` 已支持基于 Pi session clone 的显式上下文 fork。agent 角色/配置文件，以及跨会话 subagent 恢复仍暂缓实现。

@@ -7,29 +7,22 @@
  */
 
 import {
-  convertToLlm,
   type ExtensionAPI,
   type ExtensionCommandContext,
-  type ExtensionContext,
-  type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { completeSimple, type AssistantMessage, type Message, type TextContent, type UserMessage } from "@earendil-works/pi-ai";
+import { completeSimple, type TextContent, type UserMessage } from "@earendil-works/pi-ai";
+import { buildSideMessages, sideInputBudget, type SideTurn } from "./side-context.js";
 import { buildInitialSideMessage } from "./side-prompt.js";
 import { SideOverlay, type SideOverlayController, type SideTranscriptEntry } from "./side-overlay.js";
-
-interface SideTurn {
-  userMessage: UserMessage;
-  assistantMessage: AssistantMessage;
-}
 
 export default function sideExtension(pi: ExtensionAPI) {
   pi.registerCommand("side", {
     description: "start a Codex-style side conversation in a temporary overlay fork",
-    handler: async (args, ctx) => runSide(args, ctx),
+    handler: async (args, ctx) => runSide(args, ctx, pi),
   });
 }
 
-async function runSide(args: string, ctx: ExtensionCommandContext): Promise<void> {
+async function runSide(args: string, ctx: ExtensionCommandContext, pi: ExtensionAPI): Promise<void> {
   if (!ctx.hasUI) {
     ctx.ui.notify("/side requires interactive mode", "error");
     return;
@@ -94,14 +87,23 @@ async function runSide(args: string, ctx: ExtensionCommandContext): Promise<void
       timestamp: Date.now(),
     };
 
-    const messages = buildSideMessages(ctx, sideTurns, userMessage);
     const systemPrompt = buildInitialSideMessage("");
+    const messages = buildSideMessages(ctx.sessionManager, sideTurns, userMessage, {
+      contextPipelineEnabled: pi.getFlag("context-pipeline-off") !== true,
+      autoPruneEnabled: pi.getFlag("prune-auto") === true,
+      maxEstimatedTokens: sideInputBudget(model.contextWindow, systemPrompt),
+    });
 
     try {
       const response = await completeSimple(
         model,
         { systemPrompt, messages, tools: [] },
-        { apiKey: auth.apiKey, headers: auth.headers, signal: controller.signal },
+        {
+          apiKey: auth.apiKey,
+          headers: auth.headers,
+          signal: controller.signal,
+          maxTokens: Math.min(model.maxTokens > 0 ? model.maxTokens : 16384, 16384),
+        },
       );
 
       isRunning = false;
@@ -177,14 +179,4 @@ async function runSide(args: string, ctx: ExtensionCommandContext): Promise<void
     unsubscribeInput?.();
     requestRender = undefined;
   }
-}
-
-function buildSideMessages(ctx: ExtensionContext, sideTurns: SideTurn[], userMessage: UserMessage): Message[] {
-  const branch = ctx.sessionManager.getBranch() as SessionEntry[];
-  const agentMessages = branch
-    .filter((e): e is SessionEntry & { type: "message" } => e.type === "message")
-    .map((e) => e.message);
-  const branchMessages = convertToLlm(agentMessages);
-  const historyMessages: Message[] = sideTurns.flatMap((t) => [t.userMessage, t.assistantMessage]);
-  return [...branchMessages, ...historyMessages, userMessage];
 }

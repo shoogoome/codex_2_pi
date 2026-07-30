@@ -33,7 +33,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 | `/review [指令]` | review | Codex 风格评审预设 |
 | `/init` | init | 生成项目 AGENTS.md |
 | `/images` | imagegen | 图片路径展示器 |
-| `/side [message]` | side | 临时 fork side 会话 overlay |
+| `/side [message]` | side | 基于当前 leaf 上下文的临时 side 会话 overlay |
 | `/goal <目标>`, `/goal resume` | goal | thread goal 创建/恢复 |
 
 ## 无命令 / 靠 flag 或按键的能力
