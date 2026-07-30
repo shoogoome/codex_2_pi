@@ -22,6 +22,7 @@
 | 扩展 | 一句话能力 | 主要命令 / 入口 | 详情 |
 |---|---|---|---|
 | `context-pipeline` | 分层上下文管理：发送前按预算截断 tool_result、无 LLM 的 microcompact 清旧工具结果，并为 Pi 原生自动/手动压缩生成结构化摘要。 | `/prune`（`status`/`soft`/`hard`）· `/context-prune` | [context-pipeline.md](extensions/context-pipeline.md) |
+| `compact-continue` | Pi 阈值压缩后保守判断是否仍有可执行工作；仅在 toolResult、截断/tool-use 回合或未完成计划等强信号下隐藏续跑一次，真实用户/自动队列优先。 | `--compact-continue`（默认开）· `--compact-continue=false` 关闭 | [compact-continue.md](extensions/compact-continue.md) |
 | `agents-context` | 补充加载 Pi 原生不加载的 `AGENTS.md`/`CLAUDE.md`、`.claude/rules`、`@include`、条件 paths 规则，去重后隐藏注入。 | `--agents-context`（默认开）· 环境变量 `PI_AGENTS_CONTEXT=0` | [agents-context.md](extensions/agents-context.md) |
 | `settings-env` | 从全局和项目 `settings.json` 的顶层 `env` 读取环境变量并注入 Pi 进程；项目值覆盖全局值，已有启动环境默认优先。 | `env` · `envOverride` | [settings-env.md](extensions/settings-env.md) |
 | `memory` | Claude Code 风格自动长期记忆：按 git 根零配置初始化，召回相关主题，并在命中长期信息时后台提炼、去重更新索引。 | `/memory list\|show\|init` · `/remember <text>`（可选手动入口） | [memory.md](extensions/memory.md) |
