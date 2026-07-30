@@ -40,7 +40,7 @@ import {
   createTaskStateBase,
   generateTaskId,
 } from "../tasks/Task.js";
-import { notifyTaskTerminal } from "../tasks/notifications.js";
+import { markTaskNotified, notifyTaskTerminal } from "../tasks/notifications.js";
 import { emitTaskProgress } from "../tasks/progress.js";
 import { logError } from "../tasks/logging.js";
 
@@ -412,7 +412,6 @@ export async function spawnLocalAgent(
 
   const finalize = async (
     statusVal: "completed",
-    triggerTurn: boolean,
   ): Promise<SpawnLocalAgentResult> => {
     await promptPromise;
     cleanup();
@@ -430,16 +429,12 @@ export async function spawnLocalAgent(
         },
       }));
     }
-    notifyTaskTerminal(pi, store, {
-      taskId,
-      taskType: "local_agent",
-      status: statusVal,
-      description,
-      outputFile,
-      toolUseId: opts.toolUseId,
-      triggerTurn: triggerTurn ? true : undefined,
-      extra: { agentType: opts.agentDef.agentType, ...getProgress(taskId) },
-    });
+    // Foreground completion is returned by task_agent itself. Sending an
+    // additional custom notification here steers it into the still-running
+    // parent turn, so one terminal event is observed both as a notification
+    // and as the tool result. Mark it consumed for eviction/status bookkeeping
+    // without enqueueing a second model-visible message.
+    markTaskNotified(taskId, store);
     const tokenCount = getProgress(taskId)?.tokenCount ?? 0;
     // NOTE (terminal-summary removal): a `tasks/summary` customMessage used to
     // be emitted here. The task_agent tool's renderResult now owns the
@@ -561,5 +556,5 @@ export async function spawnLocalAgent(
   }
 
   // 8. sync finalize.
-  return finalize("completed", false);
+  return finalize("completed");
 }

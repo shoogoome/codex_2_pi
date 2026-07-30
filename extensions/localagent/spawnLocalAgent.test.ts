@@ -452,8 +452,13 @@ describe("spawnLocalAgent — terminal behavior", () => {
     const summaryCalls = fakePi.sendMessage.mock.calls.filter(
       ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/summary",
     );
+    const notificationCalls = fakePi.sendMessage.mock.calls.filter(
+      ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/notification",
+    );
     expect(summaryCalls).toHaveLength(0);
-    // The result now carries the timeline so task_agent's renderResult can
+    expect(notificationCalls).toHaveLength(0);
+    // The foreground tool result is the only terminal delivery. The result
+    // carries the timeline so task_agent's renderResult can
     // build an expanded view (Ctrl+O) without going back to disk.
     expect(result.timeline).toBeDefined();
     const kinds = (result.timeline ?? []).map((e) => e.kind);
