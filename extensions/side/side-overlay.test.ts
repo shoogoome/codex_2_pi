@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { Theme, type ThemeColor } from "@earendil-works/pi-coding-agent";
-import { SideOverlay, type SideOverlayController } from "./side-overlay.js";
+import { SideOverlay, sideBodyLineCapacity, type SideOverlayController } from "./side-overlay.js";
 
 const fgColors = Object.fromEntries(
   [
@@ -32,6 +32,67 @@ function createController(overrides: Partial<SideOverlayController> = {}): SideO
 }
 
 describe("SideOverlay", () => {
+  it("uses nearly all available terminal rows for the transcript", () => {
+    expect(sideBodyLineCapacity(30)).toBe(21);
+    expect(sideBodyLineCapacity(60)).toBe(50);
+
+    const text = Array.from({ length: 40 }, (_, index) => `row-${String(index + 1).padStart(2, "0")}`).join("\n");
+    const overlay = new SideOverlay(
+      theme,
+      createController({ getTranscript: () => [{ role: "assistant", text }] }),
+      vi.fn(),
+      () => 40,
+    );
+
+    const lines = overlay.render(80).join("\n");
+
+    expect(lines).toContain("row-10");
+    expect(lines).toContain("row-40");
+    expect(lines).not.toContain("row-09");
+    expect(lines).toContain("10-40/40");
+  });
+
+  it("scrolls through model output that is taller than the panel", () => {
+    const onChange = vi.fn();
+    const text = Array.from({ length: 40 }, (_, index) => `row-${String(index + 1).padStart(2, "0")}`).join("\n");
+    const overlay = new SideOverlay(
+      theme,
+      createController({ getTranscript: () => [{ role: "assistant", text }], onChange }),
+      vi.fn(),
+      () => 20,
+    );
+
+    expect(overlay.render(80).join("\n")).toContain("30-40/40");
+
+    overlay.handleInput("\u001b[5~");
+    const previousPage = overlay.render(80).join("\n");
+    expect(previousPage).toContain("row-19");
+    expect(previousPage).toContain("row-29");
+    expect(previousPage).not.toContain("row-40");
+    expect(previousPage).toContain("19-29/40");
+
+    overlay.handleInput("\u001b[H");
+    expect(overlay.render(80).join("\n")).toContain("1-11/40");
+
+    overlay.handleInput("\u001b[F");
+    expect(overlay.render(80).join("\n")).toContain("30-40/40");
+    expect(onChange).toHaveBeenCalledTimes(3);
+  });
+
+  it("wraps long unbroken model output without dropping text", () => {
+    const text = "x".repeat(120);
+    const overlay = new SideOverlay(
+      theme,
+      createController({ getTranscript: () => [{ role: "assistant", text }] }),
+      vi.fn(),
+      () => 40,
+    );
+
+    const rendered = overlay.render(50).join("\n");
+
+    expect(rendered.match(/x/g)).toHaveLength(120);
+  });
+
   it("renders side title, transcript, and footer", () => {
     const overlay = new SideOverlay(theme, createController(), vi.fn());
 

@@ -13,7 +13,12 @@ import {
 import { completeSimple, type TextContent, type UserMessage } from "@earendil-works/pi-ai";
 import { buildSideMessages, sideInputBudget, type SideTurn } from "./side-context.js";
 import { buildInitialSideMessage } from "./side-prompt.js";
-import { SideOverlay, type SideOverlayController, type SideTranscriptEntry } from "./side-overlay.js";
+import {
+  SIDE_OVERLAY_MAX_HEIGHT,
+  SideOverlay,
+  type SideOverlayController,
+  type SideTranscriptEntry,
+} from "./side-overlay.js";
 
 export default function sideExtension(pi: ExtensionAPI) {
   pi.registerCommand("side", {
@@ -158,7 +163,7 @@ async function runSide(args: string, ctx: ExtensionCommandContext, pi: Extension
       const overlay = new SideOverlay(theme, overlayController, () => {
         controller.abort();
         done();
-      });
+      }, () => tui.terminal.rows);
       requestRender = () => tui.requestRender();
       unsubscribeInput = tui.addInputListener((data) => {
         overlay.handleInput(data);
@@ -169,8 +174,8 @@ async function runSide(args: string, ctx: ExtensionCommandContext, pi: Extension
       overlay: true,
       overlayOptions: {
         anchor: "center",
-        width: "85%",
-        maxHeight: "85%",
+        width: "95%",
+        maxHeight: SIDE_OVERLAY_MAX_HEIGHT,
         margin: 1,
       },
     });
