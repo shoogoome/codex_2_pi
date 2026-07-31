@@ -17,14 +17,15 @@
 | `extensions/init` | 通过主 agent 检查项目并创建项目 `AGENTS.md` 指南（已存在则跳过）。 | `/init` |
 | `extensions/imagegen` | OpenAI Images 生图工具 + 图片路径展示器（结果只返回路径）。 | `generate_image` · `/images` |
 | `extensions/todo` | Codex 风格 `update_plan`（整份计划快照）+ 计划渲染 + 常驻 plan overlay。 | `update_plan` |
-| `extensions/effort` | 查看/切换 thinking 档位；为 GPT-5.6 Sol/Terra 复刻 Codex Ultra：请求使用原生 `max`，同时开启主动 subagent 委派。 | `/effort [off\|minimal\|low\|medium\|high\|xhigh\|max\|ultra]` |
+| `extensions/effort` | 通用 thinking 档位、Codex 风格两级高级选择器、`/model` 模型+档位原子选择，以及 `Alt+,` / `Alt+.` 升降快捷键。 | `/effort [status\|off\|minimal\|low\|medium\|high\|xhigh\|max\|ultra]` · `/model` |
+| `extensions/ultra` | GPT-5.6 Sol/Terra 的独立 Codex Ultra controller：会话态 `ultra`、请求下沉 `max`、主动 multi-agent 政策、恢复语义和 TUI 状态。 | 由 `/effort ultra` 或 `/model` 高级选择器进入 |
 | `extensions/compact-ui` | Codex 风格紧凑 UI:消息前缀化 + 常见内置工具短渲染（与 claude-ui 互斥）。 | （`--claude-ui=false` 回退到此皮肤） |
 | `extensions/pets` | Codex 风格终端宠物 widget，依 agent 状态切换动画，Kitty graphics/tmux passthrough 可选，其余回退 block-art。 | （无命令，自动 widget） |
 | `extensions/goal` | Codex 风格 thread goal:持久目标 + 预算消耗 + 续跑提示，随 session 保存。 | `get_goal` / `create_goal` / `update_goal` · `/goal <objective>` · `/goal resume` |
-| `extensions/localagent` | 注册 `task_agent` 工具 + `local_agent` 任务类型，进程内后台跑本地子 agent。 | `task_agent` |
+| `extensions/localagent` | 注册 `task_agent` + `local_agent` 任务类型，进程内运行一次性/后台/fork 子 agent；默认继承当前 model + reasoning，可显式覆盖，并按 agent role 收敛工具。 | `task_agent` |
 | `extensions/localshell` | 注册 `task_bash` 工具 + LocalShellTask：前台完成只保留一条 Bash 工具结果，超时转后台；后台终态默认在空闲时即时、忙时于 agent_end 安全边界更新 TUI，不打断/注入 LLM，调用头、输出 gutter、颜色和折叠与 Claude UI 的 `Bash` 一致。 | `task_bash` · `task_status` / `task_kill` · `PI_TASK_BASH_TIMEOUT_MS` 调默认超时 · `PI_TASKS_WAKE_ON_BACKGROUND=1` 可恢复 Claude 式主动唤醒 |
 | `extensions/tasks` | 任务框架底座:default TaskStore + 背景 agents panel（Ctrl+Y 焦点 / Enter overlay）+ 任务查询管理工具。 | `task_status` / `task_kill` / `task_list` |
-| `extensions/teammate` | 多 agent 团队协作:创建团队、成员间消息、计划审批、团队任务看板。 | `team_create` / `send_message` / `request_plan_approval` / `team_delete` / `team_plan_approve` |
+| `extensions/teammate` | 长生命周期多 agent 团队协作：成员继承父会话 model + reasoning、按 role 获得工具，经身份绑定通道主动回传 leader，并支持计划审批、任务看板、resume 与优雅关闭。 | `team_create` / `task_agent(team_name+name)` / `send_message` / `request_plan_approval` / `team_delete` / `team_plan_approve` |
 
 ### 新增扩展（Codex + Claude Code 能力移植）
 
@@ -94,9 +95,17 @@
 
 在交互式 TUI 中，`extensions/subagents` 还会在聊天输入框下方显示当前 `starting` / `running` 的 subagent 列表。列表只作为 UI 状态提示，不会写入模型上下文；所有 subagent 都结束后该提示会自动消失。
 
-## `/effort`
+### `task_agent` 与 teammate
 
-`/effort` 不带参数时显示当前档位；传入普通档位时调用 Pi 原生 thinking level。`/effort ultra` 对齐 Codex 的 GPT-5.6 Ultra 语义：仅对 `gpt-5.6-sol` / `gpt-5.6-terra` 开放，把模型请求设置为原生 `max`，并在系统提示词中加入 Codex 的 proactive multi-agent mode，使主模型在并行工作能明显改善速度或质量时主动调用 `task_agent`。Ultra 状态随 session 分支持久化；切换到其他 thinking 档位或不支持的模型会退出该模式。当前 provider/model 配置必须暴露原生 `max`，否则命令会恢复原档位并给出警告。
+`extensions/localagent` 的 `task_agent` 是另一条**进程内**执行路径：省略 `team_name`/`name` 时运行一次性或后台 agent，使用 `run_in_background: true` 可后台化；省略 `subagent_type` 则 fork 当前有效上下文。子 agent 默认继承父会话当前 model 与 reasoning，只有显式传 `model` 才覆盖；实际 SDK 从当前 `pi` CLI 旁解析，避免项目开发依赖版本漂移。agent role 的 `tools`/`disallowedTools` 会真正约束子会话；未指定 tools 的自定义角色安全默认只读，内置 `general-purpose` 显式拥有当前可用工具（递归/团队管理工具仍移除）。
+
+同时传 `team_name` 与 `name` 会创建长生命周期 teammate。teammate 使用同一套 role 解析和 model/reasoning 继承，拥有身份绑定的 `send_message`、计划审批及 team task 工具；给 leader 的消息会主动注入主会话，而不是依赖轮询。团队在 session resume 时恢复；`session_shutdown` 以不写 terminal 事件的方式挂起成员，下一会话可重建；显式 `team_delete` 才会先执行 shutdown handshake，再对超时成员强制清理。
+
+## `/effort` 与 Codex Ultra
+
+`/effort` 不带参数时打开当前模型的推理档位选择器，`/effort status` 查看有效档位；普通档位调用 Pi 原生 thinking level。与 Codex 一样，Max/Ultra 收在第二层 `More reasoning…` 高级选择器中，`Alt+,` / `Alt+.` 可降低/提高普通档位，但提高操作不会静默跨入 Max/Ultra。交互式 `/model [过滤词]` 也会按“模型 → 推理档位”原子选择，取消档位选择不会先切模型。
+
+Ultra 的入口属于 reasoning effort，但实现独立放在 `extensions/ultra`：仅对 `openai-codex/gpt-5.6-sol` / `gpt-5.6-terra` 开放；会话中保留客户端态 `ultra`，provider 请求发送原生 `max`，同时注入 Codex 的 proactive multi-agent mode。非 Ultra 时恢复 exact explicit-request-only mode。Ultra 状态随 session 分支持久化，resume/fork/tree/compaction 会重新应用；切换档位或不支持的模型会退出。footer 显示 `» ULTRA · multi-agent`，并在启用时给出一次性激活反馈。`task_agent` 未安装/未激活时会警告。
 
 ## `/side`
 

@@ -16,13 +16,11 @@
 // real SDK calls live in a tiny adapter so we do not need to spin up a real
 // LLM session in unit tests.
 
-import {
-  createAgentSessionServices as _realCreateAgentSessionServices,
-  createAgentSessionFromServices as _realCreateAgentSessionFromServices,
-  SessionManager as _RealSessionManager,
-  type AgentSession,
-  type ExtensionAPI,
+import type {
+  AgentSession,
+  ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
+import { loadPiRuntimeSdk } from "../shared/pi-runtime-sdk.js";
 
 import type { TaskStore } from "../tasks/taskStore.js";
 import {
@@ -45,6 +43,7 @@ import { emitTaskProgress } from "../tasks/progress.js";
 import { logError } from "../tasks/logging.js";
 
 import type { AgentDefinition, LocalAgentTaskState } from "./types.js";
+import type { AgentModel, AgentThinkingLevel } from "./model.js";
 import { FORK_AGENT_TYPE } from "./agentDefinitions/builtIn.js";
 import { buildChildDirective } from "./boilerplate.js";
 import { isInForkChild } from "./recursionGuard.js";
@@ -72,7 +71,8 @@ export interface SpawnLocalAgentOptions {
   cwd: string;
   description?: string;
   toolUseId?: string;
-  model?: string;
+  model?: AgentModel;
+  thinkingLevel?: AgentThinkingLevel;
   timeoutMs?: number;
   forceBackground?: boolean;
   parentSessionFile?: string;
@@ -132,27 +132,44 @@ export interface SpawnLocalAgentResult {
 // ---------- SDK injection ----------
 
 interface SdkBindings {
-  createAgentSessionServices: (opts: { cwd: string }) => Promise<unknown>;
-  SessionManagerInMemory: (cwd: string) => unknown;
-  SessionManagerForkFrom: (parent: string, cwd: string) => unknown;
+  createAgentSessionServices: (opts: {
+    cwd: string;
+    appendSystemPrompt?: string[];
+  }) => Promise<unknown>;
+  SessionManagerInMemory: (cwd: string) => unknown | Promise<unknown>;
+  SessionManagerForkFrom: (parent: string, cwd: string) => unknown | Promise<unknown>;
   createAgentSessionFromServices: (opts: {
     services: unknown;
     sessionManager: unknown;
     tools: readonly string[];
+    model?: AgentModel;
+    thinkingLevel?: AgentThinkingLevel;
   }) => Promise<{ session: unknown }>;
 }
 
 let _sdk: SdkBindings = {
-  createAgentSessionServices: (opts) =>
-    _realCreateAgentSessionServices({ cwd: opts.cwd }) as unknown as Promise<unknown>,
-  SessionManagerInMemory: (cwd) => _RealSessionManager.inMemory(cwd),
-  SessionManagerForkFrom: (parent, cwd) => _RealSessionManager.forkFrom(parent, cwd),
-  createAgentSessionFromServices: (opts) =>
-    _realCreateAgentSessionFromServices({
+  createAgentSessionServices: async (opts) => {
+    const sdk = await loadPiRuntimeSdk();
+    return sdk.createAgentSessionServices({
+      cwd: opts.cwd,
+      resourceLoaderOptions: opts.appendSystemPrompt?.length
+        ? { appendSystemPrompt: opts.appendSystemPrompt }
+        : undefined,
+    }) as unknown as Promise<unknown>;
+  },
+  SessionManagerInMemory: async (cwd) => (await loadPiRuntimeSdk()).SessionManager.inMemory(cwd),
+  SessionManagerForkFrom: async (parent, cwd) =>
+    (await loadPiRuntimeSdk()).SessionManager.forkFrom(parent, cwd),
+  createAgentSessionFromServices: async (opts) => {
+    const sdk = await loadPiRuntimeSdk();
+    return sdk.createAgentSessionFromServices({
       services: opts.services as never,
       sessionManager: opts.sessionManager as never,
       tools: opts.tools as never,
-    }) as unknown as Promise<{ session: unknown }>,
+      model: opts.model,
+      thinkingLevel: opts.thinkingLevel,
+    }) as unknown as Promise<{ session: unknown }>;
+  },
 };
 
 /** Test helper — replace SDK bindings for the duration of a test. */
@@ -185,10 +202,15 @@ export async function spawnLocalAgent(
   }
 
   // 2. SDK calls
-  const services = await _sdk.createAgentSessionServices({ cwd: opts.cwd });
+  const services = await _sdk.createAgentSessionServices({
+    cwd: opts.cwd,
+    appendSystemPrompt: opts.agentDef.systemPrompt
+      ? [opts.agentDef.systemPrompt]
+      : undefined,
+  });
   let sm: unknown;
   if (isFork) {
-    sm = _sdk.SessionManagerForkFrom(opts.parentSessionFile!, opts.cwd);
+    sm = await _sdk.SessionManagerForkFrom(opts.parentSessionFile!, opts.cwd);
     const wrapped: ForkSessionManagerLike = {
       getEntries: () =>
         (sm as { getEntries: () => readonly unknown[] }).getEntries(),
@@ -198,7 +220,7 @@ export async function spawnLocalAgent(
     };
     injectForkPlaceholders(wrapped);
   } else {
-    sm = _sdk.SessionManagerInMemory(opts.cwd);
+    sm = await _sdk.SessionManagerInMemory(opts.cwd);
   }
 
   const tools = resolveSubAgentTools(opts.agentDef, opts.allRegisteredTools ?? []);
@@ -206,6 +228,8 @@ export async function spawnLocalAgent(
     services,
     sessionManager: sm,
     tools,
+    model: opts.model,
+    thinkingLevel: opts.thinkingLevel,
   });
   const session = sessionUnknown as AgentSession;
 
@@ -225,7 +249,7 @@ export async function spawnLocalAgent(
     status: "running",
     prompt: opts.prompt,
     agentType: opts.agentDef.agentType,
-    model: opts.model,
+    model: opts.model ? `${opts.model.provider}/${opts.model.id}` : undefined,
     isBackgrounded: false,
     isFork,
     forkParentSessionFile: opts.parentSessionFile,
@@ -237,6 +261,7 @@ export async function spawnLocalAgent(
   let turnCount = 0;
   let toolCount = 0;
   let lastFinalText = "";
+  let runError: string | undefined;
   let agentEnded = false;
   let agentEndedResolve: () => void = () => {};
   const agentEndedPromise = new Promise<void>((resolve) => {
@@ -331,6 +356,8 @@ export async function spawnLocalAgent(
         role?: string;
         usage?: { totalTokens?: number };
         content?: unknown;
+        stopReason?: string;
+        errorMessage?: string;
       };
     };
     if (e.type === "tool_execution_start") {
@@ -355,10 +382,18 @@ export async function spawnLocalAgent(
     }
     if (e.type === "turn_start") {
       turnCount += 1;
+      if (opts.agentDef.maxTurns && turnCount > opts.agentDef.maxTurns && !runError) {
+        runError = `Agent exceeded maxTurns=${opts.agentDef.maxTurns}`;
+        void session.abort();
+      }
     }
     if (e.type === "message_end" && e.message?.role === "assistant") {
       const total = e.message?.usage?.totalTokens ?? 0;
       if (total > 0) setTokens(taskId, total);
+      if (e.message.stopReason === "error") {
+        runError = e.message.errorMessage || "Agent request failed";
+        void appendTaskOutput(taskId, `[error] ${runError}\n`);
+      }
       const c = e.message?.content;
       if (Array.isArray(c)) {
         const txt = c
@@ -386,7 +421,10 @@ export async function spawnLocalAgent(
       agentEnded = true;
       pushProgress({
         kind: "task_end",
-        summary: `done (turns=${turnCount}, tools=${toolCount})`,
+        summary: runError
+          ? `failed: ${runError}`
+          : `done (turns=${turnCount}, tools=${toolCount})`,
+        isError: Boolean(runError),
       });
       agentEndedResolve();
     }
@@ -407,21 +445,32 @@ export async function spawnLocalAgent(
   // 5. start prompt — MUST .catch immediately to avoid unhandled rejection.
   const promptText = isFork ? buildChildDirective(opts.prompt) : opts.prompt;
   const promptPromise = session.prompt(promptText).catch((e) => {
+    runError = (e as Error)?.message ?? String(e);
     logError(e, "session.prompt");
+    void appendTaskOutput(taskId, `[error] ${runError}\n`);
+    if (!agentEnded) {
+      agentEnded = true;
+      pushProgress({
+        kind: "task_end",
+        summary: `failed: ${runError}`,
+        isError: true,
+      });
+      agentEndedResolve();
+    }
   });
 
-  const finalize = async (
-    statusVal: "completed",
-  ): Promise<SpawnLocalAgentResult> => {
+  const finalize = async (): Promise<SpawnLocalAgentResult> => {
     await promptPromise;
     cleanup();
     await flushTaskOutput(taskId);
+    const statusVal = runError ? "failed" as const : "completed" as const;
     const t = store.getTask(taskId) as LocalAgentTaskState | undefined;
     if (t && t.status === "running") {
       updateTaskState<LocalAgentTaskState>(taskId, store, (cur) => ({
         ...cur,
         status: statusVal,
         endTime: Date.now(),
+        error: runError,
         result: {
           finalText: lastFinalText,
           toolCallCount: toolCount,
@@ -453,7 +502,7 @@ export async function spawnLocalAgent(
       taskId,
       status: statusVal,
       backgrounded: false,
-      finalText: lastFinalText,
+      finalText: runError ? `Agent failed: ${runError}` : lastFinalText,
       toolCallCount: toolCount,
       tokenCount,
       agentType: opts.agentDef.agentType,
@@ -470,10 +519,12 @@ export async function spawnLocalAgent(
     await flushTaskOutput(taskId);
     const t = store.getTask(taskId) as LocalAgentTaskState | undefined;
     if (!t || t.status !== "running") return;
+    const statusVal = runError ? "failed" as const : "completed" as const;
     updateTaskState<LocalAgentTaskState>(taskId, store, (cur) => ({
       ...cur,
-      status: "completed",
+      status: statusVal,
       endTime: Date.now(),
+      error: runError,
       result: {
         finalText: lastFinalText,
         toolCallCount: toolCount,
@@ -483,7 +534,7 @@ export async function spawnLocalAgent(
     notifyTaskTerminal(pi, store, {
       taskId,
       taskType: "local_agent",
-      status: "completed",
+      status: statusVal,
       description,
       outputFile,
       toolUseId: opts.toolUseId,
@@ -556,5 +607,5 @@ export async function spawnLocalAgent(
   }
 
   // 8. sync finalize.
-  return finalize("completed");
+  return finalize();
 }

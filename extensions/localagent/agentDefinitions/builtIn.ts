@@ -6,7 +6,7 @@ export const GENERAL_PURPOSE_AGENT: AgentDefinition = {
   agentType: "general-purpose",
   whenToUse:
     "General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks.",
-  tools: ["read", "grep", "find", "ls", "bash", "edit", "write"],
+  tools: ["*"],
   source: "built-in",
   systemPrompt:
     "You are a general-purpose research and execution agent dispatched by a parent agent. " +

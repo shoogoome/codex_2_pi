@@ -182,10 +182,11 @@ describe("respawnTeammates", () => {
       dispose: vi.fn(),
       subscribe: vi.fn(() => () => {}),
     };
+    const createSessionMock = vi.fn(async (_opts: unknown) => ({ session: fakeSession }));
     _setHydrateSdkForTest({
       createAgentSessionServices: vi.fn().mockResolvedValue({}),
       SessionManagerOpen: sessionMgrMock,
-      createAgentSessionFromServices: vi.fn(async () => ({ session: fakeSession })),
+      createAgentSessionFromServices: createSessionMock,
     });
 
     const state: ReplayedState = {
@@ -243,6 +244,14 @@ describe("respawnTeammates", () => {
     const tasks = Object.values(taskStore.get());
     expect(tasks).toHaveLength(1);
     expect(handle.teamStore.getTeam("t1")?.memberAgentIds).toContain("alice@t1");
+    const sessionArgs = createSessionMock.mock.calls[0]![0] as {
+      tools: string[];
+      customTools?: Array<{ name?: string }>;
+    };
+    expect(sessionArgs.tools).toContain("request_plan_approval");
+    expect(sessionArgs.customTools?.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["send_message", "request_plan_approval"]),
+    );
   });
 
   it("idempotent: skips re-respawn if a running teammate task with same agentId already exists", async () => {
@@ -397,8 +406,9 @@ describe("respawnTeammates", () => {
       handle,
       cwd: "/tmp",
     });
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
+    for (let i = 0; i < 20 && order.length === 0; i += 1) {
+      await new Promise((r) => setImmediate(r));
+    }
     // First should have started but second not yet.
     expect(order).toEqual(["first-start"]);
     resolveFirst();

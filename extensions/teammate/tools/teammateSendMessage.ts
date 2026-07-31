@@ -13,18 +13,19 @@
 //   wrongly becomes "leader", which both mislabels the message AND suppresses
 //   the leader notification (the `if (identity && ...)` guard fails).
 //
-//   Fix: bind the identity at spawn time. spawnTeammate injects THIS tool via
-//   customTools with the teammate's identity captured in the closure. It also
-//   delivers leader notifications through the process-global leaderBridge
-//   (the only channel that crosses the sub-session boundary), never the
-//   sub-session's isolated pi/mailbox/handle.
+//   Fix: bind both the identity and leader delivery closure at spawn/hydrate
+//   time. The process-global leaderBridge is retained only as a fallback for
+//   legacy callers; delivery never relies on the sub-session's isolated
+//   pi/mailbox/handle.
 
 import { randomBytes } from "node:crypto";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { getLeaderChannel } from "../leaderBridge.js";
+import type { Mailbox } from "../mailbox.js";
 import { detectShutdownProtocol } from "../shutdownHandshake.js";
-import type { TeammateIdentity } from "../types.js";
+import type { TeamStore } from "../teamStore.js";
+import type { MailboxMessage, TeammateIdentity } from "../types.js";
 
 const SendMessageParams = Type.Object({
   to: Type.String({
@@ -55,8 +56,19 @@ const DESCRIPTION =
  * into the teammate sub-session via customTools so the sender identity does
  * not depend on cross-realm AsyncLocalStorage.
  */
+export interface TeammateSendMessageDeps {
+  mailbox: Mailbox;
+  teamStore: TeamStore;
+  /** Fresh/resumed in-process sessions pass a leader-realm closure directly. */
+  deliverToLeader?: (
+    details: { kind: "message"; agentId: string; to: string; body: string },
+    triggerTurn: boolean,
+  ) => void;
+}
+
 export function buildTeammateSendMessageTool(
   identity: TeammateIdentity,
+  deps: TeammateSendMessageDeps,
 ): ToolDefinition<typeof SendMessageParams, TeammateSendMessageDetails> {
   return {
     name: "send_message",
@@ -85,25 +97,56 @@ export function buildTeammateSendMessageTool(
 
       const isProtocol = detectShutdownProtocol(body) !== undefined;
       const isToLeader = to === "leader";
+      const isBroadcast = to === "*";
 
-      // Deliver to the leader through the process-global bridge. This is the
-      // ONLY channel that crosses the sub-session boundary — the sub-session's
-      // own mailbox/handle/pi cannot reach the real leader.
       let delivered = false;
-      if (isToLeader || to === "*") {
-        const channel = getLeaderChannel();
-        if (channel) {
-          channel.deliver(
-            {
-              kind: "message",
-              agentId: identity.agentId,
-              to,
-              body,
-            },
-            /* triggerTurn */ true,
-          );
+      if (isToLeader || isBroadcast) {
+        const details = {
+          kind: "message" as const,
+          agentId: identity.agentId,
+          to,
+          body,
+        };
+        if (deps.deliverToLeader) {
+          deps.deliverToLeader(details, /* triggerTurn */ true);
           delivered = true;
+        } else {
+          const channel = getLeaderChannel();
+          if (channel) {
+            channel.deliver(details, /* triggerTurn */ true);
+            delivered = true;
+          }
         }
+      }
+
+      if (!isToLeader) {
+        if (!isBroadcast) {
+          const team = deps.teamStore.getTeam(identity.teamName);
+          const recipientId = `${to}@${identity.teamName}`;
+          if (!team?.memberAgentIds.includes(recipientId)) {
+            return {
+              content: [{ type: "text" as const, text: `Unknown teammate '${to}' in team '${identity.teamName}'` }],
+              isError: true,
+              details: {
+                action: "send_message" as const,
+                to,
+                from: identity.agentName,
+                isProtocol,
+                delivered: false,
+              },
+            };
+          }
+        }
+        const peerMessage: MailboxMessage = {
+          id: _makeMessageId(),
+          from: identity.agentName,
+          to,
+          body,
+          timestamp: Date.now(),
+          isProtocol,
+        };
+        deps.mailbox.send(peerMessage);
+        delivered = true;
       }
 
       return {

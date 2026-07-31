@@ -6,11 +6,23 @@ import { createTeamStore } from "../../teammate/teamStore.js";
 import { createMailbox } from "../../teammate/mailbox.js";
 import { createTeamTaskStore } from "../../teammate/teamTasks/teamTaskStore.js";
 
-const fakePi: any = { events: {}, sendMessage: vi.fn(), getActiveTools: () => [] };
+const fakePi: any = {
+  events: {},
+  sendMessage: vi.fn(),
+  getActiveTools: () => [],
+  getThinkingLevel: () => "medium",
+};
 const fakeCtx: any = {
   cwd: "/tmp",
   sessionManager: { getSessionFile: () => "/tmp/parent.jsonl" },
-  model: { id: "opus", provider: "anthropic" },
+  model: { id: "claude-sonnet-4-6", provider: "anthropic", name: "Claude Sonnet" },
+  modelRegistry: {
+    getAvailable: () => [
+      { id: "claude-sonnet-4-6", provider: "anthropic", name: "Claude Sonnet" },
+      { id: "claude-opus-4-6", provider: "anthropic", name: "Claude Opus" },
+      { id: "claude-haiku-4-5", provider: "anthropic", name: "Claude Haiku" },
+    ],
+  },
   messages: [],
 };
 
@@ -139,7 +151,10 @@ describe("task_agent tool", () => {
     _setSpawnerForTest(spawnerMock);
     const tool = buildTaskAgentTool(fakePi, createTaskStore());
     await callTool(tool, { description: "x", prompt: "y", subagent_type: "general-purpose", model: "opus" });
-    expect(spawnerMock.mock.calls[0]![2]!.model).toBe("opus");
+    expect(spawnerMock.mock.calls[0]![2]!.model).toMatchObject({
+      provider: "anthropic",
+      id: "claude-opus-4-6",
+    });
   });
 
   it("spawner throw → tool 返 isError + stack 摘要", async () => {
@@ -167,13 +182,23 @@ function makeFakePiWithTeammateHandle(): any {
   const mailbox = createMailbox();
   // Pre-create the team so spawnTeammate's validation passes (when not stubbed).
   teamStore.createTeam("research", undefined, 1);
-  const pi: any = { events: {}, sendMessage: vi.fn(), getActiveTools: () => [] };
+  const pi: any = {
+    events: {},
+    sendMessage: vi.fn(),
+    getActiveTools: () => [],
+    getThinkingLevel: () => "medium",
+  };
   attachTeammateHandle(pi as never, { teamStore, mailbox, teamTaskStore: createTeamTaskStore() });
   return pi;
 }
 
 function makeFakePiWithoutTeammateHandle(): any {
-  return { events: {}, sendMessage: vi.fn(), getActiveTools: () => [] };
+  return {
+    events: {},
+    sendMessage: vi.fn(),
+    getActiveTools: () => [],
+    getThinkingLevel: () => "medium",
+  };
 }
 
 describe("task_agent — teammate route", () => {
@@ -213,7 +238,7 @@ describe("task_agent — teammate route", () => {
     const args = fakeSpawner.mock.calls[0]![3];
     expect(args.teamName).toBe("research");
     expect(args.agentName).toBe("alice");
-    expect(args.agentType).toBe("general-purpose");
+    expect(args.agentDef.agentType).toBe("general-purpose");
     expect(args.prompt).toBe("find auth bugs");
     expect((result as { isError?: boolean }).isError).toBeFalsy();
     expect((result.details as { mode?: string }).mode).toBe("teammate");

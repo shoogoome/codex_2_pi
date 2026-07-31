@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   killTeammate,
+  suspendTeammate,
   InProcessTeammateTask,
   _resetTeammatePiBindingForTest,
 } from "./killTeammate.js";
@@ -155,6 +156,19 @@ describe("killTeammate — basics", () => {
     const final = taskStore.getTask("a5");
     expect(final?.notified).toBe(true);
     expect(typeof final?.endTime).toBe("number");
+  });
+
+  it("suspend tears down runtime without persisting teammate_terminal", async () => {
+    const taskStore = createTaskStore();
+    const { state, abort, dispose } = buildRunningTask("a6");
+    registerTask(state, taskStore);
+
+    await suspendTeammate(taskStore, "a6");
+
+    expect(taskStore.getTask("a6")).toMatchObject({ status: "killed", notified: true });
+    expect(abort).toHaveBeenCalled();
+    expect(dispose).toHaveBeenCalled();
+    expect(fakePi.sendMessage).not.toHaveBeenCalled();
   });
 });
 

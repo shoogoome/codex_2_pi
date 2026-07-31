@@ -36,18 +36,18 @@ describe("buildTeammateBoilerplate", () => {
     expect(b).toContain("\"leader\"");
   });
 
-  it("acknowledges the teammate has full tool access (bash/write/edit) — no longer claims they're blocked", () => {
+  it("explains that tools are role-scoped instead of universally granting mutation", () => {
     const b = buildTeammateBoilerplate(identity);
-    expect(b).toContain("bash");
-    expect(b).toContain("write");
-    expect(b).toContain("edit");
-    // Negative: must NOT contain the old "你没有 bash" boilerplate.
-    expect(b).not.toContain("没有 bash");
+    expect(b).toContain("agent role");
+    expect(b).toContain("general-purpose");
+    expect(b).toContain("explore");
+    expect(b).toContain("不要假设未列出的工具可用");
   });
 
-  it("explicitly states the teammate has full execution privileges", () => {
+  it("still documents approval for roles that have mutating tools", () => {
     const b = buildTeammateBoilerplate(identity);
-    expect(b).toContain("完整执行权限");
+    expect(b).toContain("write / edit");
+    expect(b).toContain("request_plan_approval");
   });
 
   it("includes an anti-hallucination disclaimer telling the LLM not to call the `mcp` tool", () => {

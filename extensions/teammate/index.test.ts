@@ -554,7 +554,7 @@ describe("teammateExtension entrypoint", () => {
     errSpy.mockRestore();
   });
 
-  it("session_shutdown attempts to kill ALL running teammates even if one throws", async () => {
+  it("session_shutdown suspends ALL running teammates even if one session abort throws", async () => {
     const handlers = new Map<
       string,
       (event: unknown, ctx: unknown) => unknown
@@ -613,19 +613,15 @@ describe("teammateExtension entrypoint", () => {
     registerTask(aliceState, taskStore);
     registerTask(bobState, taskStore);
 
-    // Spy: replace InProcessTeammateTask.kill with a stub that throws for alice.
-    const origKill = InProcessTeammateTask.kill;
-    let bobKilled = false;
-    InProcessTeammateTask.kill = vi.fn(async (taskId: string) => {
-      if (taskId === aliceState.id) throw new Error("alice kill failed");
-      if (taskId === bobState.id) {
-        bobKilled = true;
-        updateTaskState<InProcessTeammateTaskState>(taskId, taskStore, (t) => ({
-          ...t,
-          status: "killed",
-        }));
-      }
-    }) as never;
+    let bobSuspended = false;
+    aliceState.session = {
+      abort: vi.fn(async () => { throw new Error("alice abort failed"); }),
+      dispose: vi.fn(),
+    } as never;
+    bobState.session = {
+      abort: vi.fn(async () => { bobSuspended = true; }),
+      dispose: vi.fn(),
+    } as never;
 
     const fakeCtx = {
       cwd: "/tmp",
@@ -634,15 +630,15 @@ describe("teammateExtension entrypoint", () => {
     };
     await handlers.get("session_start")!({}, fakeCtx);
 
-    // Now invoke shutdown — should not throw, and should kill bob.
+    // Now invoke shutdown — should not throw, and should still suspend bob.
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     await expect(
-      handlers.get("session_shutdown")!({}, fakeCtx),
+      handlers.get("session_shutdown")!({ reason: "reload" }, fakeCtx),
     ).resolves.not.toThrow();
-    expect(bobKilled).toBe(true);
+    expect(bobSuspended).toBe(true);
+    expect(taskStore.getTask(aliceState.id)?.status).toBe("killed");
+    expect(taskStore.getTask(bobState.id)?.status).toBe("killed");
     errSpy.mockRestore();
-
-    InProcessTeammateTask.kill = origKill;
   });
 
   // ──────────────────────────────────────────────────────────────────────

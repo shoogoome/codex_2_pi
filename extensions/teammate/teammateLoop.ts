@@ -35,6 +35,11 @@ export interface TeammateLoopOptions {
   ) => void;
   /** Called when a turn ends and teammate enters idle. */
   onIdle?: () => void;
+  /** Called when a prompt rejects or resolves with assistant stopReason=error. */
+  onTurnError?: (
+    error: Error,
+    cause: { kind: "initial" } | { kind: "message"; msg: MailboxMessage },
+  ) => void;
   /** Called when the loop terminates cleanly (shutdown approved). */
   onTerminal?: (reason: "shutdown" | "aborted") => void;
   /** Called whenever the teammate is about to ack a shutdown request (so caller can persist event). */
@@ -94,17 +99,44 @@ export function startTeammateLoop(
     return `[from ${msg.from}] ${msg.body}`;
   }
 
+  async function promptWithErrorDetection(text: string): Promise<void> {
+    let assistantError: string | undefined;
+    const unsubscribe = opts.session.subscribe((event) => {
+      const e = event as {
+        type?: string;
+        message?: { role?: string; stopReason?: string; errorMessage?: string };
+      };
+      if (
+        e.type === "message_end"
+        && e.message?.role === "assistant"
+        && e.message.stopReason === "error"
+      ) {
+        assistantError = e.message.errorMessage || "Agent request failed";
+      }
+    });
+    try {
+      await opts.session.prompt(text);
+    } finally {
+      unsubscribe();
+    }
+    if (assistantError) throw new Error(assistantError);
+  }
+
   const done = (async () => {
     try {
       await runAsTeammate(opts.identity, async () => {
         if (opts.initialPrompt !== undefined) {
-          opts.onTurnStart?.({ kind: "initial" });
+          const cause = { kind: "initial" } as const;
+          opts.onTurnStart?.(cause);
           try {
-            await opts.session.prompt(opts.initialPrompt);
-          } catch {
-            // Ignore prompt errors; loop continues.
+            await promptWithErrorDetection(opts.initialPrompt);
+          } catch (error) {
+            opts.onTurnError?.(
+              error instanceof Error ? error : new Error(String(error)),
+              cause,
+            );
           }
-          opts.onIdle?.();
+          if (!opts.abortSignal.aborted) opts.onIdle?.();
         }
 
         let shutdownAcked = false;
@@ -156,13 +188,17 @@ export function startTeammateLoop(
             break;
           }
 
-          opts.onTurnStart?.({ kind: "message", msg });
+          const cause = { kind: "message", msg } as const;
+          opts.onTurnStart?.(cause);
           try {
-            await opts.session.prompt(formatIncoming(msg));
-          } catch {
-            // Ignore.
+            await promptWithErrorDetection(formatIncoming(msg));
+          } catch (error) {
+            opts.onTurnError?.(
+              error instanceof Error ? error : new Error(String(error)),
+              cause,
+            );
           }
-          opts.onIdle?.();
+          if (!opts.abortSignal.aborted) opts.onIdle?.();
         }
 
         opts.onTerminal?.(shutdownAcked ? "shutdown" : "aborted");

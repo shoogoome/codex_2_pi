@@ -102,6 +102,22 @@ describe("renderTeamWidget", () => {
     expect(lines[1]).toContain("working");
   });
 
+  it("surfaces the last turn error instead of pretending the teammate is merely idle", () => {
+    const team: TeamState = {
+      teamName: "t",
+      createdAt: 1,
+      memberAgentIds: ["x@t"],
+    };
+    const tasks = [buildTask("x", "t", {
+      isIdle: true,
+      lastError: "401 child authentication failed",
+    })];
+    const lines = renderTeamWidget([team], tasks);
+    expect(lines[1]).toContain("!");
+    expect(lines[1]).toContain("error: 401 child authentication failed");
+    expect(lines[1]).not.toContain("idle");
+  });
+
   it("singular 1 member / 1 turn / 1 token", () => {
     const team: TeamState = {
       teamName: "solo",

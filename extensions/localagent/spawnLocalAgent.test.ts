@@ -99,6 +99,44 @@ describe("spawnLocalAgent — sync mode", () => {
     expect(result.finalText).toBe("hello");
     expect(fake.dispose).toHaveBeenCalled();
   });
+
+  it("assistant stopReason=error is surfaced as failed instead of empty completed", async () => {
+    const fake = makeFakeSession();
+    _setSdkForTest({
+      createAgentSessionServices: vi.fn().mockResolvedValue({}),
+      SessionManagerInMemory: vi.fn(() => ({ getEntries: () => [], appendMessage: vi.fn() })),
+      createAgentSessionFromServices: vi.fn(async () => ({ session: fake })),
+    });
+    const store = createTaskStore();
+    const promise = spawnLocalAgent(fakePi, store, {
+      prompt: "fail",
+      agentDef: GENERAL_PURPOSE_AGENT,
+      ctxMessages: [],
+      cwd: "/tmp",
+      timeoutMs: 60_000,
+    });
+    while (Object.keys(store.get()).length === 0) {
+      await new Promise((r) => setImmediate(r));
+    }
+    fake.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "401 invalid child auth",
+      },
+    });
+    fake.emit({ type: "agent_end", messages: [] });
+
+    const result = await promise;
+    expect(result.status).toBe("failed");
+    expect(result.finalText).toContain("401 invalid child auth");
+    expect(store.getTask(result.taskId)).toMatchObject({
+      status: "failed",
+      error: "401 invalid child auth",
+    });
+  });
 });
 
 describe("spawnLocalAgent — auto-background", () => {

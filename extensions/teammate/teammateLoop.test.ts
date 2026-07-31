@@ -79,6 +79,48 @@ describe("teammateLoop — initial prompt", () => {
     ac.abort();
     await handle.done;
   });
+
+  it("reports assistant stopReason=error instead of silently treating it as idle success", async () => {
+    const session = makeFakeSession();
+    let eventListener: ((event: unknown) => void) | undefined;
+    session.subscribe.mockImplementation((listener: (event: unknown) => void) => {
+      eventListener = listener;
+      return () => { eventListener = undefined; };
+    });
+    session.prompt.mockImplementation(async () => {
+      eventListener?.({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "error",
+          errorMessage: "401 child auth failed",
+        },
+      });
+    });
+    const mailbox = createMailbox();
+    const onTurnError = vi.fn();
+    const onIdle = vi.fn();
+    const ac = new AbortController();
+    const handle = startTeammateLoop({
+      identity: id,
+      initialPrompt: "go",
+      session,
+      mailbox,
+      onTurnError,
+      onIdle,
+      abortSignal: ac.signal,
+    });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    expect(onTurnError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "401 child auth failed" }),
+      { kind: "initial" },
+    );
+    expect(onIdle).toHaveBeenCalledTimes(1);
+    ac.abort();
+    await handle.done;
+  });
 });
 
 describe("teammateLoop — message-driven turns", () => {

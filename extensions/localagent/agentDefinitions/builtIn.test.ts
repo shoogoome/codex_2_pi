@@ -14,10 +14,8 @@ describe("GENERAL_PURPOSE_AGENT", () => {
   it("source 是 built-in", () => {
     expect(GENERAL_PURPOSE_AGENT.source).toBe("built-in");
   });
-  it("tools 包含 read/grep/find/ls/bash/edit/write", () => {
-    expect(GENERAL_PURPOSE_AGENT.tools).toEqual(
-      expect.arrayContaining(["read", "grep", "find", "ls", "bash", "edit", "write"]),
-    );
+  it("使用完整工具池（调用方仍应用递归与权限过滤）", () => {
+    expect(GENERAL_PURPOSE_AGENT.tools).toEqual(["*"]);
   });
   it("systemPrompt 非空", () => {
     expect(GENERAL_PURPOSE_AGENT.systemPrompt.length).toBeGreaterThan(20);

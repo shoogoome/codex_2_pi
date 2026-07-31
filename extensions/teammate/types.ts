@@ -69,6 +69,8 @@ export interface InProcessTeammateTaskState extends TaskStateBase {
   toolCallCount: number;
   tokenCount: number;
   turnCount: number;
+  /** Last failed turn; cleared when a new turn starts. */
+  lastError?: string;
 }
 
 /**
@@ -98,6 +100,11 @@ export type LeaderNotificationDetails =
   | {
       kind: "idle";
       agentId: string;
+    }
+  | {
+      kind: "turn_error";
+      agentId: string;
+      error: string;
     };
 
 /**

@@ -1,5 +1,6 @@
-// leaderBridge — process-global channel that lets a teammate sub-session
-// reach the LEADER session's notification entry point.
+// leaderBridge — fallback process-global channel for code paths that cannot
+// capture the leader delivery closure directly. Fresh and hydrated in-process
+// teammates use an identity-bound direct closure.
 //
 // Why this exists (see spikes recorded in the D2 plan / spec):
 //   A teammate runs inside its OWN AgentSession, created via

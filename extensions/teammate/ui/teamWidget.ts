@@ -174,11 +174,18 @@ export function renderTeamWidget(
         continue;
       }
 
-      const glyph = task.isIdle ? "◌" : "●";
-      const glyphColor = task.isIdle ? "muted" : "success";
+      const hasTurnError = Boolean(task.lastError);
+      const glyph = hasTurnError ? "!" : task.isIdle ? "◌" : "●";
+      const glyphColor = hasTurnError ? "error" : task.isIdle ? "muted" : "success";
       let state: string;
       let stateColor: string;
-      if (task.isIdle) {
+      if (task.lastError) {
+        const error = task.lastError.length > 48
+          ? `${task.lastError.slice(0, 47)}…`
+          : task.lastError;
+        state = `error: ${error}`;
+        stateColor = "error";
+      } else if (task.isIdle) {
         state = "idle";
         stateColor = "muted";
       } else if (task.lastTool) {

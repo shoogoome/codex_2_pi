@@ -1,11 +1,9 @@
 // teammateToolPool.ts
 //
-// Tool pool computation for teammate sub-sessions. Currently only the
-// recursion guards are blocklisted: keep teammates from spawning more
-// teammates / managing teams. Write-class tools (bash/write/edit/...)
-// remain available — same default as claudecode sub-agents. Teammate
-// is expected to call request_plan_approval before destructive
-// operations (see teammatePromptBoilerplate).
+// Final recursion guard for teammate sub-sessions. Role-level allow/deny
+// resolution happens first in spawn/hydrate; this layer then prevents a
+// teammate from creating nested teams. General-purpose roles may retain
+// write-class tools, while explore/custom read-only roles do not.
 //
 // Both spawnTeammate (fresh spawn) and hydrate.respawnTeammates (resume
 // after session restart) use this so the constant lives in one place.

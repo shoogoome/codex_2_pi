@@ -1,15 +1,15 @@
 // spawnTeammate — entry point for creating a long-lived in-process teammate.
 //
 // Mirrors the SDK injection pattern of `extensions/localagent/spawnLocalAgent.ts`:
-// real SDK calls live behind a tiny adapter (`_sdk`) that tests can override
-// via `_setSdkForTest`, so we never spin up a real LLM session in unit tests.
+// tests can replace `_sdk`; production resolves constructors beside the active
+// Pi CLI so a stale project dev dependency cannot select the child model/auth.
 //
 // Lifecycle:
 //   1. validate team exists + agentId not already running
 //   2. create a fresh persisted SessionManager under
 //      ~/.pi/agent/teammates/<team>/<agent>/
-//   3. resolve tool pool — all active tools minus self-spawning ones
-//      (task_agent / team_create / team_delete) to avoid recursion
+//   3. resolve the selected role's tools, add collaboration tools, and remove
+//      self-spawning team controls
 //   4. register the InProcessTeammateTaskState in the TaskStore
 //   5. emit `teammate_spawn` event for jsonl persistence + add team member
 //   6. start the teammateLoop with onTerminal wired to flip status +
@@ -17,15 +17,17 @@
 
 import { homedir } from "node:os";
 import { join } from "node:path";
-import {
-  createAgentSessionServices as _realCreateAgentSessionServices,
-  createAgentSessionFromServices as _realCreateAgentSessionFromServices,
-  SessionManager as _RealSessionManager,
-  type AgentSession,
-  type ExtensionAPI,
+import type {
+  AgentSession,
+  ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
+import { loadPiRuntimeSdk } from "../shared/pi-runtime-sdk.js";
 
 import type { TaskStore } from "../tasks/taskStore.js";
+import type { AgentDefinition } from "../localagent/types.js";
+import { GENERAL_PURPOSE_AGENT } from "../localagent/agentDefinitions/builtIn.js";
+import type { AgentModel, AgentThinkingLevel } from "../localagent/model.js";
+import { resolveSubAgentTools } from "../localagent/toolPool.js";
 import { registerTask, updateTaskState } from "../tasks/framework.js";
 import { evictTaskOutput, initTaskOutput } from "../tasks/diskOutput.js";
 import { getTaskOutputPath } from "../tasks/outputPath.js";
@@ -36,7 +38,6 @@ import type { TeammateHandle } from "./handle.js";
 import type { InProcessTeammateTaskState, TeammateIdentity } from "./types.js";
 import { isInProcessTeammateTask } from "./types.js";
 import { emitTeammateEvent } from "./eventEmit.js";
-import { getLeaderChannel } from "./leaderBridge.js";
 import { postLeaderNotification } from "./leaderNotification.js";
 import { startTeammateLoop } from "./teammateLoop.js";
 import { filterTeammateTools } from "./teammateToolPool.js";
@@ -52,28 +53,44 @@ import {
 // ---------- SDK injection ----------
 
 export interface TeammateSdkBindings {
-  createAgentSessionServices: (opts: { cwd: string }) => Promise<unknown>;
-  SessionManagerCreate: (cwd: string, sessionDir: string) => unknown;
+  createAgentSessionServices: (opts: {
+    cwd: string;
+    appendSystemPrompt?: string[];
+  }) => Promise<unknown>;
+  SessionManagerCreate: (cwd: string, sessionDir: string) => unknown | Promise<unknown>;
   createAgentSessionFromServices: (opts: {
     services: unknown;
     sessionManager: unknown;
     tools: readonly string[];
     customTools?: readonly unknown[];
+    model?: AgentModel;
+    thinkingLevel?: AgentThinkingLevel;
   }) => Promise<{ session: unknown }>;
 }
 
 let _sdk: TeammateSdkBindings = {
-  createAgentSessionServices: (opts) =>
-    _realCreateAgentSessionServices({ cwd: opts.cwd }) as unknown as Promise<unknown>,
-  SessionManagerCreate: (cwd, sessionDir) =>
-    _RealSessionManager.create(cwd, sessionDir),
-  createAgentSessionFromServices: (opts) =>
-    _realCreateAgentSessionFromServices({
+  createAgentSessionServices: async (opts) => {
+    const sdk = await loadPiRuntimeSdk();
+    return sdk.createAgentSessionServices({
+      cwd: opts.cwd,
+      resourceLoaderOptions: opts.appendSystemPrompt?.length
+        ? { appendSystemPrompt: opts.appendSystemPrompt }
+        : undefined,
+    }) as unknown as Promise<unknown>;
+  },
+  SessionManagerCreate: async (cwd, sessionDir) =>
+    (await loadPiRuntimeSdk()).SessionManager.create(cwd, sessionDir),
+  createAgentSessionFromServices: async (opts) => {
+    const sdk = await loadPiRuntimeSdk();
+    return sdk.createAgentSessionFromServices({
       services: opts.services as never,
       sessionManager: opts.sessionManager as never,
       tools: opts.tools as never,
       customTools: opts.customTools as never,
-    }) as unknown as Promise<{ session: unknown }>,
+      model: opts.model,
+      thinkingLevel: opts.thinkingLevel,
+    }) as unknown as Promise<{ session: unknown }>;
+  },
 };
 
 /** Test helper — replace SDK bindings for the duration of a test. */
@@ -86,9 +103,12 @@ export function _setSdkForTest(bindings: Partial<TeammateSdkBindings>): void {
 export interface SpawnTeammateOptions {
   teamName: string;
   agentName: string;
-  agentType: string;
+  agentDef?: AgentDefinition;
+  /** Backward-compatible direct callers; task_agent resolves agentDef. */
+  agentType?: string;
   prompt: string;
-  model?: string;
+  model?: AgentModel | string;
+  thinkingLevel?: AgentThinkingLevel;
   cwd: string;
   toolUseId?: string;
 }
@@ -152,40 +172,44 @@ export async function spawnTeammate(
     sanitize(opts.teamName),
     sanitize(opts.agentName),
   );
-  const sm = _sdk.SessionManagerCreate(opts.cwd, sessionDir);
+  const sm = await _sdk.SessionManagerCreate(opts.cwd, sessionDir);
   const sessionFile = (sm as { getSessionFile: () => string | undefined }).getSessionFile();
   if (!sessionFile) {
     throw new Error("SessionManager.create did not produce a session file");
   }
 
-  // 3. Tool pool — all *registered* tools (not just the leader's currently
-  //    active set) minus self-spawning ones (recursion guard, D1). We use
-  //    `getAllTools()` here because the leader's localshell extension hides
-  //    Pi's built-in `bash` from the active set (replacing it with task_bash);
-  //    if we used `getActiveTools()` the teammate would inherit that hidden
-  //    state and end up without `bash`, which then makes the LLM hallucinate
-  //    an `mcp` tool to find it. claudecode sub-agents always have plain
-  //    `bash`, so we mirror that. See teammateToolPool.ts for the full
-  //    blocklist.
-  const services = await _sdk.createAgentSessionServices({ cwd: opts.cwd });
-  const allToolInfos = pi.getAllTools();
-  const allToolNames = allToolInfos.map((t) => t.name);
-  const tools = filterTeammateTools(allToolNames);
-
-  // Identity is needed BEFORE session creation so we can inject an
-  // identity-bound send_message as a customTool. The generic extension-
-  // registered send_message cannot resolve the sender inside a sub-session
-  // (cross-realm AsyncLocalStorage returns undefined), so we override it with
-  // a closure that carries this teammate's identity and delivers via the
-  // process-global leaderBridge. The customTool only activates if its name is
-  // in the `tools` allowlist — `send_message` is, since the leader has it as
-  // an active tool.
+  // 3. Resolve identity, role prompt, and tool pool from the selected agent
+  //    definition. Collaboration tools are always added; role tools still
+  //    obey the same allow/deny rules as one-shot agents.
+  const agentDef: AgentDefinition = opts.agentDef ?? {
+    ...GENERAL_PURPOSE_AGENT,
+    agentType: opts.agentType ?? GENERAL_PURPOSE_AGENT.agentType,
+  };
+  const resolvedModel = typeof opts.model === "object" ? opts.model : undefined;
   const identity: TeammateIdentity = {
     agentId,
     agentName: opts.agentName,
     teamName: opts.teamName,
-    agentType: opts.agentType,
+    agentType: agentDef.agentType,
   };
+  const services = await _sdk.createAgentSessionServices({
+    cwd: opts.cwd,
+    appendSystemPrompt: agentDef.systemPrompt
+      ? [agentDef.systemPrompt]
+      : undefined,
+  });
+  const allToolInfos = pi.getAllTools();
+  const allToolNames = allToolInfos.map((t) => t.name);
+  const roleTools = resolveSubAgentTools(agentDef, allToolNames);
+  const collaborationTools = [
+    "send_message",
+    "request_plan_approval",
+    "team_task_create",
+    "team_task_update",
+    "team_task_list",
+    "team_task_get",
+  ];
+  const tools = filterTeammateTools([...new Set([...roleTools, ...collaborationTools])]);
 
   // Leader-realm map of in-flight plan_approval_request entries. Allocated
   // here (not in the teammate sub-session realm) so the request_plan_approval
@@ -210,13 +234,25 @@ export async function spawnTeammate(
     sessionManager: sm,
     tools,
     customTools: [
-      buildTeammateSendMessageTool(identity),
+      buildTeammateSendMessageTool(identity, {
+        mailbox: handle.mailbox,
+        teamStore: handle.teamStore,
+        deliverToLeader: (details, triggerTurn) => {
+          postLeaderNotification(pi, details, triggerTurn);
+        },
+      }),
       buildRequestPlanApprovalTool({
         identity,
         pendingApprovals,
-        getLeaderChannel,
+        getLeaderChannel: () => ({
+          deliver: (details, triggerTurn) => {
+            postLeaderNotification(pi, details, triggerTurn);
+          },
+        }),
       }),
     ],
+    model: resolvedModel,
+    thinkingLevel: opts.thinkingLevel,
   });
   const session = sessionUnknown as AgentSession;
 
@@ -236,7 +272,11 @@ export async function spawnTeammate(
     status: "running",
     identity,
     prompt: opts.prompt,
-    model: opts.model,
+    model: resolvedModel
+      ? `${resolvedModel.provider}/${resolvedModel.id}`
+      : typeof opts.model === "string"
+        ? opts.model
+        : undefined,
     sessionFile,
     session,
     isIdle: false,
@@ -313,8 +353,20 @@ export async function spawnTeammate(
       updateTaskState<InProcessTeammateTaskState>(taskId, taskStore, (t) => ({
         ...t,
         isIdle: false,
+        lastError: undefined,
         turnCount: t.turnCount + 1,
       }));
+    },
+    onTurnError: (error) => {
+      updateTaskState<InProcessTeammateTaskState>(taskId, taskStore, (t) => ({
+        ...t,
+        lastError: error.message,
+      }));
+      postLeaderNotification(
+        pi,
+        { kind: "turn_error", agentId: identity.agentId, error: error.message },
+        /* triggerTurn */ true,
+      );
     },
     onIdle: () => {
       updateTaskState<InProcessTeammateTaskState>(taskId, taskStore, (t) => ({

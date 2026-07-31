@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { installTeammateEventContextFilter } from "./eventEmit.js";
@@ -11,6 +12,7 @@ import {
   _bindPi,
   _unbindPi,
   InProcessTeammateTask,
+  suspendTeammate,
 } from "./killTeammate.js";
 import { buildTeamCreateTool } from "./tools/teamCreate.js";
 import { buildSendMessageTool } from "./tools/sendMessage.js";
@@ -95,15 +97,13 @@ export default function teammateExtension(pi: ExtensionAPI): void {
     // Note: teammate sub-sessions are driven via session.prompt(), never
     // session.bindExtensions(), so this session_start handler does NOT fire
     // for them — only the real leader ever registers a channel.
-    const sessionId = ctx.sessionManager.getSessionId();
-    if (sessionId) {
-      leaderChannelSessionId = sessionId;
-      registerLeaderChannel(sessionId, {
-        deliver: (details, triggerTurn) => {
-          postLeaderNotification(pi, details, triggerTurn);
-        },
-      });
-    }
+    const sessionId = ctx.sessionManager.getSessionId() || `ephemeral:${randomUUID()}`;
+    leaderChannelSessionId = sessionId;
+    registerLeaderChannel(sessionId, {
+      deliver: (details, triggerTurn) => {
+        postLeaderNotification(pi, details, triggerTurn);
+      },
+    });
 
     const tasksHandle = getTasksHandle(pi);
     tasksHandle.registerTaskType("in_process_teammate", InProcessTeammateTask);
@@ -366,7 +366,7 @@ export default function teammateExtension(pi: ExtensionAPI): void {
     await Promise.allSettled(
       running.map(async (t) => {
         try {
-          await InProcessTeammateTask.kill(t.id, tasksHandle.store);
+          await suspendTeammate(tasksHandle.store, t.id);
         } catch (e) {
           logError(e, "teammate session_shutdown kill");
         }

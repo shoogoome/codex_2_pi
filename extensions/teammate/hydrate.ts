@@ -11,15 +11,19 @@
 // Task 4.2 wraps this with the actual respawn flow (calling SessionManager.open
 // for each running teammate). Task 4.3 wires it into session_start.
 
-import {
-  createAgentSessionServices as _realCreateAgentSessionServices,
-  createAgentSessionFromServices as _realCreateAgentSessionFromServices,
-  SessionManager as _RealSessionManager,
-  type AgentSession,
-  type ExtensionAPI,
+import { homedir } from "node:os";
+import { join } from "node:path";
+import type {
+  AgentSession,
+  ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
+import { loadPiRuntimeSdk } from "../shared/pi-runtime-sdk.js";
 
 import type { TaskStore } from "../tasks/taskStore.js";
+import { getBuiltInAgents, GENERAL_PURPOSE_AGENT } from "../localagent/agentDefinitions/builtIn.js";
+import { loadAgentsFromDir } from "../localagent/agentDefinitions/loadFromDisk.js";
+import { getAgentDefinition, mergeAgentDefinitions } from "../localagent/agentDefinitions/resolve.js";
+import { resolveSubAgentTools } from "../localagent/toolPool.js";
 import { registerTask, updateTaskState } from "../tasks/framework.js";
 import { evictTaskOutput, initTaskOutput } from "../tasks/diskOutput.js";
 import { getTaskOutputPath } from "../tasks/outputPath.js";
@@ -36,6 +40,12 @@ import type { TeammateHandle } from "./handle.js";
 import { startTeammateLoop } from "./teammateLoop.js";
 import { filterTeammateTools } from "./teammateToolPool.js";
 import { subscribeTeammateProgress } from "./sessionProgress.js";
+import { buildTeammateSendMessageTool } from "./tools/teammateSendMessage.js";
+import {
+  buildRequestPlanApprovalTool,
+  type PendingApprovals,
+  type PlanApprovalDecision,
+} from "./tools/requestPlanApproval.js";
 import {
   isInProcessTeammateTask,
   type InProcessTeammateTaskState,
@@ -67,25 +77,39 @@ export function hydrateTeammateState(
 // ---------- Task 4.2: respawn flow ----------
 
 export interface HydrateSdkBindings {
-  createAgentSessionServices: (opts: { cwd: string }) => Promise<unknown>;
-  SessionManagerOpen: (path: string) => unknown;
+  createAgentSessionServices: (opts: {
+    cwd: string;
+    appendSystemPrompt?: string[];
+  }) => Promise<unknown>;
+  SessionManagerOpen: (path: string) => unknown | Promise<unknown>;
   createAgentSessionFromServices: (opts: {
     services: unknown;
     sessionManager: unknown;
     tools: readonly string[];
+    customTools?: readonly unknown[];
   }) => Promise<{ session: unknown }>;
 }
 
 const _hydrateSdkDefaults: HydrateSdkBindings = {
-  createAgentSessionServices: (opts) =>
-    _realCreateAgentSessionServices({ cwd: opts.cwd }) as unknown as Promise<unknown>,
-  SessionManagerOpen: (path) => _RealSessionManager.open(path),
-  createAgentSessionFromServices: (opts) =>
-    _realCreateAgentSessionFromServices({
+  createAgentSessionServices: async (opts) => {
+    const sdk = await loadPiRuntimeSdk();
+    return sdk.createAgentSessionServices({
+      cwd: opts.cwd,
+      resourceLoaderOptions: opts.appendSystemPrompt?.length
+        ? { appendSystemPrompt: opts.appendSystemPrompt }
+        : undefined,
+    }) as unknown as Promise<unknown>;
+  },
+  SessionManagerOpen: async (path) => (await loadPiRuntimeSdk()).SessionManager.open(path),
+  createAgentSessionFromServices: async (opts) => {
+    const sdk = await loadPiRuntimeSdk();
+    return sdk.createAgentSessionFromServices({
       services: opts.services as never,
       sessionManager: opts.sessionManager as never,
       tools: opts.tools as never,
-    }) as unknown as Promise<{ session: unknown }>,
+      customTools: opts.customTools as never,
+    }) as unknown as Promise<{ session: unknown }>;
+  },
 };
 
 let _hydrateSdk: HydrateSdkBindings = { ..._hydrateSdkDefaults };
@@ -131,6 +155,9 @@ export async function respawnTeammates(
 ): Promise<{ respawned: string[]; skipped: string[] }> {
   const respawned: string[] = [];
   const skipped: string[] = [];
+  const userDefs = await loadAgentsFromDir(join(homedir(), ".pi", "agents"), "user");
+  const projectDefs = await loadAgentsFromDir(join(ctx.cwd, ".pi", "agents"), "project");
+  const agentDefs = mergeAgentDefinitions(getBuiltInAgents(), userDefs, projectDefs);
 
   for (const [agentId, replayed] of Object.entries(state.teammates)) {
     if (replayed.lastStatus !== "running") {
@@ -163,19 +190,58 @@ export async function respawnTeammates(
     ctx.handle.teamStore.addMember(replayed.identity.teamName, agentId);
 
     // Open the persisted session and wire up an AgentSession on top of it.
-    const sm = _hydrateSdk.SessionManagerOpen(replayed.sessionFile);
-    const services = await _hydrateSdk.createAgentSessionServices({ cwd: ctx.cwd });
-    // Use getAllTools (registered tools, not just currently-active set) so
-    // the teammate gets bash even when the leader's localshell extension
-    // hides it. See spawnTeammate.ts for the full rationale.
+    const sm = await _hydrateSdk.SessionManagerOpen(replayed.sessionFile);
+    const agentDef = getAgentDefinition(agentDefs, replayed.identity.agentType)
+      ?? GENERAL_PURPOSE_AGENT;
+    const services = await _hydrateSdk.createAgentSessionServices({
+      cwd: ctx.cwd,
+      appendSystemPrompt: agentDef.systemPrompt ? [agentDef.systemPrompt] : undefined,
+    });
     const allToolInfos = ctx.pi.getAllTools();
     const allToolNames = allToolInfos.map((t) => t.name);
-    const tools = filterTeammateTools(allToolNames);
+    const roleTools = resolveSubAgentTools(agentDef, allToolNames);
+    const collaborationTools = [
+      "send_message",
+      "request_plan_approval",
+      "team_task_create",
+      "team_task_update",
+      "team_task_list",
+      "team_task_get",
+    ];
+    const tools = filterTeammateTools([...new Set([...roleTools, ...collaborationTools])]);
+
+    const pendingApprovalsMap = new Map<
+      string,
+      { resolve: (d: PlanApprovalDecision) => void; reject: (e: Error) => void }
+    >();
+    const pendingApprovals: PendingApprovals = {
+      set: (id, entry) => { pendingApprovalsMap.set(id, entry); },
+      get: (id) => pendingApprovalsMap.get(id),
+      delete: (id) => { pendingApprovalsMap.delete(id); },
+    };
     const { session: sessionUnknown } =
       await _hydrateSdk.createAgentSessionFromServices({
         services,
         sessionManager: sm,
         tools,
+        customTools: [
+          buildTeammateSendMessageTool(replayed.identity, {
+            mailbox: ctx.handle.mailbox,
+            teamStore: ctx.handle.teamStore,
+            deliverToLeader: (details, triggerTurn) => {
+              postLeaderNotification(ctx.pi, details, triggerTurn);
+            },
+          }),
+          buildRequestPlanApprovalTool({
+            identity: replayed.identity,
+            pendingApprovals,
+            getLeaderChannel: () => ({
+              deliver: (details, triggerTurn) => {
+                postLeaderNotification(ctx.pi, details, triggerTurn);
+              },
+            }),
+          }),
+        ],
       });
     const session = sessionUnknown as AgentSession;
 
@@ -250,6 +316,7 @@ export async function respawnTeammates(
       initialPrompt: undefined, // resume — go straight to idle
       session,
       mailbox: ctx.handle.mailbox,
+      pendingApprovals,
       abortSignal: abortController.signal,
       onTurnStart: () => {
         // Every turn counts on resume too — see spawnTeammate.ts for the
@@ -261,8 +328,21 @@ export async function respawnTeammates(
           (t) => ({
             ...t,
             isIdle: false,
+            lastError: undefined,
             turnCount: t.turnCount + 1,
           }),
+        );
+      },
+      onTurnError: (error) => {
+        updateTaskState<InProcessTeammateTaskState>(
+          taskId,
+          taskStoreRef,
+          (t) => ({ ...t, lastError: error.message }),
+        );
+        postLeaderNotification(
+          piRef,
+          { kind: "turn_error", agentId, error: error.message },
+          /* triggerTurn */ true,
         );
       },
       onIdle: () => {

@@ -20,6 +20,7 @@ import {
 import { getBuiltInAgents, FORK_AGENT } from "../agentDefinitions/builtIn.js";
 import { mergeAgentDefinitions, getAgentDefinition } from "../agentDefinitions/resolve.js";
 import { loadAgentsFromDir } from "../agentDefinitions/loadFromDisk.js";
+import { resolveAgentRuntime } from "../model.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getTeammateHandle, type TeammateHandle } from "../../teammate/handle.js";
@@ -278,6 +279,11 @@ export function buildTaskAgentTool(
         return errResult("isolation 'worktree' not yet supported in this phase");
       }
 
+      const cwd = params.cwd ?? ctx.cwd;
+      const userDefs = await loadAgentsFromDir(join(homedir(), ".pi", "agents"), "user");
+      const projDefs = await loadAgentsFromDir(join(cwd, ".pi", "agents"), "project");
+      const allDefs = mergeAgentDefinitions(getBuiltInAgents(), userDefs, projDefs);
+
       // Route to long-lived teammate path early when team_name / name are present.
       // Both must be set (the cross-pair invariant); we treat any presence of
       // either as opting into the teammate route so a missing partner becomes a
@@ -294,15 +300,22 @@ export function buildTaskAgentTool(
         } catch {
           return errResult("teammate extension not loaded");
         }
-        const teammateCwd = params.cwd ?? ctx.cwd;
+        const teammateAgentType = params.subagent_type ?? "general-purpose";
+        const teammateAgentDef = getAgentDefinition(allDefs, teammateAgentType);
+        if (!teammateAgentDef) {
+          const available = allDefs.map((d) => d.agentType).sort().join(", ");
+          return errResult(`Unknown subagent_type "${teammateAgentType}". Available: ${available}`);
+        }
         try {
+          const runtime = resolveAgentRuntime(pi, ctx, params.model, teammateAgentDef.model);
           const result = await _teammateSpawner(pi, store, teammateHandle, {
             teamName,
             agentName,
-            agentType: params.subagent_type ?? "general-purpose",
+            agentDef: teammateAgentDef,
             prompt: params.prompt,
-            model: params.model,
-            cwd: teammateCwd,
+            model: runtime.model,
+            thinkingLevel: runtime.thinkingLevel,
+            cwd,
           });
           return {
             content: [
@@ -325,11 +338,6 @@ export function buildTaskAgentTool(
           return errResult(`task_agent failed: ${(e as Error).message ?? String(e)}`);
         }
       }
-
-      const cwd = params.cwd ?? ctx.cwd;
-      const userDefs = await loadAgentsFromDir(join(homedir(), ".pi", "agents"), "user");
-      const projDefs = await loadAgentsFromDir(join(cwd, ".pi", "agents"), "project");
-      const allDefs = mergeAgentDefinitions(getBuiltInAgents(), userDefs, projDefs);
 
       let agentDef;
       let parentSessionFile: string | undefined;
@@ -418,13 +426,15 @@ export function buildTaskAgentTool(
       }
 
       try {
+        const runtime = resolveAgentRuntime(pi, ctx, params.model, agentDef.model);
         const result = await _spawner(pi, store, {
           prompt: params.prompt,
           agentDef,
           ctxMessages: (ctx as { messages?: readonly unknown[] }).messages ?? [],
           cwd,
           description: params.description,
-          model: params.model,
+          model: runtime.model,
+          thinkingLevel: runtime.thinkingLevel,
           forceBackground: params.run_in_background === true,
           parentSessionFile,
           allRegisteredTools: pi.getActiveTools(),
@@ -449,6 +459,7 @@ export function buildTaskAgentTool(
         }
         return {
           content: [{ type: "text", text: result.finalText ?? "" }],
+          ...(result.status === "failed" ? { isError: true } : {}),
           details: {
             action: "task_agent",
             taskId: result.taskId,

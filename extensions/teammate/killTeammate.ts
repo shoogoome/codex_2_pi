@@ -28,6 +28,43 @@ import { getTeammateHandle } from "./handle.js";
 import { emitTeammateEvent } from "./eventEmit.js";
 import type { InProcessTeammateTaskState } from "./types.js";
 
+/**
+ * Tear down an in-process teammate without writing a terminal event. Used when
+ * the leader runtime is replaced/reloaded so the persisted `teammate_spawn`
+ * remains resumable on the next session_start.
+ */
+export async function suspendTeammate(
+  taskStore: TaskStore,
+  taskId: string,
+): Promise<void> {
+  const task = taskStore.getTask(taskId) as InProcessTeammateTaskState | undefined;
+  if (!task || isTerminalTaskStatus(task.status)) return;
+
+  updateTaskState<InProcessTeammateTaskState>(taskId, taskStore, (cur) => ({
+    ...cur,
+    status: "killed",
+    endTime: Date.now(),
+    notified: true,
+  }));
+
+  try {
+    task.abortController?.abort();
+  } catch (e) {
+    logError(e, "suspendTeammate abortController");
+  }
+  try {
+    await task.session?.abort();
+  } catch (e) {
+    logError(e, "suspendTeammate session.abort");
+  }
+  try {
+    task.session?.dispose();
+  } catch (e) {
+    logError(e, "suspendTeammate session.dispose");
+  }
+  void evictTaskOutput(taskId);
+}
+
 export async function killTeammate(
   pi: ExtensionAPI,
   taskStore: TaskStore,
