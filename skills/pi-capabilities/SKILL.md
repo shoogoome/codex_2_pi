@@ -20,6 +20,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 | `/profile [save\|apply\|delete\|<name>]` | profiles | 保存/切换模型+工具+thinking+审批的命名预设 |
 | `/resume-picker [--all] [过滤词]`, `/search <关键词>` | resume-picker | 恢复历史会话、跨项目全文检索会话（改名避让 pi 内置 `/resume`) |
 | `/autopilot [on [目标]\|off\|status]` | autopilot | 自主续跑控制器 |
+| `/effort [off\|minimal\|low\|medium\|high\|xhigh\|max\|ultra]` | effort | 查看/切换 thinking；Ultra 为 GPT-5.6 Sol/Terra 开启 max + 主动 subagent 委派 |
 | `/local-models [list\|pull\|ensure_ready]`, `/ollama`, `/lm` | local-models | 发现/拉取/就绪检查本地模型(Ollama/LM Studio) |
 | `/mcp [list\|status\|add\|remove\|reconnect]` | mcp | 管理 MCP server 连接 |
 | `/plugin`, `/plugin marketplace …`, `/plugin install\|remove\|update …` | plugin-loader | 管理 Marketplace 与 user/project/local scope 的 Claude 风格插件 |
@@ -71,6 +72,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **接外部工具 / 第三方能力**：`/mcp add`（MCP server）；Claude 风格插件用 `/plugin marketplace add` 后 `/plugin install`。
 - **复用已有 Claude/Cursor 配置**：`/migrate`。
 - **跨会话记住偏好/事实**：memory 默认自动初始化、召回和按需提炼；`/remember`、`/memory` 只在需要强制记录、查看或纠错时使用。
+- **调模型推理强度 / 开 Codex Ultra 编排**：`/effort`；GPT-5.6 Sol/Terra 用 `/effort ultra` 进入原生 max + 主动 subagent 委派模式。
 - **用本地模型**：`/local-models list` / `pull` / `ensure_ready`。
 - **要花了多少钱 / 用了多少 token**：`/cost`。
 - **生命周期自动化（提交前/工具前后注入或拦截）**：hooks-runner + `/hooks`，配置 `.pi/hooks.json`。
@@ -82,6 +84,6 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 
 ## 详情文档
 
-- 新增扩展文档：`docs/extensions/{claude-ui,input-history,context-pipeline,compact-continue,agents-context,settings-env,memory,approvals,plan-mode,profiles,resume-picker,autopilot,local-models,mcp,plugin-loader,hooks-runner,agents,migrate,monitor,cost-usage}.md`
+- 新增扩展文档：`docs/extensions/{claude-ui,input-history,context-pipeline,compact-continue,agents-context,settings-env,memory,approvals,plan-mode,profiles,resume-picker,autopilot,effort,local-models,mcp,plugin-loader,hooks-runner,agents,migrate,monitor,cost-usage}.md`
 - 原有基础扩展（diff/review/init/imagegen/todo/compact-ui/pets/goal/side/localagent/localshell/tasks/teammate/user-input）：见仓库 `README.md`
 - 总表：`docs/CAPABILITIES.md`

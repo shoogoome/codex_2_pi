@@ -17,6 +17,7 @@
 | `extensions/init` | 通过主 agent 检查项目并创建项目 `AGENTS.md` 指南（已存在则跳过）。 | `/init` |
 | `extensions/imagegen` | OpenAI Images 生图工具 + 图片路径展示器（结果只返回路径）。 | `generate_image` · `/images` |
 | `extensions/todo` | Codex 风格 `update_plan`（整份计划快照）+ 计划渲染 + 常驻 plan overlay。 | `update_plan` |
+| `extensions/effort` | 查看/切换 thinking 档位；为 GPT-5.6 Sol/Terra 复刻 Codex Ultra：请求使用原生 `max`，同时开启主动 subagent 委派。 | `/effort [off\|minimal\|low\|medium\|high\|xhigh\|max\|ultra]` |
 | `extensions/compact-ui` | Codex 风格紧凑 UI:消息前缀化 + 常见内置工具短渲染（与 claude-ui 互斥）。 | （`--claude-ui=false` 回退到此皮肤） |
 | `extensions/pets` | Codex 风格终端宠物 widget，依 agent 状态切换动画，Kitty graphics/tmux passthrough 可选，其余回退 block-art。 | （无命令，自动 widget） |
 | `extensions/goal` | Codex 风格 thread goal:持久目标 + 预算消耗 + 续跑提示，随 session 保存。 | `get_goal` / `create_goal` / `update_goal` · `/goal <objective>` · `/goal resume` |
@@ -92,6 +93,10 @@
 折叠后的 TUI 行使用 Codex 风格摘要：已启动 agent、已发送输入、等待中、等待结束、已关闭 agent。展开后的行显示 Pi 特定的调试信息，例如最近的子进程工具调用、stderr 预览和用量计数。这些信息只用于 UI 可观测性，不会作为完整日志返回给父模型。
 
 在交互式 TUI 中，`extensions/subagents` 还会在聊天输入框下方显示当前 `starting` / `running` 的 subagent 列表。列表只作为 UI 状态提示，不会写入模型上下文；所有 subagent 都结束后该提示会自动消失。
+
+## `/effort`
+
+`/effort` 不带参数时显示当前档位；传入普通档位时调用 Pi 原生 thinking level。`/effort ultra` 对齐 Codex 的 GPT-5.6 Ultra 语义：仅对 `gpt-5.6-sol` / `gpt-5.6-terra` 开放，把模型请求设置为原生 `max`，并在系统提示词中加入 Codex 的 proactive multi-agent mode，使主模型在并行工作能明显改善速度或质量时主动调用 `task_agent`。Ultra 状态随 session 分支持久化；切换到其他 thinking 档位或不支持的模型会退出该模式。当前 provider/model 配置必须暴露原生 `max`，否则命令会恢复原档位并给出警告。
 
 ## `/side`
 
