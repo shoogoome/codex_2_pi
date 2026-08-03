@@ -11,7 +11,7 @@
   - `extensions/user-input` 注册 `request_user_input`、`ask_user_question` 和 `askUserQuestion` 工具。
   - `extensions/subagents` 注册 Codex 风格的 subagent 工具和 RPC 进程相关逻辑。
   - `extensions/init` 实现 `/init` 以及生成 `AGENTS.md` 的引导提示词。
-  - `extensions/imagegen` 实现 `generate_image` 生图工具、`/images` 图片路径展示器，以及配套 imagegen skill；只把图片路径返回给模型，预览在 UI 层完成。
+  - `extensions/imagegen` 移植 codex 内置 `image_gen.imagegen` 生图工具：复用 openai-codex 订阅 OAuth 直连 ChatGPT 图片 API（gpt-image-2），结果保存到 `~/.pi/agent/generated_images/<sessionId>/` 并默认回传给模型迭代。
   - `extensions/goal` 是独立的目标跟踪扩展包。
   - `extensions/shared` 包含多个扩展共用的 git、文本和类型辅助代码。
 - `docs/superpowers/` 包含设计规格和实现计划；将其视为历史/上下文文档。
@@ -41,8 +41,8 @@
 - 除非明确要求，避免编辑 `codex/`；它只是参考资料，并且已被 `.gitignore` 和 `tsconfig.json` 排除。
 - 不要提交生成的依赖或产物，例如 `node_modules/`、`coverage/`、`dist/` 或 `*.tsbuildinfo`。
 - 修改 subagent RPC 代码时要谨慎：它会启动 `pi --mode rpc --no-session` 子进程，并且必须在关闭会话时清理进程。
-- imagegen 工具不得把生成图片作为 `{ type: "image" }` tool content 返回，避免 base64 图片进入 LLM 上下文；只返回路径，并用 custom entry 记录索引供 `/images` 使用。`/images` 只应基于当前有效上下文文本路径和 imagegen custom entry 列表，不要扫描磁盘目录。
-- imagegen 的 `~/.pi/agent/models.json` 配置需保持 Pi 原生校验兼容：`type: "image"` provider 示例应包含 `baseUrl`、`apiKey`、`api: "openai-responses"` 和 `models: []`，实际生图模型放在 extension 自定义的 `imageModels` 字段。
+- imagegen 只支持 openai-codex 订阅 OAuth（ChatGPT 账号），不支持 API key；图片端点 URL 拼接与 host 白名单（chatgpt.com/chat.openai.com）必须与 `extensions/imagegen/src/codex-images.ts` 保持一致，OAuth token 只用于当次请求，不得持久化或写进日志/工具结果。
+- imagegen 默认把生成图片作为 `{ type: "image" }` tool content 返回给模型（codex 同款，便于检查迭代）；用户可用 `--imagegen-return-image=false` 关闭回传只返回路径。改此默认前请与用户确认。
 - git 命令辅助逻辑默认 30 秒超时；保留 Pi UI 动作触发命令时的 abort signal 传递。
 - 修改包元数据前，同时检查根目录 `package.json` 和各扩展目录下的 `package.json`。
 

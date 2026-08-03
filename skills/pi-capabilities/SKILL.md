@@ -33,7 +33,6 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 | `/diff` | diff | git 工作树变更(含未跟踪) |
 | `/review [指令]` | review | Codex 风格评审预设 |
 | `/init` | init | 生成项目 AGENTS.md |
-| `/images` | imagegen | 图片路径展示器 |
 | `/side [message]` | side | 基于当前 leaf 上下文的临时 side 会话 overlay |
 | `/goal <目标>`, `/goal resume` | goal | thread goal 创建/恢复 |
 
@@ -55,7 +54,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **team_create / send_message / request_plan_approval / team_delete / team_plan_approve** + team task 工具（teammate）：长生命周期团队、主动 leader 消息、计划审批、resume 与优雅关闭。
 - **update_plan**（todo）：整份计划快照更新 + 常驻 overlay。
 - **get_goal / create_goal / update_goal**（goal）：thread 持久目标。
-- **generate_image**（imagegen）：生图，只返回路径。
+- **generate_image**（imagegen）：Codex 订阅生图/编辑（gpt-image-2，走 openai-codex OAuth），保存到 `~/.pi/agent/generated_images/<session>/` 并默认把图返回模型迭代；`--imagegen-return-image=false` 可只返回路径。
 - **request_user_input / ask_user_question / askUserQuestion**（user-input）：向用户提 1-3 个带选项的问题。
 - **exit_plan_mode**（plan-mode）：模型提交计划并请求退出只读规划。
 - **mcp__<server>__<tool>**（mcp）：远端 MCP 工具注册成的 Pi 原生工具。

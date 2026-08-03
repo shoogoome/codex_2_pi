@@ -85,7 +85,7 @@
 | `diff` | 展示已跟踪和未跟踪的 git 工作树变更。 | `/diff` |
 | `review` | Codex 风格评审预设：对比基准分支 / 未提交变更 / 某提交 / 自定义指令。 | `/review [instructions]` |
 | `init` | 通过主 agent 检查项目并创建简洁的 `AGENTS.md` 指南（已存在则跳过）。 | `/init` |
-| `imagegen` | OpenAI Images 生图工具 + 图片路径展示器（结果只返回路径不入上下文）。 | 工具 `generate_image` · `/images` |
+| `imagegen` | Codex 订阅生图：复刻 codex 内置 `image_gen.imagegen`，走 openai-codex OAuth 直连 ChatGPT 图片 API（gpt-image-2），结果保存到 `~/.pi/agent/generated_images/<session>/` 并默认回传模型迭代。 | 工具 `generate_image` |
 | `todo` | Codex 风格 `update_plan`（整份计划快照）+ 常驻 plan overlay + session 恢复。 | 工具 `update_plan` |
 | `compact-ui` | Codex 风格紧凑 UI：用户/模型消息前缀化，常见内置工具短渲染（与 claude-ui 互斥）。 | `--claude-ui=false` 回退到此皮肤 |
 | `pets` | Codex 风格终端宠物 widget，依 agent 状态切换动画，Kitty graphics/tmux passthrough 可选，其余回退 block-art。 | （无命令，自动 widget） |

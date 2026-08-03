@@ -36,11 +36,12 @@ const EXT_ROOT = join(REPO_ROOT, "extensions");
  * import.meta.url and would break as a single-file bundle. They keep their
  * package.json pointing at index.ts and continue to load via jiti (correct,
  * just not sped up).
- *   - imagegen: joins import.meta.url baseDir with SKILL.md (resources_discover)
  *   - pets:     resolves ../catalog (spritesheet.png, pet.json) from import.meta.url
  * "shared" is skipped implicitly (no index.ts entry; it is imported by others).
+ * (imagegen was historically skipped for a SKILL.md resource; the codex-port
+ * rewrite has no resource deps and bundles normally.)
  */
-const SKIP = new Set(["imagegen", "pets", "shared"]);
+const SKIP = new Set(["pets", "shared"]);
 
 /** Discover extension directories that have an index.ts entry point. */
 function discoverExtensions() {
@@ -99,7 +100,7 @@ async function main() {
     );
   }
   const skipped = [...SKIP].filter((n) => n !== "shared");
-  console.log(`\nDone. Bundled ${results.length}. Skipped (unbundled, resource deps): ${skipped.join(", ")}.`);
+  console.log(`\nDone. Bundled ${results.length}. Skipped (unbundled, resource deps): ${skipped.join(", ") || "none"}.`);
 }
 
 main().catch((err) => {

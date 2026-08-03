@@ -15,7 +15,7 @@
 | `extensions/user-input` | 向用户提问 1-3 个带选项的问题（UI 自动加 `Other` 自由文本项）。 | `request_user_input` / `ask_user_question` / `askUserQuestion` |
 | `extensions/side` | 在 Pi overlay 中从当前 leaf 启动临时 fork subagent，关闭窗口即关闭 side 会话。 | `/side [message]` |
 | `extensions/init` | 通过主 agent 检查项目并创建项目 `AGENTS.md` 指南（已存在则跳过）。 | `/init` |
-| `extensions/imagegen` | OpenAI Images 生图工具 + 图片路径展示器（结果只返回路径）。 | `generate_image` · `/images` |
+| `extensions/imagegen` | Codex 订阅生图：复刻 codex 内置 `image_gen.imagegen`，走 openai-codex OAuth 直连 ChatGPT 图片 API（gpt-image-2），生成/编辑结果保存到 `~/.pi/agent/generated_images/<session>/` 并回传给模型检查迭代。 | `generate_image` |
 | `extensions/todo` | Codex 风格 `update_plan`（整份计划快照）+ 计划渲染 + 常驻 plan overlay。 | `update_plan` |
 | `extensions/effort` | 通用 thinking 档位、Codex 风格两级高级选择器、`/model` 模型+档位原子选择，以及 `Alt+,` / `Alt+.` 升降快捷键。 | `/effort [status\|off\|minimal\|low\|medium\|high\|xhigh\|max\|ultra]` · `/model` |
 | `extensions/ultra` | GPT-5.6 Sol/Terra 的独立 Codex Ultra controller：会话态 `ultra`、请求下沉 `max`、主动 multi-agent 政策、恢复语义和 TUI 状态。 | 由 `/effort ultra` 或 `/model` 高级选择器进入 |
@@ -141,38 +141,21 @@ Pi 也支持 `.pi/SYSTEM.md` 和 `APPEND_SYSTEM.md`，但 `/init` 有意以 `AGE
 }
 ```
 
-## Imagegen 生图
+## Imagegen 生图（Codex 订阅）
 
-`extensions/imagegen` 使用 `~/.pi/agent/models.json` 中 `type: "image"` 的 provider 配置。第一版支持 OpenAI Images API。为了让该配置仍通过 Pi 原生 `models.json` 校验，image provider 也要带上一个 Pi 已知的 `api` 和空的 `models` 数组；真正的生图模型放在 extension 自定义的 `imageModels` 中：
+`extensions/imagegen` 是 codex 内置 `image_gen.imagegen` 工具的 pi 移植（参考 `codex/codex-rs/ext/image-generation`）。它复用 pi 已有的 openai-codex ChatGPT 订阅 OAuth 凭证，直连官方图片 API，无需 API key、无需 models.json 里的 image provider 配置：
 
-```json
-{
-  "providers": {
-    "openai-image": {
-      "type": "image",
-      "baseUrl": "https://api.openai.com/v1",
-      "apiKey": "OPENAI_API_KEY",
-      "api": "openai-responses",
-      "models": [],
-      "imageModels": [
-        {
-          "id": "gpt-image-1",
-          "name": "GPT Image 1",
-          "api": "openai-images",
-          "defaultSize": "1024x1024",
-          "defaultFormat": "png"
-        }
-      ]
-    }
-  }
-}
-```
+- `POST https://chatgpt.com/backend-api/codex/images/generations` 生成；`POST …/images/edits` 编辑（JSON body + data URL 图片，非 multipart）
+- 模型固定 `gpt-image-2`，`background`/`quality`/`size` 全部 `auto`（与 codex 内置工具一致，不暴露旋钮）
+- 参数：`prompt`；编辑时二选一传 `referenced_image_paths`（本地图片绝对路径，≤5）或 `num_last_images_to_include`（最近会话图片 1-5）
+- 认证：通过 `ctx.modelRegistry` 找 openai-codex 模型并走 `getApiKeyAndHeaders` 取 OAuth token；API key 模式会明确报错
 
-`apiKey` 支持环境变量名或直接写入 key；推荐使用环境变量名，例如上例中的 `OPENAI_API_KEY`。
+`generate_image` 会把结果保存到 `~/.pi/agent/generated_images/<sessionId>/<toolCallId>.png`（codex 的 `$CODEX_HOME/generated_images/<thread>/<call>.png` 布局），同时把图片作为 image content block 返回给模型以便检查与迭代（codex 同款行为；当前模型不支持图片输入时 pi 会自动降级为文本提示）。两个开关：
 
-`generate_image` 会生成图片并保存到 `~/.pi/agent/generated_images/<date>/<tool-call-id>.png`，工具结果只返回文本路径，不返回图片 bytes，避免图片内容进入模型上下文。工具会用 custom entry 记录生成图片索引，这类 entry 不参与 LLM 上下文。
+- `--imagegen=false`：整体禁用该工具
+- `--imagegen-return-image=false`：不把图片回传模型（省上下文），只返回保存路径，模型可用 read 工具查看图片
 
-`/images` 会打开一个 TUI 图片展示器，列出当前有效 LLM 上下文中提到的本地图片路径，以及本扩展生成并记录的图片路径；它不会扫描磁盘目录。也支持手动输入 path 后预览。预览只发生在 UI 层，不写入 LLM 上下文。终端 inline 图片显示依赖 Kitty/Ghostty/WezTerm/iTerm2 等支持图片协议的终端；Pi TUI 当前在 tmux/screen 中会保守禁用图片协议，因此 tmux 下通常只会提示路径，建议在外层终端直接运行 Pi 或用终端自己的图片打开方式查看。
+注意：生图通常需要 20 秒到几分钟，工具内置 300s 超时与 5s 进度更新。
 
 ## Codex Todo / `update_plan`
 

@@ -1,8 +1,12 @@
 {
-  "name": "pi-codex-imagegen-extension",
+  "name": "pi-imagegen-extension",
   "version": "0.1.0",
+  "description": "Codex subscription image generation (gpt-image-2 via openai-codex OAuth) as a pi generate_image tool — a port of codex's built-in image_gen.imagegen.",
   "type": "module",
-  "main": "index.ts",
+  "main": "./index.ts",
+  "pi": {
+    "extensions": ["dist/index.js"]
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
