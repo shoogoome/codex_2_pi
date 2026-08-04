@@ -23,6 +23,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 | `/effort [status\|off\|minimal\|low\|medium\|high\|xhigh\|max\|ultra]`、`/model`、`Alt+,` / `Alt+.` | effort + ultra | 两级选择 thinking；独立 Ultra controller 为 Codex 订阅 Sol/Terra 开启会话态 Ultra、wire max 与主动 subagent 委派 |
 | `/local-models [list\|pull\|ensure_ready]`, `/ollama`, `/lm` | local-models | 发现/拉取/就绪检查本地模型(Ollama/LM Studio) |
 | `/mcp [list\|status\|add\|remove\|reconnect]` | mcp | 管理 MCP server 连接 |
+| `/channel [status\|restart]` | channel | 查看/重启外部 HTTP 入站 Channel；配置 `PI_CHANNEL_TOKEN` 后接受 `POST /v1/messages` 并可唤醒 Pi |
 | `/plugin`, `/plugin marketplace …`, `/plugin install\|remove\|update …` | plugin-loader | 管理 Marketplace 与 user/project/local scope 的 Claude 风格插件 |
 | `/hooks` | hooks-runner | 列出已配置生命周期 hook |
 | `/agents [list\|show <name>\|use <name>]` | agents | 查看/应用 subagent 角色 |
@@ -68,7 +69,8 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **想让 agent 不停手连续推进长任务**：`/autopilot on [目标]`（有预算/轮数/收益递减停止）。
 - **切回过去的会话 / 找以前聊过的内容**：`/resume-picker`、`/search`(pi 内置 `/resume` 也能朴素切换会话)。
 - **常用配置组合一键切换**：`/profile save` 后 `/profile <name>`，或 `--profile` 启动应用。
-- **接外部工具 / 第三方能力**：`/mcp add`（MCP server）；Claude 风格插件用 `/plugin marketplace add` 后 `/plugin install`。
+- **接外部工具 / 第三方能力**：`/mcp add`（Pi 主动调用 MCP server）；Claude 风格插件用 `/plugin marketplace add` 后 `/plugin install`。
+- **让告警、CI、IDE 等外部系统主动通知/唤醒 Pi**：配置 `PI_CHANNEL_TOKEN`，调用 Channel 的 `POST /v1/messages`；用 `/channel status` 查看监听地址与发现文件。
 - **复用已有 Claude/Cursor 配置**：`/migrate`。
 - **跨会话记住偏好/事实**：memory 默认自动初始化、召回和按需提炼；`/remember`、`/memory` 只在需要强制记录、查看或纠错时使用。
 - **调模型推理强度 / 开 Codex Ultra 编排**：`/effort` 或 `/model` 两级选择器；Codex 订阅 GPT-5.6 Sol/Terra 用 Ultra 进入会话态 `ultra` + wire `max` + 主动 subagent 委派模式。
@@ -83,6 +85,6 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 
 ## 详情文档
 
-- 新增扩展文档：`docs/extensions/{claude-ui,input-history,context-pipeline,compact-continue,agents-context,settings-env,memory,approvals,plan-mode,profiles,resume-picker,autopilot,effort,ultra,local-models,mcp,plugin-loader,hooks-runner,agents,migrate,monitor,cost-usage}.md`
+- 新增扩展文档：`docs/extensions/{claude-ui,input-history,context-pipeline,compact-continue,agents-context,settings-env,channel,memory,approvals,plan-mode,profiles,resume-picker,autopilot,effort,ultra,local-models,mcp,plugin-loader,hooks-runner,agents,migrate,monitor,cost-usage}.md`
 - 原有基础扩展（diff/review/init/imagegen/todo/compact-ui/pets/goal/side/localagent/localshell/tasks/teammate/user-input）：见仓库 `README.md`
 - 总表：`docs/CAPABILITIES.md`

@@ -1,0 +1,16 @@
+{
+  "name": "pi-channel-extension",
+  "version": "0.1.0",
+  "description": "Authenticated HTTP ingress for delivering external events into a running Pi session.",
+  "type": "module",
+  "main": "./index.ts",
+  "pi": {
+    "extensions": [
+      "dist/index.js"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}

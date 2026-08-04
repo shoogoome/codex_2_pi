@@ -37,6 +37,7 @@
 | `extensions/compact-continue` | Pi 阈值压缩后保守判断是否仍有工作：仅在 toolResult、截断/tool-use 回合或未完成计划等强信号下隐藏续跑一次，并让真实用户/自动队列优先。 | `--compact-continue`（默认开）· `--compact-continue=false` 关闭 |
 | `extensions/agents-context` | 补充加载 `AGENTS.md`/`CLAUDE.md`、`.claude/rules`、`@include`、条件 paths 规则，去重后隐藏注入。 | `--agents-context`（默认开）· `PI_AGENTS_CONTEXT=0` |
 | `extensions/settings-env` | 从全局和项目 `settings.json` 的顶层 `env` 读取变量并注入 Pi 进程；已有环境默认优先。 | `env` · `envOverride` |
+| `extensions/channel` | 通用外部 HTTP 入站 Channel：Bearer 鉴权、幂等/限流、会话发现，并用 steer/follow-up/next-turn 语义把事件注入当前 Pi 会话。默认监听 `0.0.0.0:4317`，仅配置 `PI_CHANNEL_TOKEN` 后启动。 | `/channel [status\|restart]` · `POST /v1/messages` |
 | `extensions/memory` | Claude Code 风格自动长期记忆：零配置初始化、相关主题召回、每轮按需提炼并去重更新 `.pi/memory`。 | `/memory [list\|show\|init]` · `/remember <text>`（均为可选手动入口） |
 | `extensions/approvals` | 唯一审批闸门:权限模式 × 规则库 × 命令安全 × 受保护路径 × MCP 逐工具，统一 allow/ask/deny。 | `/approvals [mode\|rules\|allow\|ask\|deny\|remove]` |
 | `extensions/plan-mode` | 只读规划闸门:仅可探查，模型提交计划经批准后才恢复写工具。 | `/plan [on\|off]` · `Alt+P` · `exit_plan_mode` |
@@ -54,6 +55,20 @@
 | `extensions/migrate` | 一次性把 Claude/Cursor 的 MCP、subagents、commands、hooks、memory 导入 `.pi/`，只导缺失不覆盖。 | `/migrate [category]` · `--dry-run` |
 | `extensions/monitor` | 只读效果监控:缓存命中率、上下文构成、清理/压缩回收比，面板 + footer 展示。 | `/monitor` |
 | `extensions/cost-usage` | 只读追踪会话美元成本、按模型 token、时长与编辑增删行，并在 OAuth 模式查看 Codex 订阅套餐额度与重置时间。 | `/cost` · `/usage` |
+
+## External HTTP Channel
+
+配置 `PI_CHANNEL_TOKEN` 后，`extensions/channel` 会监听 `0.0.0.0:4317`（host/port 可通过 `PI_CHANNEL_HOST`、`PI_CHANNEL_PORT` 覆盖），让外部告警、CI、IDE 或定时任务向当前 Pi 会话投递消息并按需唤醒模型：
+
+```bash
+curl "http://<机器IP>:4317/v1/messages" \
+  -H "Authorization: Bearer $PI_CHANNEL_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: alert-123" \
+  -d '{"source":"alertmanager","content":"生产环境出现告警，请检查","delivery":"steer","wake":true}'
+```
+
+接口返回 `202 Accepted` 只代表消息已进入 Pi；不会同步等待模型回答。`/channel status` 查看监听与发现文件，完整协议、安全限制和配置见 [`docs/extensions/channel.md`](docs/extensions/channel.md)。
 
 ## 命令
 

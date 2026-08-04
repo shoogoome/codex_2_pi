@@ -56,6 +56,7 @@
 | 扩展 | 一句话能力 | 主要命令 / 入口 | 详情 |
 |---|---|---|---|
 | `webfetch` | 客户端联网抓取（移植 Claude WebFetch）：给 URL(+可选阅读意图) → fetch → HTML 转 markdown 交模型阅读。SSRF 防护（私有段拦截 + 连接前 DNS 守卫 + 重定向逐跳校验）、10MB 流式截断、100K 字符上限、15min 缓存；v1 不做二级模型问答。 | 工具 `webfetch` · `--webfetch`（默认开） | [webfetch.md](extensions/webfetch.md) |
+| `channel` | 通用外部 HTTP 入站：在配置 Bearer Token 后监听 `0.0.0.0:4317`，经校验、幂等和限流将外部事件按 steer/follow-up/next-turn 语义注入并可唤醒当前 Pi 会话。 | `/channel [status\|restart]` · `POST /v1/messages` · `PI_CHANNEL_TOKEN` | [channel.md](extensions/channel.md) |
 
 ### 工具
 
