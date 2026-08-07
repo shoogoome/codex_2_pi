@@ -41,6 +41,7 @@
 | `profiles` | 命名配置预设（模型 + 工具 + thinking + 审批模式）一键保存/切换/删除，支持 `--profile` 启动应用。 | `/profile`（`save`/`apply`/`delete`/`<name>`）· `--profile <name>` | [profiles.md](extensions/profiles.md) |
 | `resume-picker` | 会话恢复选择器 + 跨项目会话全文检索（rg，缺失时降级内存匹配），命中后切回历史会话。 | `/resume-picker [--all] [过滤词]` · `/search <关键词>` | [resume-picker.md](extensions/resume-picker.md) |
 | `autopilot` | 自主续跑控制器：一轮结束后自动注入隐藏 follow-up 连续推进，默认关闭，按预算/轮数/收益递减自动停止。 | `/autopilot`（`on [objective]`/`off`/`status`） | [autopilot.md](extensions/autopilot.md) |
+| `loop` | Claude Code 风格定时循环：立即执行一次提示词，之后在 agent 空闲时按固定间隔重复；会话内生效并在 7 天后自动过期。 | `/loop [interval] <prompt>` · `/loop list` · `/loop cancel <id\|all>` | [loop.md](extensions/loop.md) |
 
 ### 模型
 
