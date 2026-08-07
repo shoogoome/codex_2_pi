@@ -20,6 +20,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 | `/profile [save\|apply\|delete\|<name>]` | profiles | 保存/切换模型+工具+thinking+审批的命名预设 |
 | `/resume-picker [--all] [过滤词]`, `/search <关键词>` | resume-picker | 恢复历史会话、跨项目全文检索会话（改名避让 pi 内置 `/resume`) |
 | `/autopilot [on [目标]\|off\|status]` | autopilot | 自主续跑控制器 |
+| `/loop [interval] <prompt>`、`/loop list`、`/loop cancel <id\|all>` | loop | 定时重复运行提示词或斜杠命令；创建后立即执行一次 |
 | `/effort [status\|off\|minimal\|low\|medium\|high\|xhigh\|max\|ultra]`、`/model`、`Alt+,` / `Alt+.` | effort + ultra | 两级选择 thinking；独立 Ultra controller 为 Codex 订阅 Sol/Terra 开启会话态 Ultra、wire max 与主动 subagent 委派 |
 | `/local-models [list\|pull\|ensure_ready]`, `/ollama`, `/lm` | local-models | 发现/拉取/就绪检查本地模型(Ollama/LM Studio) |
 | `/mcp [list\|status\|add\|remove\|reconnect]` | mcp | 管理 MCP server 连接 |
@@ -67,6 +68,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **控制“能不能执行某工具/命令”**：`/approvals`（规则 + default/acceptEdits/bypass 模式，保护 .git/.pi/~/.ssh，拦 rm -rf/sudo 等）。
 - **想先看方案再动手**：`/plan`（只读探查→提交计划→批准后恢复写工具）。
 - **想让 agent 不停手连续推进长任务**：`/autopilot on [目标]`（有预算/轮数/收益递减停止）。
+- **想定时轮询状态或重复执行命令**：`/loop [interval] <prompt>`（会立即执行一次，后续仅在空闲时触发）。
 - **切回过去的会话 / 找以前聊过的内容**：`/resume-picker`、`/search`(pi 内置 `/resume` 也能朴素切换会话)。
 - **常用配置组合一键切换**：`/profile save` 后 `/profile <name>`，或 `--profile` 启动应用。
 - **接外部工具 / 第三方能力**：`/mcp add`（Pi 主动调用 MCP server）；Claude 风格插件用 `/plugin marketplace add` 后 `/plugin install`。
@@ -85,6 +87,6 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 
 ## 详情文档
 
-- 新增扩展文档：`docs/extensions/{claude-ui,input-history,context-pipeline,compact-continue,agents-context,settings-env,channel,memory,approvals,plan-mode,profiles,resume-picker,autopilot,effort,ultra,local-models,mcp,plugin-loader,hooks-runner,agents,migrate,monitor,cost-usage}.md`
+- 新增扩展文档：`docs/extensions/{claude-ui,input-history,context-pipeline,compact-continue,agents-context,settings-env,channel,memory,approvals,plan-mode,profiles,resume-picker,autopilot,loop,effort,ultra,local-models,mcp,plugin-loader,hooks-runner,agents,migrate,monitor,cost-usage}.md`
 - 原有基础扩展（diff/review/init/imagegen/todo/compact-ui/pets/goal/side/localagent/localshell/tasks/teammate/user-input）：见仓库 `README.md`
 - 总表：`docs/CAPABILITIES.md`

@@ -45,6 +45,7 @@
 | `extensions/profiles` | 命名配置预设（模型+工具+thinking+审批）一键保存/切换/删除。 | `/profile [save\|apply\|delete\|<name>]` · `--profile <name>` |
 | `extensions/resume-picker` | 会话恢复选择器 + 跨项目会话全文检索（rg），命中后切回历史会话。 | `/resume-picker [--all] [过滤词]` · `/search <关键词>` |
 | `extensions/autopilot` | 自主续跑控制器:自动注入隐藏 follow-up 连续推进，按预算/轮数/收益递减停止。 | `/autopilot [on [目标]\|off\|status]` |
+| `extensions/loop` | Claude Code 风格定时循环：立即执行一次提示词，之后在 agent 空闲时按间隔重复；会话内生效并自动过期。 | `/loop [interval] <prompt>` · `/loop list` · `/loop cancel <id\|all>` |
 | `extensions/local-models` | 发现本地大模型运行时（Ollama、LM Studio）并注册为 localhost OpenAI 兼容 provider。 | `/local-models [list\|pull\|ensure_ready]` · `/ollama` · `/lm` |
 | `extensions/codebuddy-reasoning` | 对齐 CodeBuddy 原生 `gpt-5.6-sol` 请求参数，使 High thinking 返回并展示可见推理摘要。 | （无命令，自动生效） |
 | `extensions/webfetch` | 客户端联网抓取（移植 Claude WebFetch）:URL→fetch→HTML 转 markdown 交模型阅读;SSRF 防护(私有段+连接前 DNS 守卫)、10MB 流式截断、15min 缓存。 | 工具 `webfetch` · `--webfetch`（默认开） |

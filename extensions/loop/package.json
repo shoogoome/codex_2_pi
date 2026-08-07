@@ -1,0 +1,21 @@
+{
+  "name": "pi-loop-extension",
+  "version": "0.1.0",
+  "description": "Claude Code-style recurring prompt loop command for Pi.",
+  "type": "module",
+  "main": "./index.ts",
+  "files": [
+    "index.ts",
+    "src",
+    "package.json",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "dist/index.js"
+    ]
+  }
+}

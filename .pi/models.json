@@ -689,7 +689,8 @@
           "thinkingLevelMap": {
             "off": null,
             "high": "high",
-            "xhigh": "high"
+            "xhigh": "xhigh",
+            "max": "max"
           },
           "cost": {
             "input": 5,
