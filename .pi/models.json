@@ -887,9 +887,10 @@
       ]
     },
     "dgx-spark": {
-      "baseUrl": "http://192.168.31.170:8888/v1",
+      "baseUrl": "https://api.merlinlin.com:23457/deepseek-v4",
       "api": "openai-completions",
-      "apiKey": "local",
+      "apiKey": "$PI_DGX_SPARK_API_KEY",
+      "authHeader": true,
       "compat": {
         "supportsStore": false,
         "supportsDeveloperRole": false,
@@ -924,7 +925,7 @@
           "input": [
             "text"
           ],
-          "contextWindow": 524288,
+          "contextWindow": 262144,
           "maxTokens": 65536,
           "cost": {
             "input": 0,
