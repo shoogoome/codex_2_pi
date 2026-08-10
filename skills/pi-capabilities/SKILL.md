@@ -21,7 +21,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 | `/resume-picker [--all] [过滤词]`, `/search <关键词>` | resume-picker | 恢复历史会话、跨项目全文检索会话（改名避让 pi 内置 `/resume`) |
 | `/autopilot [on [目标]\|off\|status]` | autopilot | 自主续跑控制器 |
 | `/loop [interval] <prompt>`、`/loop list`、`/loop cancel <id\|all>` | loop | 定时重复运行提示词或斜杠命令；创建后立即执行一次 |
-| `/effort [status\|off\|minimal\|low\|medium\|high\|xhigh\|max\|ultra]`、`/model`、`Alt+,` / `Alt+.` | effort + ultra | 两级选择 thinking；独立 Ultra controller 为 Codex 订阅 Sol/Terra 开启会话态 Ultra、wire max 与主动 subagent 委派 |
+| `/effort [status\|off\|minimal\|low\|medium\|high\|xhigh\|max\|ultra]`、`/model`、`Alt+,` / `Alt+.` | effort + ultra | 两级选择 thinking；Ultra 为 Sol/Terra 开启 wire max、自动激活 `task_agent` 与主动并行 workflow（Plan 模式暂停） |
 | `/local-models [list\|pull\|ensure_ready]`, `/ollama`, `/lm` | local-models | 发现/拉取/就绪检查本地模型(Ollama/LM Studio) |
 | `/mcp [list\|status\|add\|remove\|reconnect]` | mcp | 管理 MCP server 连接 |
 | `/channel [status\|restart]` | channel | 查看/重启外部 HTTP 入站 Channel；配置 `PI_CHANNEL_TOKEN` 后接受 `POST /v1/messages` 并可唤醒 Pi |
@@ -50,10 +50,10 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 
 ## 模型可调用的工具（非命令）
 
-- **task_agent**（localagent）：运行一次性/后台/fork 子 agent；默认继承父会话 model + reasoning，也可用 `team_name` + `name` 创建长生命周期 teammate。
+- **task_agent**（localagent）：运行一次性/后台/fork 子 agent，终态自动回传最终回答；也可用 `team_name` + `name` 创建长生命周期 teammate，并与其共享并发容量。
 - **task_bash**（localshell）：后台执行 shell 命令（超时自动转后台）。
 - **task_status / task_kill / task_list**（tasks）：任务框架的查询与管理。
-- **team_create / send_message / request_plan_approval / team_delete / team_plan_approve** + team task 工具（teammate）：长生命周期团队、主动 leader 消息、计划审批、resume 与优雅关闭。
+- **team_create / send_message / request_plan_approval / team_delete / team_plan_approve** + team task 工具（teammate）：`name@team` 隔离、自动结果、消息 ACK/replay、硬写审批、共享任务与 fail-closed resume。
 - **update_plan**（todo）：整份计划快照更新 + 常驻 overlay。
 - **get_goal / create_goal / update_goal**（goal）：thread 持久目标。
 - **generate_image**（imagegen）：Codex 订阅生图/编辑（gpt-image-2，走 openai-codex OAuth），保存到 `~/.pi/agent/generated_images/<session>/` 并默认把图返回模型迭代；`--imagegen-return-image=false` 可只返回路径。
@@ -75,7 +75,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **让告警、CI、IDE 等外部系统主动通知/唤醒 Pi**：配置 `PI_CHANNEL_TOKEN`，调用 Channel 的 `POST /v1/messages`；用 `/channel status` 查看监听地址与发现文件。
 - **复用已有 Claude/Cursor 配置**：`/migrate`。
 - **跨会话记住偏好/事实**：memory 默认自动初始化、召回和按需提炼；`/remember`、`/memory` 只在需要强制记录、查看或纠错时使用。
-- **调模型推理强度 / 开 Codex Ultra 编排**：`/effort` 或 `/model` 两级选择器；Codex 订阅 GPT-5.6 Sol/Terra 用 Ultra 进入会话态 `ultra` + wire `max` + 主动 subagent 委派模式。
+- **调模型推理强度 / 开 Codex Ultra 编排**：`/effort` 或 `/model` 两级选择器；Sol/Terra 的 Ultra 会自动激活 `task_agent`，在适合时并行委派并等待自动终态结果综合。
 - **用本地模型**：`/local-models list` / `pull` / `ensure_ready`。
 - **要花了多少钱 / 用了多少 token**：`/cost`。
 - **生命周期自动化（提交前/工具前后注入或拦截）**：hooks-runner + `/hooks`，配置 `.pi/hooks.json`。
@@ -87,6 +87,6 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 
 ## 详情文档
 
-- 新增扩展文档：`docs/extensions/{claude-ui,input-history,context-pipeline,compact-continue,agents-context,settings-env,channel,memory,approvals,plan-mode,profiles,resume-picker,autopilot,loop,effort,ultra,local-models,mcp,plugin-loader,hooks-runner,agents,migrate,monitor,cost-usage}.md`
+- 新增扩展文档：`docs/extensions/{claude-ui,input-history,context-pipeline,compact-continue,agents-context,settings-env,channel,memory,approvals,plan-mode,profiles,resume-picker,autopilot,loop,effort,ultra,multi-agent,local-models,mcp,plugin-loader,hooks-runner,agents,migrate,monitor,cost-usage}.md`
 - 原有基础扩展（diff/review/init/imagegen/todo/compact-ui/pets/goal/side/localagent/localshell/tasks/teammate/user-input）：见仓库 `README.md`
 - 总表：`docs/CAPABILITIES.md`

@@ -438,6 +438,7 @@ export function buildTaskAgentTool(
           forceBackground: params.run_in_background === true,
           parentSessionFile,
           allRegisteredTools: pi.getActiveTools(),
+          abortSignal: signal,
           onProgress,
         });
         if (result.backgrounded) {

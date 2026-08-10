@@ -1,7 +1,11 @@
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { getTeammateHandle } from "../../handle.js";
 import type { TeamTask } from "../types.js";
+import {
+  canAccessTeam,
+  resolveTeamTaskHandle,
+  type TeamTaskToolBinding,
+} from "./teamTaskBinding.js";
 
 const TeamTaskGetParams = Type.Object({
   task_id: Type.String({
@@ -46,6 +50,7 @@ function renderTask(task: TeamTask): string {
 
 export function buildTeamTaskGetTool(
   pi: ExtensionAPI,
+  binding?: TeamTaskToolBinding,
 ): ToolDefinition<typeof TeamTaskGetParams, TeamTaskGetDetails> {
   return {
     name: "team_task_get",
@@ -66,12 +71,17 @@ export function buildTeamTaskGetTool(
         };
       }
 
-      const handle = getTeammateHandle(pi);
+      const handle = resolveTeamTaskHandle(pi, binding);
       const task = handle.teamTaskStore.getTask(taskId);
-      if (!task) {
+      if (!task || (binding && !canAccessTeam(binding, task.teamName))) {
         return {
           content: [
-            { type: "text" as const, text: `Task '${taskId}' not found` },
+            {
+              type: "text" as const,
+              text: binding
+                ? `Task '${taskId}' not found in team '${binding.identity.teamName}'`
+                : `Task '${taskId}' not found`,
+            },
           ],
           isError: true,
           details: { action: "team_task_get" as const },

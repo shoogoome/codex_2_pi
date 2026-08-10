@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import planModeExtension from "./index.js";
 import { EXIT_TOOL_NAME } from "./src/guard.js";
 import { exitPlan, getState } from "./src/state.js";
+import {
+	_resetAgentMutationPauseForTest,
+	getAgentMutationPause,
+} from "../shared/agentMutationPause.js";
 
 /**
  * Wiring tests for the plan-mode extension using a lightweight fake ExtensionAPI.
@@ -62,8 +66,9 @@ function toolCall(handlers: Map<string, Function[]>, event: any) {
 }
 
 beforeEach(() => {
-	// Reset the module-level singleton between tests.
+	// Reset the module-level singletons between tests.
 	exitPlan();
+	_resetAgentMutationPauseForTest();
 });
 
 describe("plan-mode registration", () => {
@@ -123,23 +128,32 @@ describe("tool_call guard while in plan mode", () => {
 		await enterViaCommand(pi);
 		expect(getState().enabled).toBe(true);
 
-		for (const name of ["write", "edit", "apply_patch"]) {
+		for (const name of ["write", "edit", "apply_patch", "task_agent"]) {
 			const res = await toolCall(handlers, { toolName: name, input: {} });
 			expect(res?.block).toBe(true);
 			expect(typeof res?.reason).toBe("string");
 		}
 	});
 
-	it("blocks write bash commands but allows read-only bash", async () => {
+	it("blocks mutating bash/task_bash commands but allows read-only shell", async () => {
 		const { pi, handlers } = createPi();
 		planModeExtension(pi);
 		await enterViaCommand(pi);
 
 		const blocked = await toolCall(handlers, { toolName: "bash", input: { command: "rm -rf x" } });
 		expect(blocked?.block).toBe(true);
+		const taskBlocked = await toolCall(handlers, {
+			toolName: "task_bash",
+			input: { command: "npm install" },
+		});
+		expect(taskBlocked?.block).toBe(true);
 
 		const allowed = await toolCall(handlers, { toolName: "bash", input: { command: "git status" } });
 		expect(allowed).toBeUndefined();
+		expect(await toolCall(handlers, {
+			toolName: "task_bash",
+			input: { command: "git diff --stat" },
+		})).toBeUndefined();
 	});
 
 	it("allows read-only tools", async () => {
@@ -166,13 +180,14 @@ describe("tool_call guard while NOT in plan mode", () => {
 
 describe("enter/exit state machine", () => {
 	it("captures pre-plan tools on enter and narrows to read-only", async () => {
-		const { pi, getActive } = createPi(["read", "grep", "bash", "write", "edit"]);
+		const { pi, getActive } = createPi(["read", "grep", "bash", "write", "edit", "task_agent"]);
 		planModeExtension(pi);
 		const cmd = pi.registerCommand.mock.calls[0][1];
 
 		await cmd.handler("on", ctx(false));
 		expect(getState().enabled).toBe(true);
-		expect(getState().prePlanActiveTools).toEqual(["read", "grep", "bash", "write", "edit"]);
+		expect(getAgentMutationPause().paused).toBe(true);
+		expect(getState().prePlanActiveTools).toEqual(["read", "grep", "bash", "write", "edit", "task_agent"]);
 
 		const active = getActive();
 		expect(active).toContain("read");
@@ -180,6 +195,7 @@ describe("enter/exit state machine", () => {
 		expect(active).toContain(EXIT_TOOL_NAME);
 		expect(active).not.toContain("write");
 		expect(active).not.toContain("edit");
+		expect(active).not.toContain("task_agent");
 		expect(pi.appendEntry).toHaveBeenCalledWith("plan-mode-state", expect.objectContaining({ enabled: true }));
 	});
 
@@ -192,6 +208,7 @@ describe("enter/exit state machine", () => {
 		await cmd.handler("off", ctx(false));
 
 		expect(getState().enabled).toBe(false);
+		expect(getAgentMutationPause().paused).toBe(false);
 		const active = getActive();
 		expect(active.sort()).toEqual(["apply_patch", "bash", "edit", "grep", "read", "write"]);
 		expect(active).not.toContain(EXIT_TOOL_NAME);

@@ -4,6 +4,7 @@ import {
   LEGACY_ULTRA_STATE_ENTRY,
   ULTRA_MODE_PROMPT,
   ULTRA_STATE_ENTRY,
+  ULTRA_WORKFLOW_PROMPT,
 } from "./core.js";
 import { getUltraHandle } from "./handle.js";
 import ultraExtension from "./index.js";
@@ -22,6 +23,7 @@ interface HarnessOptions {
 function createHarness(options: HarnessOptions = {}) {
   let current = options.current ?? "medium";
   let model = options.model ?? { provider: "openai-codex", id: "gpt-5.6-sol" };
+  let activeTools = [...(options.activeTools ?? ["read", "task_agent"])];
   const handlers = new Map<string, Array<(event: any, ctx: any) => any>>();
   const entries: Array<{ type: "custom"; customType: string; data: unknown }> = [];
   const notifications: Array<{ msg: string; level?: string }> = [];
@@ -40,7 +42,10 @@ function createHarness(options: HarnessOptions = {}) {
     setThinkingLevel: vi.fn((level: string) => {
       current = level === "max" && options.clampMaxTo ? options.clampMaxTo : level;
     }),
-    getActiveTools: vi.fn(() => options.activeTools ?? ["read", "task_agent"]),
+    getActiveTools: vi.fn(() => [...activeTools]),
+    setActiveTools: vi.fn((tools: string[]) => {
+      activeTools = [...tools];
+    }),
     getAllTools: vi.fn(() => (options.allTools ?? ["read", "task_agent"]).map((name) => ({ name }))),
   };
   const ui: any = {
@@ -73,6 +78,10 @@ function createHarness(options: HarnessOptions = {}) {
     notifications,
     statuses,
     getCurrent: () => current,
+    getActiveTools: () => [...activeTools],
+    setActiveTools: (tools: string[]) => {
+      activeTools = [...tools];
+    },
     setModel: (next: Model) => {
       model = next;
     },
@@ -128,15 +137,52 @@ describe("Ultra request semantics", () => {
       customType: ULTRA_STATE_ENTRY,
       data: { enabled: true, fallbackLevel: "medium" },
     });
-    expect(result.systemPrompt).toBe(`base\n\n${ULTRA_MODE_PROMPT}`);
-    expect(statuses.get("codex-ultra")).toContain("ULTRA");
-    expect(notifications[0].msg).toContain("proactive multi-agent delegation enabled");
+    expect(result.systemPrompt).toBe(
+      `base\n\n${ULTRA_MODE_PROMPT}\n\n${ULTRA_WORKFLOW_PROMPT}`,
+    );
+    expect(statuses.get("codex-ultra")).toContain("workflow active");
+    expect(notifications[0].msg).toContain("multi-agent workflow active");
   });
 
   it("uses explicit-request-only mode outside Ultra", async () => {
     const { ctx, handlers } = createHarness({ current: "high" });
     const [result] = await fire(handlers, "before_agent_start", { systemPrompt: "base" }, ctx);
     expect(result.systemPrompt).toBe(`base\n\n${EXPLICIT_MULTI_AGENT_MODE_PROMPT}`);
+  });
+
+  it("clears an Ultra workflow block on non-Ultra models", async () => {
+    const { ctx, handlers } = createHarness({
+      model: { provider: "openai-codex", id: "gpt-5.6-luna" },
+    });
+    const [result] = await fire(
+      handlers,
+      "before_agent_start",
+      { systemPrompt: `base\n\n${ULTRA_WORKFLOW_PROMPT}` },
+      ctx,
+    );
+
+    expect(result.systemPrompt).toBe("base");
+  });
+
+  it("keeps the combined mode and workflow blocks idempotent", async () => {
+    const { ctx, handle, handlers } = createHarness();
+    handle.enable(ctx);
+    const [first] = await fire(
+      handlers,
+      "before_agent_start",
+      { systemPrompt: "base" },
+      ctx,
+    );
+    const [second] = await fire(
+      handlers,
+      "before_agent_start",
+      { systemPrompt: first.systemPrompt },
+      ctx,
+    );
+
+    expect(second.systemPrompt).toBe(first.systemPrompt);
+    expect(second.systemPrompt.match(/<multi_agent_mode>/g)).toHaveLength(1);
+    expect(second.systemPrompt.match(/<ultra_multi_agent_workflow>/g)).toHaveLength(1);
   });
 
   it("replaces a previous mode block instead of accumulating conflicts", async () => {
@@ -153,13 +199,25 @@ describe("Ultra request semantics", () => {
     expect(result.systemPrompt).not.toContain("Do not spawn sub-agents unless");
   });
 
-  it("returns to explicit mode after effort leaves Ultra", async () => {
+  it("returns to explicit mode and clears the workflow block after effort leaves Ultra", async () => {
     const { ctx, handle, handlers, entries } = createHarness();
     handle.enable(ctx);
+    const [ultraResult] = await fire(
+      handlers,
+      "before_agent_start",
+      { systemPrompt: "base" },
+      ctx,
+    );
     handle.disable(ctx);
-    const [result] = await fire(handlers, "before_agent_start", { systemPrompt: "base" }, ctx);
+    const [result] = await fire(
+      handlers,
+      "before_agent_start",
+      { systemPrompt: ultraResult.systemPrompt },
+      ctx,
+    );
     expect(entries.at(-1)?.data).toEqual({ enabled: false });
     expect(result.systemPrompt).toContain("Do not spawn sub-agents unless");
+    expect(result.systemPrompt).not.toContain("<ultra_multi_agent_workflow>");
   });
 
   it("rejects activation when native max is unavailable", () => {
@@ -175,14 +233,88 @@ describe("Ultra request semantics", () => {
     expect(notifications[0].msg).toContain("does not expose native max");
   });
 
-  it("warns when task_agent is installed but inactive", () => {
-    const { ctx, handle, notifications } = createHarness({
+  it("auto-enables an installed inactive task_agent", () => {
+    const { pi, ctx, handle, notifications, statuses, getActiveTools } = createHarness({
       activeTools: ["read"],
       allTools: ["read", "task_agent"],
     });
     handle.enable(ctx);
+
+    expect(pi.setActiveTools).toHaveBeenCalledWith(["read", "task_agent"]);
+    expect(getActiveTools()).toEqual(["read", "task_agent"]);
+    expect(notifications[0]).toEqual(expect.objectContaining({ level: "info" }));
+    expect(notifications[0].msg).toContain("workflow active");
+    expect(notifications[0].msg).toContain("task_agent auto-enabled");
+    expect(statuses.get("codex-ultra")).toContain("workflow active");
+  });
+
+  it("reports why the workflow is paused when task_agent is unavailable", () => {
+    const { pi, ctx, handle, notifications, statuses } = createHarness({
+      activeTools: ["read"],
+      allTools: ["read"],
+    });
+    handle.enable(ctx);
+
+    expect(pi.setActiveTools).not.toHaveBeenCalled();
     expect(notifications[0].level).toBe("warning");
-    expect(notifications[0].msg).toContain("task_agent is not active");
+    expect(notifications[0].msg).toContain("workflow paused: task_agent is not installed");
+    expect(statuses.get("codex-ultra")).toContain("workflow paused (task_agent unavailable)");
+  });
+
+  it("keeps the plan-mode read-only gate and reports the workflow as paused", async () => {
+    const { pi, ctx, handle, handlers, notifications, statuses, getActiveTools } = createHarness({
+      activeTools: ["read", "exit_plan_mode"],
+      allTools: ["read", "exit_plan_mode", "task_agent"],
+    });
+    handle.enable(ctx);
+    const [result] = await fire(handlers, "before_agent_start", { systemPrompt: "base" }, ctx);
+
+    expect(pi.setActiveTools).not.toHaveBeenCalled();
+    expect(getActiveTools()).toEqual(["read", "exit_plan_mode"]);
+    expect(notifications[0].level).toBe("warning");
+    expect(notifications[0].msg).toContain("workflow paused: plan mode read-only gate");
+    expect(statuses.get("codex-ultra")).toContain("workflow paused (plan mode)");
+    expect(result.systemPrompt).toContain(ULTRA_MODE_PROMPT);
+    expect(result.systemPrompt).not.toContain("<ultra_multi_agent_workflow>");
+  });
+
+  it("temporarily removes Ultra's own task_agent activation inside plan mode", async () => {
+    const harness = createHarness({
+      activeTools: ["read"],
+      allTools: ["read", "task_agent", "exit_plan_mode"],
+    });
+    harness.handle.enable(harness.ctx);
+    harness.setActiveTools(["read", "task_agent", "exit_plan_mode"]);
+    harness.pi.setActiveTools.mockClear();
+    const [paused] = await fire(
+      harness.handlers,
+      "before_agent_start",
+      { systemPrompt: "base" },
+      harness.ctx,
+    );
+
+    expect(harness.pi.setActiveTools).toHaveBeenCalledWith(["read", "exit_plan_mode"]);
+    expect(harness.getActiveTools()).toEqual(["read", "exit_plan_mode"]);
+    expect(paused.systemPrompt).not.toContain("<ultra_multi_agent_workflow>");
+  });
+
+  it("removes only the task_agent activation owned by Ultra on disable", () => {
+    const added = createHarness({
+      activeTools: ["read"],
+      allTools: ["read", "grep", "task_agent"],
+    });
+    added.handle.enable(added.ctx);
+    added.setActiveTools(["read", "grep", "task_agent"]);
+    added.pi.setActiveTools.mockClear();
+    added.handle.disable(added.ctx);
+    expect(added.pi.setActiveTools).toHaveBeenCalledWith(["read", "grep"]);
+
+    const preselected = createHarness({ activeTools: ["read", "task_agent"] });
+    preselected.handle.enable(preselected.ctx);
+    preselected.pi.setActiveTools.mockClear();
+    preselected.handle.disable(preselected.ctx);
+    expect(preselected.pi.setActiveTools).not.toHaveBeenCalled();
+    expect(preselected.getActiveTools()).toEqual(["read", "task_agent"]);
   });
 });
 
@@ -206,6 +338,58 @@ describe("Ultra session lifecycle", () => {
     }
   });
 
+  it("auto-enables task_agent when restoring an Ultra session", async () => {
+    const harness = createHarness({
+      current: "medium",
+      activeTools: ["read"],
+      allTools: ["read", "task_agent"],
+      branch: [
+        {
+          type: "custom",
+          customType: ULTRA_STATE_ENTRY,
+          data: { enabled: true, fallbackLevel: "high" },
+        },
+      ],
+    });
+    await fire(
+      harness.handlers,
+      "session_start",
+      { type: "session_start", reason: "resume" },
+      harness.ctx,
+    );
+
+    expect(harness.pi.setActiveTools).toHaveBeenCalledWith(["read", "task_agent"]);
+    expect(harness.getActiveTools()).toEqual(["read", "task_agent"]);
+    expect(harness.statuses.get("codex-ultra")).toContain("workflow active");
+    expect(harness.notifications[0].msg).toContain("Ultra restored");
+    expect(harness.notifications[0].msg).toContain("task_agent auto-enabled");
+  });
+
+  it("does not auto-enable task_agent when Ultra is restored in plan mode", async () => {
+    const harness = createHarness({
+      activeTools: ["read", "exit_plan_mode"],
+      allTools: ["read", "exit_plan_mode", "task_agent"],
+      branch: [
+        {
+          type: "custom",
+          customType: ULTRA_STATE_ENTRY,
+          data: { enabled: true, fallbackLevel: "medium" },
+        },
+      ],
+    });
+    await fire(
+      harness.handlers,
+      "session_start",
+      { type: "session_start", reason: "resume" },
+      harness.ctx,
+    );
+
+    expect(harness.pi.setActiveTools).not.toHaveBeenCalled();
+    expect(harness.getActiveTools()).toEqual(["read", "exit_plan_mode"]);
+    expect(harness.statuses.get("codex-ultra")).toContain("workflow paused (plan mode)");
+    expect(harness.notifications[0].msg).toContain("workflow paused: plan mode read-only gate");
+  });
+
   it("restores the non-Ultra default on shutdown without erasing resumable state", async () => {
     const { ctx, handle, handlers, entries, getCurrent, pi } = createHarness({ current: "high" });
     handle.enable(ctx);
@@ -215,6 +399,26 @@ describe("Ultra session lifecycle", () => {
     expect(entries.at(-1)).toBe(lastPersisted);
     expect(entries.at(-1)?.data).toEqual({ enabled: true, fallbackLevel: "high" });
     expect(pi.setThinkingLevel).toHaveBeenLastCalledWith("high");
+    expect(pi.setActiveTools).not.toHaveBeenCalled();
+  });
+
+  it("removes only Ultra's task_agent activation on shutdown", async () => {
+    const harness = createHarness({
+      activeTools: ["read"],
+      allTools: ["read", "grep", "task_agent"],
+    });
+    harness.handle.enable(harness.ctx);
+    harness.setActiveTools(["read", "grep", "task_agent"]);
+    harness.pi.setActiveTools.mockClear();
+    await fire(
+      harness.handlers,
+      "session_shutdown",
+      { type: "session_shutdown" },
+      harness.ctx,
+    );
+
+    expect(harness.pi.setActiveTools).toHaveBeenCalledWith(["read", "grep"]);
+    expect(harness.getActiveTools()).toEqual(["read", "grep"]);
   });
 
   it("disables on native-effort and unsupported-model changes", async () => {

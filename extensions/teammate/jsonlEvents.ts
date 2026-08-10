@@ -7,6 +7,7 @@
 // emit one event via emitTeammateEvent (Task 0.6). The reducer is pure and
 // idempotent so replaying the same prefix yields the same state.
 
+import { parseAgentId } from "./mailbox.js";
 import type {
   MailboxMessage,
   TeamState,
@@ -26,10 +27,17 @@ export interface ReplayedState {
   teams: Record<string, TeamState>;
   teammates: Record<string, ReplayedTeammate>;
   teamTasks: Record<string, TeamTask>;
+  /** Peer messages persisted but not yet acknowledged by the recipient loop. */
+  pendingMessages?: Record<string, MailboxMessage>;
 }
 
 export function reduceTeammateEvents(events: readonly TeammateEvent[]): ReplayedState {
-  let state: ReplayedState = { teams: {}, teammates: {}, teamTasks: {} };
+  let state: ReplayedState = {
+    teams: {},
+    teammates: {},
+    teamTasks: {},
+    pendingMessages: {},
+  };
   for (const event of events) {
     state = applyEvent(state, event);
   }
@@ -57,7 +65,19 @@ function applyEvent(state: ReplayedState, event: TeammateEvent): ReplayedState {
           teammatesCopy[agentId] = { ...tm, lastStatus: "killed" };
         }
       }
-      return { ...state, teams: teamsCopy, teammates: teammatesCopy };
+      const pendingMessages = Object.fromEntries(
+        Object.entries(state.pendingMessages ?? {}).filter(([, msg]) => {
+          const recipient = msg.to.split("@");
+          const sender = msg.from.split("@");
+          return recipient[1] !== event.teamName && sender[1] !== event.teamName;
+        }),
+      );
+      return {
+        ...state,
+        teams: teamsCopy,
+        teammates: teammatesCopy,
+        pendingMessages,
+      };
     }
     case "teammate_spawn": {
       const team = state.teams[event.identity.teamName];
@@ -83,15 +103,43 @@ function applyEvent(state: ReplayedState, event: TeammateEvent): ReplayedState {
     case "teammate_terminal": {
       const tm = state.teammates[event.agentId];
       if (!tm) return state;
+      const pendingMessages = Object.fromEntries(
+        Object.entries(state.pendingMessages ?? {}).filter(
+          ([, msg]) => msg.to !== event.agentId,
+        ),
+      );
       return {
         ...state,
         teammates: {
           ...state.teammates,
           [event.agentId]: { ...tm, lastStatus: event.status },
         },
+        pendingMessages,
       };
     }
-    case "message_sent":
+    case "message_sent": {
+      // Leader notifications are already part of the leader session. Only
+      // canonical peer messages need replay; legacy wildcard events cannot be
+      // assigned safely and are intentionally ignored.
+      if (!parseAgentId(event.msg.to)) return state;
+      const currentPending = state.pendingMessages ?? {};
+      if (currentPending[event.msg.id]) return state;
+      return {
+        ...state,
+        pendingMessages: {
+          ...currentPending,
+          [event.msg.id]: event.msg,
+        },
+      };
+    }
+    case "message_ack": {
+      const currentPending = state.pendingMessages ?? {};
+      const pending = currentPending[event.messageId];
+      if (!pending || pending.to !== event.agentId) return state;
+      const pendingMessages = { ...currentPending };
+      delete pendingMessages[event.messageId];
+      return { ...state, pendingMessages };
+    }
     case "shutdown_request":
     case "shutdown_response":
       return state;

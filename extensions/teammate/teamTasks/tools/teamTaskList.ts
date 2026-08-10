@@ -9,8 +9,12 @@
 
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { getTeammateHandle } from "../../handle.js";
 import type { TeamTask } from "../types.js";
+import {
+  resolveTeamTaskHandle,
+  teamAccessError,
+  type TeamTaskToolBinding,
+} from "./teamTaskBinding.js";
 
 const TeamTaskListParams = Type.Object({
   team_name: Type.Optional(
@@ -76,6 +80,7 @@ function renderTask(t: TeamTask): string {
 
 export function buildTeamTaskListTool(
   pi: ExtensionAPI,
+  binding?: TeamTaskToolBinding,
 ): ToolDefinition<typeof TeamTaskListParams, TeamTaskListDetails> {
   return {
     name: "team_task_list",
@@ -99,8 +104,31 @@ export function buildTeamTaskListTool(
 
       if (params.team_name !== undefined) {
         const trimmed = params.team_name.trim();
+        if (
+          binding &&
+          trimmed.length > 0 &&
+          trimmed !== binding.identity.teamName
+        ) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: teamAccessError(binding, trimmed),
+              },
+            ],
+            isError: true,
+            details: {
+              action: "team_task_list" as const,
+              count: 0,
+              taskIds: [],
+            },
+          };
+        }
         if (trimmed.length > 0) filter.teamName = trimmed;
       }
+      // An identity-bound teammate can never omit the team filter to inspect
+      // the leader's other teams. The generic leader tool remains unchanged.
+      if (binding) filter.teamName = binding.identity.teamName;
       if (params.status !== undefined) {
         filter.status = params.status;
       }
@@ -109,7 +137,7 @@ export function buildTeamTaskListTool(
         filter.owner = trimmed.length === 0 ? null : trimmed;
       }
 
-      const handle = getTeammateHandle(pi);
+      const handle = resolveTeamTaskHandle(pi, binding);
       const tasks = handle.teamTaskStore.list(filter);
 
       const taskIds = tasks.map((t) => t.id);

@@ -6,7 +6,7 @@
 // editor is replaced by a vanilla CustomEditor whose only customisation is:
 //
 //   1. onSubmit — forward the typed text to the teammate via mailbox.send
-//      (from:"leader", to:agentName, isProtocol:false), then clear the
+//      (from:"leader", to:agentId, isProtocol:false), then clear the
 //      editor buffer. Empty submit triggers onExit (matches v1 contract).
 //   2. onEscape — invoke deps.onExit so the leader can leave teammate view
 //      with a single Esc keystroke.
@@ -46,7 +46,7 @@ export type EditorFactory = (
 
 export interface TeammateEditorDeps {
   agentId: string;
-  /** Mailbox `to` field is the short agentName, not the long agentId. */
+  /** Human-readable short name used by the surrounding UI. */
   agentName: string;
   mailbox: Mailbox;
   /** Called when the editor wants to exit teammate view (Esc / empty Enter). */
@@ -80,7 +80,7 @@ export function handleTeammateSubmit(
   deps.mailbox.send({
     id: randomBytes(8).toString("hex"),
     from: "leader",
-    to: deps.agentName,
+    to: deps.agentId,
     body: trimmed,
     timestamp: Date.now(),
     isProtocol: false,

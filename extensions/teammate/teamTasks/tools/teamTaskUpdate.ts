@@ -1,8 +1,13 @@
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { getTeammateHandle } from "../../handle.js";
 import { emitTeammateEvent } from "../../eventEmit.js";
 import type { TeamTask } from "../types.js";
+import {
+  canAccessTeam,
+  findCrossTeamBlocker,
+  resolveTeamTaskHandle,
+  type TeamTaskToolBinding,
+} from "./teamTaskBinding.js";
 
 const TeamTaskUpdateParams = Type.Object({
   task_id: Type.String({
@@ -78,6 +83,7 @@ const DESCRIPTION =
  */
 export function buildTeamTaskUpdateTool(
   pi: ExtensionAPI,
+  binding?: TeamTaskToolBinding,
 ): ToolDefinition<typeof TeamTaskUpdateParams, TeamTaskUpdateDetails> {
   return {
     name: "team_task_update",
@@ -108,14 +114,16 @@ export function buildTeamTaskUpdateTool(
         };
       }
 
-      const handle = getTeammateHandle(pi);
+      const handle = resolveTeamTaskHandle(pi, binding);
       const existing = handle.teamTaskStore.getTask(taskId);
-      if (!existing) {
+      if (!existing || (binding && !canAccessTeam(binding, existing.teamName))) {
         return {
           content: [
             {
               type: "text" as const,
-              text: `Task '${taskId}' not found`,
+              text: binding
+                ? `Task '${taskId}' not found in team '${binding.identity.teamName}'`
+                : `Task '${taskId}' not found`,
             },
           ],
           isError: true,
@@ -144,6 +152,23 @@ export function buildTeamTaskUpdateTool(
       // to flag this as a silent failure).
       if (!anyField) {
         return buildOkResult(existing);
+      }
+
+      const crossTeamBlocker =
+        binding && params.blocked_by !== undefined
+          ? findCrossTeamBlocker(handle, existing.teamName, params.blocked_by)
+          : undefined;
+      if (crossTeamBlocker) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Blocked task '${crossTeamBlocker}' is not accessible in team '${existing.teamName}'`,
+            },
+          ],
+          isError: true,
+          details: { action: "team_task_update" as const, taskId },
+        };
       }
 
       const updatedAt = Date.now();

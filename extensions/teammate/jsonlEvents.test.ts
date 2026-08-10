@@ -98,6 +98,34 @@ describe("reduceTeammateEvents", () => {
     expect(state.teammates["r@t1"]!.lastStatus).toBe("running");
   });
 
+  it("persists canonical peer messages until the matching recipient ACK", () => {
+    const msg = {
+      id: "m-durable",
+      from: "leader",
+      to: "r@t1",
+      body: "resume me",
+      timestamp: 101,
+      isProtocol: false,
+    } as const;
+    const pending = reduceTeammateEvents([
+      { kind: "message_sent", msg },
+      { kind: "message_sent", msg },
+    ]);
+    expect(pending.pendingMessages).toEqual({ "m-durable": msg });
+
+    const wrongAck = reduceTeammateEvents([
+      { kind: "message_sent", msg },
+      { kind: "message_ack", messageId: msg.id, agentId: "other@t1" },
+    ]);
+    expect(wrongAck.pendingMessages).toEqual({ "m-durable": msg });
+
+    const acknowledged = reduceTeammateEvents([
+      { kind: "message_sent", msg },
+      { kind: "message_ack", messageId: msg.id, agentId: "r@t1" },
+    ]);
+    expect(acknowledged.pendingMessages).toEqual({});
+  });
+
   it("re-running reducer on same prefix yields same final state", () => {
     const events: TeammateEvent[] = [
       { kind: "team_create", teamName: "t1", createdAt: 1 },
@@ -110,7 +138,12 @@ describe("reduceTeammateEvents", () => {
 
   it("empty event list yields empty state", () => {
     const state = reduceTeammateEvents([]);
-    expect(state).toEqual({ teams: {}, teammates: {}, teamTasks: {} });
+    expect(state).toEqual({
+      teams: {},
+      teammates: {},
+      teamTasks: {},
+      pendingMessages: {},
+    });
   });
 
   describe("team_task_* events", () => {

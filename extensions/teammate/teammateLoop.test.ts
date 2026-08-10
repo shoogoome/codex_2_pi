@@ -9,6 +9,12 @@ import {
 import type { PendingApprovals, PlanApprovalDecision } from "./tools/requestPlanApproval.js";
 import type { TeammateIdentity, MailboxMessage } from "./types.js";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { createAgentCapacity } from "../tasks/agentCapacity.js";
+import {
+  _resetApprovalGateForTest,
+  getCurrentApprovalSessionId,
+  registerApprovalSession,
+} from "./approvalGate.js";
 
 const id: TeammateIdentity = {
   agentId: "alpha@team",
@@ -63,6 +69,54 @@ describe("teammateLoop — initial prompt", () => {
     await handle.done;
   });
 
+  it("binds child tool execution to the process-global approval session", async () => {
+    _resetApprovalGateForTest();
+    registerApprovalSession("gate-session", id);
+    const session = makeFakeSession();
+    session.prompt.mockImplementation(async () => {
+      await Promise.resolve();
+      expect(getCurrentApprovalSessionId()).toBe("gate-session");
+    });
+    const ac = new AbortController();
+    const handle = startTeammateLoop({
+      identity: id,
+      initialPrompt: "gated",
+      session,
+      mailbox: createMailbox(),
+      approvalSessionId: "gate-session",
+      abortSignal: ac.signal,
+    });
+    await vi.waitFor(() => expect(session.prompt).toHaveBeenCalled());
+    ac.abort();
+    await handle.done;
+    _resetApprovalGateForTest();
+  });
+
+  it("waits for and releases a shared execution slot around the turn", async () => {
+    const capacity = createAgentCapacity({ maxThreads: 3, maxConcurrent: 2 });
+    const occupied = await capacity.acquireExecution();
+    const session = makeFakeSession();
+    const ac = new AbortController();
+    const handle = startTeammateLoop({
+      identity: id,
+      initialPrompt: "queued work",
+      session,
+      mailbox: createMailbox(),
+      agentCapacity: capacity,
+      abortSignal: ac.signal,
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(session.prompt).not.toHaveBeenCalled();
+    expect(capacity.snapshot().queuedExecutions).toBe(1);
+
+    occupied.release();
+    await vi.waitFor(() => expect(session.prompt).toHaveBeenCalledWith("queued work"));
+    await vi.waitFor(() => expect(capacity.snapshot().activeChildren).toBe(0));
+    ac.abort();
+    await handle.done;
+  });
+
   it("undefined initialPrompt skips initial turn (resume mode)", async () => {
     const session = makeFakeSession();
     const mailbox = createMailbox();
@@ -76,6 +130,39 @@ describe("teammateLoop — initial prompt", () => {
     });
     await new Promise((r) => setImmediate(r));
     expect(session.prompt).not.toHaveBeenCalled();
+    ac.abort();
+    await handle.done;
+  });
+
+  it("returns the last assistant text through onTurnResult", async () => {
+    const session = makeFakeSession();
+    let eventListener: ((event: unknown) => void) | undefined;
+    session.subscribe.mockImplementation((listener: (event: unknown) => void) => {
+      eventListener = listener;
+      return () => { eventListener = undefined; };
+    });
+    session.prompt.mockImplementation(async () => {
+      eventListener?.({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "completed report" }],
+        },
+      });
+    });
+    const onTurnResult = vi.fn();
+    const ac = new AbortController();
+    const handle = startTeammateLoop({
+      identity: id,
+      initialPrompt: "go",
+      session,
+      mailbox: createMailbox(),
+      onTurnResult,
+      abortSignal: ac.signal,
+    });
+    await vi.waitFor(() => {
+      expect(onTurnResult).toHaveBeenCalledWith("completed report", { kind: "initial" });
+    });
     ac.abort();
     await handle.done;
   });
@@ -128,6 +215,7 @@ describe("teammateLoop — message-driven turns", () => {
     const session = makeFakeSession();
     const mailbox = createMailbox();
     const onTurnStart = vi.fn();
+    const onMessageAcknowledged = vi.fn();
     const ac = new AbortController();
     const handle = startTeammateLoop({
       identity: id,
@@ -135,6 +223,7 @@ describe("teammateLoop — message-driven turns", () => {
       session,
       mailbox,
       onTurnStart,
+      onMessageAcknowledged,
       abortSignal: ac.signal,
     });
     await new Promise((r) => setImmediate(r));
@@ -155,7 +244,12 @@ describe("teammateLoop — message-driven turns", () => {
     const promptArg = session.prompt.mock.calls[0]![0] as string;
     expect(promptArg).toContain("leader");
     expect(promptArg).toContain("find auth code");
-    expect(onTurnStart).toHaveBeenCalledWith({ kind: "message", msg });
+    const canonicalMsg = { ...msg, to: "alpha@team" };
+    expect(onTurnStart).toHaveBeenCalledWith({
+      kind: "message",
+      msg: canonicalMsg,
+    });
+    expect(onMessageAcknowledged).toHaveBeenCalledWith(canonicalMsg);
     ac.abort();
     await handle.done;
   });
@@ -222,9 +316,9 @@ describe("teammateLoop — shutdown handshake", () => {
     const onShutdownAck = vi.fn();
     const onTerminal = vi.fn();
 
-    // Capture leader's incoming response.
-    const leaderRecv = vi.fn();
-    mailbox.registerReceiver("leader", leaderRecv);
+    // Capture the protocol response post. `to="leader"` intentionally
+    // bypasses teammate receivers, but the loop must still emit it.
+    const sendSpy = vi.spyOn(mailbox, "send");
 
     const ac = new AbortController();
     const handle = startTeammateLoop({
@@ -253,9 +347,12 @@ describe("teammateLoop — shutdown handshake", () => {
     expect(onShutdownReq).toHaveBeenCalledWith("req-1");
     expect(onShutdownAck).toHaveBeenCalledWith("req-1", true);
     expect(onTerminal).toHaveBeenCalledWith("shutdown");
-    expect(leaderRecv).toHaveBeenCalledTimes(1);
-    const respMsg = leaderRecv.mock.calls[0]![0] as MailboxMessage;
-    expect(respMsg.from).toBe("alpha");
+    const responseCall = sendSpy.mock.calls.find(
+      ([message]) => (message as MailboxMessage).to === "leader",
+    );
+    expect(responseCall).toBeDefined();
+    const respMsg = responseCall![0] as MailboxMessage;
+    expect(respMsg.from).toBe("alpha@team");
     expect(respMsg.to).toBe("leader");
     expect(respMsg.isProtocol).toBe(true);
     expect(parseShutdownResponse(respMsg.body)).toEqual({
@@ -336,6 +433,52 @@ describe("teammateLoop — plan_approval_response routing", () => {
     };
     return { pa, map };
   }
+
+  it("resolves plan approval immediately while the current prompt is blocked", async () => {
+    const session = makeFakeSession();
+    let finishPrompt: () => void = () => {};
+    session.prompt.mockImplementation(
+      () => new Promise<void>((resolve) => { finishPrompt = resolve; }),
+    );
+    const mailbox = createMailbox();
+    const { pa, map } = makePendingApprovals();
+    const resolveSpy = vi.fn();
+    const onMessageAcknowledged = vi.fn();
+    map.set("pa-live", { resolve: resolveSpy, reject: () => {} });
+    const ac = new AbortController();
+    const handle = startTeammateLoop({
+      identity: id,
+      initialPrompt: "working",
+      session,
+      mailbox,
+      pendingApprovals: pa,
+      onMessageAcknowledged,
+      abortSignal: ac.signal,
+    });
+    await vi.waitFor(() => expect(session.prompt).toHaveBeenCalled());
+
+    mailbox.send({
+      id: "approval-live",
+      from: "leader",
+      to: "alpha@team",
+      body: buildPlanApprovalResponse("pa-live", true, "approved live"),
+      timestamp: Date.now(),
+      isProtocol: true,
+    });
+
+    expect(resolveSpy).toHaveBeenCalledWith({
+      approve: true,
+      feedback: "approved live",
+    });
+    expect(onMessageAcknowledged).not.toHaveBeenCalled();
+    await Promise.resolve();
+    expect(onMessageAcknowledged).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "approval-live", to: "alpha@team" }),
+    );
+    finishPrompt();
+    ac.abort();
+    await handle.done;
+  });
 
   it("on plan_approval_response, resolves the matching entry and does NOT prompt", async () => {
     const session = makeFakeSession();

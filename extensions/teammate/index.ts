@@ -36,6 +36,12 @@ import {
   unregisterLeaderChannel,
 } from "./leaderBridge.js";
 import { postLeaderNotification } from "./leaderNotification.js";
+import {
+  approvalBlockReason,
+  getCurrentApprovalSessionId,
+  isApprovalRequiredToolCall,
+  isMutationApproved,
+} from "./approvalGate.js";
 
 const WIDGET_KEY = "teammate-team";
 
@@ -64,16 +70,31 @@ export default function teammateExtension(pi: ExtensionAPI): void {
   // time — so it does not depend on session_start having attached the handle.
   pi.registerTool(buildSendMessageTool(pi));
 
-  // The four team_task_* tools register at the factory top-level for the same
-  // reason as send_message: teammate sub-sessions need them and never fire
-  // session_start. Per spec §2.4, the team task list is meant for leader↔
-  // teammate collaboration, so all sides need access. (leader-only
-  // team_create / team_delete remain in session_start; the spawnTeammate
-  // blocklist strips those from teammates anyway.)
+  // The generic four team_task_* tools remain registered at factory top-level
+  // for the leader and ordinary extension loading. An isolated teammate realm
+  // would otherwise resolve these against its own empty handle, so spawn and
+  // hydrate additionally inject same-name identity-bound custom tools that
+  // capture the leader-realm handle/pi. (leader-only team_create / team_delete
+  // remain in session_start.)
   pi.registerTool(buildTeamTaskCreateTool(pi));
   pi.registerTool(buildTeamTaskUpdateTool(pi));
   pi.registerTool(buildTeamTaskListTool(pi));
   pi.registerTool(buildTeamTaskGetTool(pi));
+
+  // Hard mutation boundary for teammate child sessions. The child prompt is
+  // tagged through a process-global AsyncLocalStorage in approvalGate, so this
+  // hook works even though each AgentSession loads extensions in its own jiti
+  // module realm. Leader calls have no approval context and are unaffected.
+  pi.on("tool_call", async (event) => {
+    const approvalSessionId = getCurrentApprovalSessionId();
+    if (!approvalSessionId) return;
+    if (!isApprovalRequiredToolCall(event.toolName, event.input)) return;
+    if (isMutationApproved(approvalSessionId)) return;
+    return {
+      block: true,
+      reason: approvalBlockReason(approvalSessionId),
+    };
+  });
 
   // Module-scoped (per extension instance) — survives across session_start /
   // session_shutdown reload cycles so we can clean up subscribers from a

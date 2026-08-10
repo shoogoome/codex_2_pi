@@ -67,11 +67,13 @@ describe("buildRequestPlanApprovalTool — happy paths", () => {
     channel = makeChannel(delivered);
   });
 
-  it("approve cycle: tool resolves with success and surfaces feedback", async () => {
+  it("approve cycle: tool resolves with success, opens the gate, and surfaces feedback", async () => {
+    const onApproved = vi.fn();
     const tool = buildRequestPlanApprovalTool({
       identity,
       pendingApprovals: pending,
       getLeaderChannel: () => channel,
+      onApproved,
     });
     const promise = run(tool, "step 1: read foo.ts\nstep 2: edit foo.ts");
 
@@ -100,6 +102,27 @@ describe("buildRequestPlanApprovalTool — happy paths", () => {
     expect(details.request_id).toBe(requestId);
     expect(details.approved).toBe(true);
     expect(details.feedback).toBe("looks good");
+    expect(onApproved).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns an error when Plan mode keeps the mutation gate closed", async () => {
+    const tool = buildRequestPlanApprovalTool({
+      identity,
+      pendingApprovals: pending,
+      getLeaderChannel: () => channel,
+      onApproved: () => false,
+    });
+    const promise = run(tool, "edit the project");
+    const requestId = parsePlanApprovalRequest(
+      (delivered[0]!.details as { body: string }).body,
+    )!.request_id;
+    pending._store.get(requestId)!.resolve({ approve: true });
+
+    const result = await promise;
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(
+      (result as { content: Array<{ text: string }> }).content[0]!.text,
+    ).toContain("Plan mode");
   });
 
   it("reject cycle: tool returns isError with feedback", async () => {

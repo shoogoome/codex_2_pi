@@ -8,13 +8,24 @@
  * Kept free of any pi API so it can be unit tested in isolation.
  */
 
-/** File-mutating tools that are always blocked in plan mode. */
-export const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set(["write", "edit", "apply_patch"]);
+/**
+ * Tools that are always blocked in plan mode.
+ *
+ * `task_agent` is included even though it does not write by itself: allowing a
+ * plan-mode root to spawn a general-purpose child would bypass the root's
+ * read-only tool set and make the safety boundary prompt-only.
+ */
+export const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set([
+	"write",
+	"edit",
+	"apply_patch",
+	"task_agent",
+]);
 
 /** Name of the tool the model calls to submit its plan and leave plan mode. */
 export const EXIT_TOOL_NAME = "exit_plan_mode";
 
-/** True if `name` is a file-mutating tool. */
+/** True if `name` is mutating or can bypass the read-only boundary. */
 export function isWriteTool(name: string): boolean {
 	return WRITE_TOOL_NAMES.has(name);
 }

@@ -20,26 +20,38 @@ import type {
 import { loadPiRuntimeSdk } from "../shared/pi-runtime-sdk.js";
 
 import type { TaskStore } from "../tasks/taskStore.js";
-import { getBuiltInAgents, GENERAL_PURPOSE_AGENT } from "../localagent/agentDefinitions/builtIn.js";
+import { getBuiltInAgents } from "../localagent/agentDefinitions/builtIn.js";
 import { loadAgentsFromDir } from "../localagent/agentDefinitions/loadFromDisk.js";
 import { getAgentDefinition, mergeAgentDefinitions } from "../localagent/agentDefinitions/resolve.js";
 import { resolveSubAgentTools } from "../localagent/toolPool.js";
+import type { AgentDefinition } from "../localagent/types.js";
 import { registerTask, updateTaskState } from "../tasks/framework.js";
 import { evictTaskOutput, initTaskOutput } from "../tasks/diskOutput.js";
 import { getTaskOutputPath } from "../tasks/outputPath.js";
 import { createTaskStateBase, generateTaskId } from "../tasks/Task.js";
 import { logError } from "../tasks/logging.js";
+import { getAgentCapacity } from "../tasks/agentCapacityHandle.js";
+import type { AgentCapacityLease } from "../tasks/agentCapacity.js";
 
 import { TEAMMATE_EVENT_CUSTOM_TYPE, emitTeammateEvent } from "./eventEmit.js";
 import { postLeaderNotification } from "./leaderNotification.js";
 import {
+  grantApproval,
+  registerApprovalSession,
+  revokeApproval,
+  unregisterApprovalSession,
+} from "./approvalGate.js";
+import { fingerprintAgentDefinition } from "./roleFingerprint.js";
+import {
   reduceTeammateEvents,
   type ReplayedState,
+  type ReplayedTeammate,
 } from "./jsonlEvents.js";
 import type { TeammateHandle } from "./handle.js";
 import { startTeammateLoop } from "./teammateLoop.js";
 import { filterTeammateTools } from "./teammateToolPool.js";
 import { subscribeTeammateProgress } from "./sessionProgress.js";
+import { buildTeammateTeamTaskTools } from "./teamTasks/tools/teammateTeamTaskTools.js";
 import { buildTeammateSendMessageTool } from "./tools/teammateSendMessage.js";
 import {
   buildRequestPlanApprovalTool,
@@ -131,6 +143,70 @@ export interface RespawnContext {
   cwd: string;
 }
 
+async function createResumedAgentSession(
+  replayed: ReplayedTeammate,
+  agentDef: AgentDefinition,
+  ctx: RespawnContext,
+): Promise<{ session: AgentSession; pendingApprovals: PendingApprovals }> {
+  const sm = await _hydrateSdk.SessionManagerOpen(replayed.sessionFile);
+  const services = await _hydrateSdk.createAgentSessionServices({
+    cwd: ctx.cwd,
+    appendSystemPrompt: agentDef.systemPrompt ? [agentDef.systemPrompt] : undefined,
+  });
+  const allToolNames = ctx.pi.getAllTools().map((tool) => tool.name);
+  const roleTools = resolveSubAgentTools(agentDef, allToolNames);
+  const collaborationTools = [
+    "send_message",
+    "request_plan_approval",
+    "team_task_create",
+    "team_task_update",
+    "team_task_list",
+    "team_task_get",
+  ];
+  const tools = filterTeammateTools([
+    ...new Set([...roleTools, ...collaborationTools]),
+  ]);
+
+  const pendingApprovalsMap = new Map<
+    string,
+    { resolve: (d: PlanApprovalDecision) => void; reject: (e: Error) => void }
+  >();
+  const pendingApprovals: PendingApprovals = {
+    set: (id, entry) => { pendingApprovalsMap.set(id, entry); },
+    get: (id) => pendingApprovalsMap.get(id),
+    delete: (id) => { pendingApprovalsMap.delete(id); },
+  };
+  const { session } = await _hydrateSdk.createAgentSessionFromServices({
+    services,
+    sessionManager: sm,
+    tools,
+    customTools: [
+      buildTeammateSendMessageTool(replayed.identity, {
+        mailbox: ctx.handle.mailbox,
+        teamStore: ctx.handle.teamStore,
+        deliverToLeader: (details, triggerTurn) => {
+          postLeaderNotification(ctx.pi, details, triggerTurn);
+        },
+        persistEvent: (event) => {
+          emitTeammateEvent(ctx.pi, event);
+        },
+      }),
+      buildRequestPlanApprovalTool({
+        identity: replayed.identity,
+        pendingApprovals,
+        getLeaderChannel: () => ({
+          deliver: (details, triggerTurn) => {
+            postLeaderNotification(ctx.pi, details, triggerTurn);
+          },
+        }),
+        onApproved: () => grantApproval(replayed.sessionFile),
+      }),
+      ...buildTeammateTeamTaskTools(ctx.pi, ctx.handle, replayed.identity),
+    ],
+  });
+  return { session: session as AgentSession, pendingApprovals };
+}
+
 /**
  * Re-create running teammates from a previously replayed state.
  *
@@ -158,6 +234,7 @@ export async function respawnTeammates(
   const userDefs = await loadAgentsFromDir(join(homedir(), ".pi", "agents"), "user");
   const projectDefs = await loadAgentsFromDir(join(ctx.cwd, ".pi", "agents"), "project");
   const agentDefs = mergeAgentDefinitions(getBuiltInAgents(), userDefs, projectDefs);
+  const capacity = getAgentCapacity(ctx.pi);
 
   for (const [agentId, replayed] of Object.entries(state.teammates)) {
     if (replayed.lastStatus !== "running") {
@@ -187,63 +264,83 @@ export async function respawnTeammates(
         teamState.createdAt,
       );
     }
+
+    // Resume must never silently broaden permissions. A deleted role used to
+    // fall back to GENERAL_PURPOSE_AGENT (`tools:["*"]`); a changed role could
+    // also resume under a different prompt/tool policy. Both now fail closed.
+    const agentDef = getAgentDefinition(agentDefs, replayed.identity.agentType);
+    const expectedFingerprint = replayed.identity.roleFingerprint;
+    const actualFingerprint = agentDef
+      ? fingerprintAgentDefinition(agentDef)
+      : undefined;
+    if (
+      !agentDef ||
+      (expectedFingerprint !== undefined && expectedFingerprint !== actualFingerprint)
+    ) {
+      const reason = !agentDef
+        ? `Cannot resume ${agentId}: role '${replayed.identity.agentType}' no longer exists`
+        : `Cannot resume ${agentId}: role '${replayed.identity.agentType}' changed since spawn`;
+      emitTeammateEvent(ctx.pi, {
+        kind: "teammate_terminal",
+        agentId,
+        status: "failed",
+      });
+      postLeaderNotification(
+        ctx.pi,
+        { kind: "turn_error", agentId, error: reason },
+        /* triggerTurn */ true,
+      );
+      skipped.push(agentId);
+      continue;
+    }
+
+    let residentLease: AgentCapacityLease;
+    try {
+      residentLease = capacity.reserveResident();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      postLeaderNotification(
+        ctx.pi,
+        { kind: "turn_error", agentId, error: message },
+        /* triggerTurn */ true,
+      );
+      skipped.push(agentId);
+      continue;
+    }
+
     ctx.handle.teamStore.addMember(replayed.identity.teamName, agentId);
 
     // Open the persisted session and wire up an AgentSession on top of it.
-    const sm = await _hydrateSdk.SessionManagerOpen(replayed.sessionFile);
-    const agentDef = getAgentDefinition(agentDefs, replayed.identity.agentType)
-      ?? GENERAL_PURPOSE_AGENT;
-    const services = await _hydrateSdk.createAgentSessionServices({
-      cwd: ctx.cwd,
-      appendSystemPrompt: agentDef.systemPrompt ? [agentDef.systemPrompt] : undefined,
-    });
-    const allToolInfos = ctx.pi.getAllTools();
-    const allToolNames = allToolInfos.map((t) => t.name);
-    const roleTools = resolveSubAgentTools(agentDef, allToolNames);
-    const collaborationTools = [
-      "send_message",
-      "request_plan_approval",
-      "team_task_create",
-      "team_task_update",
-      "team_task_list",
-      "team_task_get",
-    ];
-    const tools = filterTeammateTools([...new Set([...roleTools, ...collaborationTools])]);
-
-    const pendingApprovalsMap = new Map<
-      string,
-      { resolve: (d: PlanApprovalDecision) => void; reject: (e: Error) => void }
-    >();
-    const pendingApprovals: PendingApprovals = {
-      set: (id, entry) => { pendingApprovalsMap.set(id, entry); },
-      get: (id) => pendingApprovalsMap.get(id),
-      delete: (id) => { pendingApprovalsMap.delete(id); },
-    };
-    const { session: sessionUnknown } =
-      await _hydrateSdk.createAgentSessionFromServices({
-        services,
-        sessionManager: sm,
-        tools,
-        customTools: [
-          buildTeammateSendMessageTool(replayed.identity, {
-            mailbox: ctx.handle.mailbox,
-            teamStore: ctx.handle.teamStore,
-            deliverToLeader: (details, triggerTurn) => {
-              postLeaderNotification(ctx.pi, details, triggerTurn);
-            },
-          }),
-          buildRequestPlanApprovalTool({
-            identity: replayed.identity,
-            pendingApprovals,
-            getLeaderChannel: () => ({
-              deliver: (details, triggerTurn) => {
-                postLeaderNotification(ctx.pi, details, triggerTurn);
-              },
-            }),
-          }),
-        ],
+    // A failed SDK setup must return the reserved root-session slot.
+    let session: AgentSession;
+    let pendingApprovals: PendingApprovals;
+    try {
+      ({ session, pendingApprovals } = await createResumedAgentSession(
+        replayed,
+        agentDef,
+        ctx,
+      ));
+    } catch (error) {
+      residentLease.release();
+      ctx.handle.teamStore.removeMember(replayed.identity.teamName, agentId);
+      const message = error instanceof Error ? error.message : String(error);
+      emitTeammateEvent(ctx.pi, {
+        kind: "teammate_terminal",
+        agentId,
+        status: "failed",
       });
-    const session = sessionUnknown as AgentSession;
+      postLeaderNotification(
+        ctx.pi,
+        {
+          kind: "turn_error",
+          agentId,
+          error: `Cannot resume ${agentId}: ${message}`,
+        },
+        /* triggerTurn */ true,
+      );
+      skipped.push(agentId);
+      continue;
+    }
 
     // Register task with the same shape spawnTeammate would create — but
     // start in idle since we are resuming an already-active session.
@@ -292,6 +389,7 @@ export async function respawnTeammates(
       (cur) => ({
         ...cur,
         abortController,
+        agentResidentLease: residentLease,
       }),
     );
 
@@ -311,14 +409,20 @@ export async function respawnTeammates(
     const taskStoreRef = ctx.taskStore;
     const handleRef = ctx.handle;
 
+    registerApprovalSession(replayed.sessionFile, replayed.identity);
     startTeammateLoop({
       identity: replayed.identity,
       initialPrompt: undefined, // resume — go straight to idle
       session,
       mailbox: ctx.handle.mailbox,
       pendingApprovals,
+      agentCapacity: capacity,
+      approvalSessionId: replayed.sessionFile,
       abortSignal: abortController.signal,
       onTurnStart: () => {
+        // Resume turns are also fail-closed until request_plan_approval is
+        // explicitly approved by the leader.
+        revokeApproval(replayed.sessionFile);
         // Every turn counts on resume too — see spawnTeammate.ts for the
         // rationale (the initial-cause exclusion left turnCount at 0
         // forever for single-cycle teammates).
@@ -331,6 +435,14 @@ export async function respawnTeammates(
             lastError: undefined,
             turnCount: t.turnCount + 1,
           }),
+        );
+      },
+      onTurnResult: (text) => {
+        if (!text.trim()) return;
+        postLeaderNotification(
+          piRef,
+          { kind: "result", agentId, body: text },
+          /* triggerTurn */ true,
         );
       },
       onTurnError: (error) => {
@@ -346,6 +458,7 @@ export async function respawnTeammates(
         );
       },
       onIdle: () => {
+        revokeApproval(replayed.sessionFile);
         updateTaskState<InProcessTeammateTaskState>(
           taskId,
           taskStoreRef,
@@ -358,6 +471,13 @@ export async function respawnTeammates(
           { kind: "idle", agentId },
           /* triggerTurn */ false,
         );
+      },
+      onMessageAcknowledged: (msg) => {
+        emitTeammateEvent(piRef, {
+          kind: "message_ack",
+          messageId: msg.id,
+          agentId,
+        });
       },
       onShutdownRequestReceived: (requestId) => {
         emitTeammateEvent(piRef, {
@@ -385,6 +505,8 @@ export async function respawnTeammates(
         );
       },
       onTerminal: (reason) => {
+        residentLease.release();
+        unregisterApprovalSession(replayed.sessionFile);
         // Drop the session-event listener regardless of whether killTeammate
         // already handled the rest of the cleanup. Idempotent.
         unsubscribeSession();
@@ -422,6 +544,20 @@ export async function respawnTeammates(
     });
 
     respawned.push(agentId);
+  }
+
+  // Replay only messages that were persisted but never acknowledged. All
+  // running recipients have registered their receiver by this point, so the
+  // original per-recipient order can be restored deterministically.
+  const pendingMessages = Object.values(state.pendingMessages ?? {}).sort(
+    (a, b) => a.timestamp - b.timestamp,
+  );
+  for (const message of pendingMessages) {
+    if (state.teammates[message.to]?.lastStatus !== "running") continue;
+    const result = ctx.handle.mailbox.send(message);
+    if (!result.ok) {
+      logError(new Error(result.error), "respawnTeammates replay message");
+    }
   }
 
   return { respawned, skipped };

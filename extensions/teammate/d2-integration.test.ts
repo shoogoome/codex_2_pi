@@ -300,7 +300,7 @@ describe("D2 integration: Module B — plan_approval round-trip", () => {
     // without spinning up the loop.)
     const { pi: leaderPi } = buildLeaderPi();
     const leaderHandle = attachHandle(leaderPi);
-    leaderHandle.mailbox.registerReceiver(identity.agentName, (msg) => {
+    leaderHandle.mailbox.registerReceiver(identity.agentId, (msg) => {
       const planResp = parsePlanApprovalResponse(msg.body);
       if (!planResp) return;
       const entry = store.get(planResp.request_id);
@@ -470,13 +470,18 @@ describe("D2 integration: Module C — teammate tool-pool gating + boilerplate",
     expect(args.tools).not.toContain("team_create");
     expect(args.tools).not.toContain("team_delete");
 
-    // Identity-bound customTools must include both send_message and
-    // request_plan_approval — the two channels by which the teammate talks
-    // back to the leader.
+    // Every cross-realm collaboration tool is injected as an identity-bound
+    // custom tool, including the shared leader-realm team task store adapters.
     const customTools = (args.customTools ?? []) as Array<{ name?: string }>;
-    expect(customTools.some((t) => t?.name === "send_message")).toBe(true);
-    expect(customTools.some((t) => t?.name === "request_plan_approval")).toBe(
-      true,
+    expect(customTools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining([
+        "send_message",
+        "request_plan_approval",
+        "team_task_create",
+        "team_task_update",
+        "team_task_list",
+        "team_task_get",
+      ]),
     );
   });
 

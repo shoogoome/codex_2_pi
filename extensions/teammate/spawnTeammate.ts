@@ -33,16 +33,29 @@ import { evictTaskOutput, initTaskOutput } from "../tasks/diskOutput.js";
 import { getTaskOutputPath } from "../tasks/outputPath.js";
 import { createTaskStateBase, generateTaskId } from "../tasks/Task.js";
 import { logError } from "../tasks/logging.js";
+import { getAgentCapacity } from "../tasks/agentCapacityHandle.js";
+import type {
+  AgentCapacity,
+  AgentCapacityLease,
+} from "../tasks/agentCapacity.js";
 
 import type { TeammateHandle } from "./handle.js";
 import type { InProcessTeammateTaskState, TeammateIdentity } from "./types.js";
 import { isInProcessTeammateTask } from "./types.js";
 import { emitTeammateEvent } from "./eventEmit.js";
 import { postLeaderNotification } from "./leaderNotification.js";
+import {
+  grantApproval,
+  registerApprovalSession,
+  revokeApproval,
+  unregisterApprovalSession,
+} from "./approvalGate.js";
+import { fingerprintAgentDefinition } from "./roleFingerprint.js";
 import { startTeammateLoop } from "./teammateLoop.js";
 import { filterTeammateTools } from "./teammateToolPool.js";
 import { prependBoilerplate } from "./teammatePromptBoilerplate.js";
 import { subscribeTeammateProgress } from "./sessionProgress.js";
+import { buildTeammateTeamTaskTools } from "./teamTasks/tools/teammateTeamTaskTools.js";
 import { buildTeammateSendMessageTool } from "./tools/teammateSendMessage.js";
 import {
   buildRequestPlanApprovalTool,
@@ -150,6 +163,31 @@ export async function spawnTeammate(
   handle: TeammateHandle,
   opts: SpawnTeammateOptions,
 ): Promise<SpawnTeammateResult> {
+  const capacity = getAgentCapacity(pi);
+  const residentLease = capacity.reserveResident();
+  try {
+    return await spawnTeammateWithLease(
+      pi,
+      taskStore,
+      handle,
+      opts,
+      capacity,
+      residentLease,
+    );
+  } catch (error) {
+    residentLease.release();
+    throw error;
+  }
+}
+
+async function spawnTeammateWithLease(
+  pi: ExtensionAPI,
+  taskStore: TaskStore,
+  handle: TeammateHandle,
+  opts: SpawnTeammateOptions,
+  capacity: AgentCapacity,
+  residentLease: AgentCapacityLease,
+): Promise<SpawnTeammateResult> {
   // 1. validations
   const team = handle.teamStore.getTeam(opts.teamName);
   if (!team) {
@@ -191,6 +229,7 @@ export async function spawnTeammate(
     agentName: opts.agentName,
     teamName: opts.teamName,
     agentType: agentDef.agentType,
+    roleFingerprint: fingerprintAgentDefinition(agentDef),
   };
   const services = await _sdk.createAgentSessionServices({
     cwd: opts.cwd,
@@ -240,6 +279,9 @@ export async function spawnTeammate(
         deliverToLeader: (details, triggerTurn) => {
           postLeaderNotification(pi, details, triggerTurn);
         },
+        persistEvent: (event) => {
+          emitTeammateEvent(pi, event);
+        },
       }),
       buildRequestPlanApprovalTool({
         identity,
@@ -249,7 +291,9 @@ export async function spawnTeammate(
             postLeaderNotification(pi, details, triggerTurn);
           },
         }),
+        onApproved: () => grantApproval(sessionFile),
       }),
+      ...buildTeammateTeamTaskTools(pi, handle, identity),
     ],
     model: resolvedModel,
     thinkingLevel: opts.thinkingLevel,
@@ -317,6 +361,7 @@ export async function spawnTeammate(
   updateTaskState<InProcessTeammateTaskState>(taskId, taskStore, (cur) => ({
     ...cur,
     abortController,
+    agentResidentLease: residentLease,
   }));
 
   // 6.5 Subscribe to session events so the panel widget gets live
@@ -333,19 +378,24 @@ export async function spawnTeammate(
     taskStore,
   );
 
-  // 7. start the teammateLoop. Prepend the D2/Path-B boilerplate so the
-  //    teammate LLM understands why bash/write/edit are absent and uses
-  //    send_message{to:"leader"} to request them. See spec §4.2.
+  // 7. Start the teammateLoop. The boilerplate explains the role-scoped tool
+  //    set and the hard request_plan_approval gate for mutating calls.
   const augmentedPrompt = prependBoilerplate(opts.prompt, identity);
 
+  registerApprovalSession(sessionFile, identity);
   startTeammateLoop({
     identity,
     initialPrompt: augmentedPrompt,
     session,
     mailbox: handle.mailbox,
     pendingApprovals,
+    agentCapacity: capacity,
+    approvalSessionId: sessionFile,
     abortSignal: abortController.signal,
     onTurnStart: () => {
+      // Every turn begins fail-closed. Only an approved
+      // request_plan_approval call opens mutations for this turn.
+      revokeApproval(sessionFile);
       // Every turn counts — including the initial one (boilerplate +
       // initialPrompt). Previously we skipped `cause.kind === "initial"`,
       // which left turnCount stuck at 0 for any teammate that runs to
@@ -356,6 +406,14 @@ export async function spawnTeammate(
         lastError: undefined,
         turnCount: t.turnCount + 1,
       }));
+    },
+    onTurnResult: (text) => {
+      if (!text.trim()) return;
+      postLeaderNotification(
+        pi,
+        { kind: "result", agentId: identity.agentId, body: text },
+        /* triggerTurn */ true,
+      );
     },
     onTurnError: (error) => {
       updateTaskState<InProcessTeammateTaskState>(taskId, taskStore, (t) => ({
@@ -369,6 +427,7 @@ export async function spawnTeammate(
       );
     },
     onIdle: () => {
+      revokeApproval(sessionFile);
       updateTaskState<InProcessTeammateTaskState>(taskId, taskStore, (t) => ({
         ...t,
         isIdle: true,
@@ -382,6 +441,13 @@ export async function spawnTeammate(
         { kind: "idle", agentId: identity.agentId },
         /* triggerTurn */ false,
       );
+    },
+    onMessageAcknowledged: (msg) => {
+      emitTeammateEvent(pi, {
+        kind: "message_ack",
+        messageId: msg.id,
+        agentId: identity.agentId,
+      });
     },
     onShutdownRequestReceived: (requestId) => {
       emitTeammateEvent(pi, {
@@ -407,6 +473,8 @@ export async function spawnTeammate(
       }));
     },
     onTerminal: (reason) => {
+      residentLease.release();
+      unregisterApprovalSession(sessionFile);
       // Drop the session-event listener regardless of whether killTeammate
       // already handled the rest of the cleanup — we own this subscription
       // and must release it to avoid a leak. The unsubscribe is idempotent.

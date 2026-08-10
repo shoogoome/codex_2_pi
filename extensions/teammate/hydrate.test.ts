@@ -20,6 +20,7 @@ import { createTeamTaskStore } from "./teamTasks/teamTaskStore.js";
 import type { TeammateHandle } from "./handle.js";
 import type { ReplayedState } from "./jsonlEvents.js";
 import type { TeamTask } from "./teamTasks/types.js";
+import { getAgentCapacity } from "../tasks/agentCapacityHandle.js";
 
 const t1id = {
   agentId: "r@t1",
@@ -31,7 +32,12 @@ const t1id = {
 describe("hydrateTeammateState", () => {
   it("empty entries → empty state", () => {
     const state = hydrateTeammateState([]);
-    expect(state).toEqual({ teams: {}, teammates: {}, teamTasks: {} });
+    expect(state).toEqual({
+      teams: {},
+      teammates: {},
+      teamTasks: {},
+      pendingMessages: {},
+    });
   });
 
   it("rebuilds from team_create + teammate_spawn events", () => {
@@ -250,7 +256,145 @@ describe("respawnTeammates", () => {
     };
     expect(sessionArgs.tools).toContain("request_plan_approval");
     expect(sessionArgs.customTools?.map((tool) => tool.name)).toEqual(
-      expect.arrayContaining(["send_message", "request_plan_approval"]),
+      expect.arrayContaining([
+        "send_message",
+        "request_plan_approval",
+        "team_task_create",
+        "team_task_update",
+        "team_task_list",
+        "team_task_get",
+      ]),
+    );
+  });
+
+  it.each([
+    ["missing-role", undefined, "no longer exists"],
+    ["general-purpose", "stale-fingerprint", "changed since spawn"],
+  ])(
+    "fails closed when resume role %s is missing or changed",
+    async (agentType, roleFingerprint, expectedError) => {
+      const open = vi.fn();
+      _setHydrateSdkForTest({
+        createAgentSessionServices: vi.fn().mockResolvedValue({}),
+        SessionManagerOpen: open,
+        createAgentSessionFromServices: vi.fn(),
+      });
+      const agentId = `alice@t1`;
+      const state: ReplayedState = {
+        teams: {
+          t1: {
+            teamName: "t1",
+            createdAt: 1,
+            memberAgentIds: [agentId],
+          },
+        },
+        teammates: {
+          [agentId]: {
+            identity: {
+              agentId,
+              agentName: "alice",
+              teamName: "t1",
+              agentType,
+              ...(roleFingerprint ? { roleFingerprint } : {}),
+            },
+            sessionFile: "/tmp/alice.jsonl",
+            initialPrompt: "go",
+            lastStatus: "running",
+          },
+        },
+        teamTasks: {},
+      };
+      const handle = buildHandle();
+      const pi = buildPi();
+
+      const result = await respawnTeammates(state, {
+        pi: pi as never,
+        taskStore: createTaskStore(),
+        handle,
+        cwd: "/tmp",
+      });
+
+      expect(result).toEqual({ respawned: [], skipped: [agentId] });
+      expect(open).not.toHaveBeenCalled();
+      expect(handle.teamStore.getTeam("t1")?.memberAgentIds).toEqual([]);
+      expect(pi.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          details: expect.objectContaining({
+            kind: "turn_error",
+            agentId,
+            error: expect.stringContaining(expectedError),
+          }),
+        }),
+        { triggerTurn: true },
+      );
+    },
+  );
+
+  it("isolates one SDK resume failure, releases its slot, and continues", async () => {
+    const goodSession = {
+      prompt: vi.fn().mockResolvedValue(undefined),
+      abort: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn(),
+      subscribe: vi.fn(() => () => {}),
+    };
+    _setHydrateSdkForTest({
+      createAgentSessionServices: vi.fn().mockResolvedValue({}),
+      SessionManagerOpen: vi.fn(async (path: string) => {
+        if (path.includes("broken")) throw new Error("corrupt child jsonl");
+        return {};
+      }),
+      createAgentSessionFromServices: vi.fn(async () => ({ session: goodSession })),
+    });
+    const teammate = (name: string) => ({
+      identity: {
+        agentId: `${name}@t1`,
+        agentName: name,
+        teamName: "t1",
+        agentType: "general-purpose",
+      },
+      sessionFile: `/tmp/${name}.jsonl`,
+      initialPrompt: "go",
+      lastStatus: "running" as const,
+    });
+    const state: ReplayedState = {
+      teams: {
+        t1: {
+          teamName: "t1",
+          createdAt: 1,
+          memberAgentIds: ["broken@t1", "good@t1"],
+        },
+      },
+      teammates: {
+        "broken@t1": teammate("broken"),
+        "good@t1": teammate("good"),
+      },
+      teamTasks: {},
+    };
+    const pi = buildPi();
+    const handle = buildHandle();
+
+    const result = await respawnTeammates(state, {
+      pi: pi as never,
+      taskStore: createTaskStore(),
+      handle,
+      cwd: "/tmp",
+    });
+
+    expect(result).toEqual({
+      respawned: ["good@t1"],
+      skipped: ["broken@t1"],
+    });
+    expect(handle.teamStore.getTeam("t1")?.memberAgentIds).toEqual(["good@t1"]);
+    expect(getAgentCapacity(pi as never).snapshot().residentChildren).toBe(1);
+    expect(pi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        details: expect.objectContaining({
+          kind: "turn_error",
+          agentId: "broken@t1",
+          error: expect.stringContaining("corrupt child jsonl"),
+        }),
+      }),
+      { triggerTurn: true },
     );
   });
 
@@ -406,11 +550,13 @@ describe("respawnTeammates", () => {
       handle,
       cwd: "/tmp",
     });
-    for (let i = 0; i < 20 && order.length === 0; i += 1) {
-      await new Promise((r) => setImmediate(r));
-    }
-    // First should have started but second not yet.
-    expect(order).toEqual(["first-start"]);
+    // Loading project/user roles may take longer under the full parallel suite;
+    // wait for the observable first spawn rather than assuming 20 event-loop ticks.
+    await vi.waitFor(() => {
+      expect(order).toEqual(["first-start"]);
+    });
+    // The second spawn must still be blocked on the first deferred session.
+    expect(order).not.toContain("second-start");
     resolveFirst();
     await promise;
     expect(order).toEqual(["first-start", "first-end", "second-start"]);
@@ -483,6 +629,83 @@ describe("respawnTeammates", () => {
     await new Promise((r) => setImmediate(r));
     // Loop should have triggered fakeSession.prompt with the formatted incoming msg
     expect(fakeSession.prompt).toHaveBeenCalled();
+  });
+
+  it("replays an unacknowledged canonical message and emits its ACK", async () => {
+    const fakeSession = {
+      prompt: vi.fn().mockResolvedValue(undefined),
+      abort: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn(),
+      subscribe: vi.fn(() => () => {}),
+    };
+    _setHydrateSdkForTest({
+      createAgentSessionServices: vi.fn().mockResolvedValue({}),
+      SessionManagerOpen: vi.fn(() => ({
+        getSessionFile: () => "/tmp/x.jsonl",
+        getSessionId: () => "s",
+        getEntries: () => [],
+        appendMessage: vi.fn(),
+      })),
+      createAgentSessionFromServices: vi.fn(async () => ({ session: fakeSession })),
+    });
+    const identity = {
+      agentId: "alice@t1",
+      agentName: "alice",
+      teamName: "t1",
+      agentType: "general-purpose",
+    };
+    const durableMessage = {
+      id: "m-replay",
+      from: "leader",
+      to: "alice@t1",
+      body: "survive restart",
+      timestamp: 10,
+      isProtocol: false,
+    };
+    const state: ReplayedState = {
+      teams: {
+        t1: {
+          teamName: "t1",
+          createdAt: 1,
+          memberAgentIds: [identity.agentId],
+        },
+      },
+      teammates: {
+        [identity.agentId]: {
+          identity,
+          sessionFile: "/tmp/alice.jsonl",
+          initialPrompt: "go",
+          lastStatus: "running",
+        },
+      },
+      teamTasks: {},
+      pendingMessages: { [durableMessage.id]: durableMessage },
+    };
+    const handle = buildHandle();
+    const pi = buildPi();
+
+    await respawnTeammates(state, {
+      pi: pi as never,
+      taskStore: createTaskStore(),
+      handle,
+      cwd: "/tmp",
+    });
+
+    await vi.waitFor(() => {
+      expect(fakeSession.prompt).toHaveBeenCalledWith(
+        "[from leader] survive restart",
+      );
+    });
+    await vi.waitFor(() => {
+      const ack = pi.sendMessage.mock.calls.find(
+        ([message]: unknown[]) =>
+          (message as { details?: { kind?: string; messageId?: string } }).details
+            ?.kind === "message_ack" &&
+          (message as { details?: { messageId?: string } }).details?.messageId ===
+            "m-replay",
+      );
+      expect(ack).toBeDefined();
+    });
   });
 
   it("respawned teammate posts leader idle notification (kind='idle', triggerTurn:false) when its turn ends", async () => {
@@ -681,7 +904,12 @@ describe("hydrateTeamTaskStore", () => {
   });
 
   it("empty state.teamTasks → 0 hydrated, 0 skipped", () => {
-    const state: ReplayedState = { teams: {}, teammates: {}, teamTasks: {} };
+    const state: ReplayedState = {
+      teams: {},
+      teammates: {},
+      teamTasks: {},
+      pendingMessages: {},
+    };
     const handle = buildHandle();
     const result = hydrateTeamTaskStore(state, handle);
     expect(result).toEqual({ hydrated: 0, skipped: 0 });

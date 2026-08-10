@@ -16,10 +16,24 @@ import { logError } from "../tasks/logging.js";
 import type { LeaderNotificationDetails } from "./types.js";
 
 export const TEAMMATE_NOTIFICATION_CUSTOM_TYPE = "teammate/notification";
+const RESULT_MAX_CHARS = 12_000;
+
+function normalizeDetails(details: LeaderNotificationDetails): LeaderNotificationDetails {
+  if (details.kind !== "result" || details.body.length <= RESULT_MAX_CHARS) return details;
+  return {
+    ...details,
+    body:
+      `${details.body.slice(0, RESULT_MAX_CHARS)}\n\n` +
+      "[truncated; open the teammate session for the full result]",
+  };
+}
 
 function buildContent(details: LeaderNotificationDetails): string {
   if (details.kind === "message") {
     return `[from ${details.agentId}] ${details.body}`;
+  }
+  if (details.kind === "result") {
+    return `[teammate ${details.agentId} result]\n${details.body}`;
   }
   if (details.kind === "turn_error") {
     return `[teammate ${details.agentId} turn failed] ${details.error}`;
@@ -45,12 +59,13 @@ export function postLeaderNotification(
   triggerTurn: boolean,
 ): void {
   try {
+    const normalized = normalizeDetails(details);
     pi.sendMessage(
       {
         customType: TEAMMATE_NOTIFICATION_CUSTOM_TYPE,
-        content: buildContent(details),
+        content: buildContent(normalized),
         display: true,
-        details,
+        details: normalized,
       } as never,
       { triggerTurn },
     );

@@ -20,7 +20,17 @@ Codex 没有把字符串 `ultra` 发给服务端：
 3. MultiAgentV2 将 Ultra 映射到 `Proactive`；非 Ultra 映射到 `ExplicitRequestOnly`。
 4. `<multi_agent_mode>` developer 指令决定主模型是否可主动委派。任务如何拆分、何时调用 agent 工具仍由模型判断，客户端负责状态、工具和政策，不在本地硬编码任务拆分器。
 
-Pi 实现采用相同分层：`setThinkingLevel("max")` 负责 wire effort，Ultra controller 注入 Codex 原文的 proactive/explicit mode。默认 `task_agent` 是对应委派工具；未安装或未激活时会明确警告。
+Pi 实现采用相同分层：`setThinkingLevel("max")` 负责 wire effort，Ultra controller 注入 Codex 原文的 proactive/explicit mode。进入 Ultra 时，如果 `task_agent` 已注册但尚未 active，controller 会自动激活它；退出时只撤销自己激活的 tool，不影响用户原本的 active tool 配置。
+
+此外会追加一个幂等的 `<ultra_workflow>` block，把 policy 变成可执行工作流：
+
+- 非简单任务且存在至少两个真正独立的工作流时，在同一轮并行调用多个 `task_agent`；
+- leader 不空等，同时推进不依赖子结果的工作；
+- 依赖自动终态通知（含最终回答）后统一验证、综合；
+- 不为并行而并行，不轮询 agent；
+- 进入 Plan 模式时暂停 workflow 且不激活 `task_agent`，避免绕过只读边界；退出 Plan 后自动恢复。
+
+如果 `task_agent` 未安装，状态会明确显示 unavailable，而不是只显示“Ultra 已开”造成 workflow 已激活的错觉。
 
 ## 会话语义
 
@@ -35,7 +45,7 @@ Pi 实现采用相同分层：`setThinkingLevel("max")` 负责 wire effort，Ult
 
 - footer 显示 `» ULTRA · multi-agent`；
 - editor 上方短暂显示 Ultra 激活反馈；
-- `/effort status` 仍区分客户端 Ultra 与 wire `max`。
+- `/effort status` 区分客户端 Ultra、wire `max`，并显示 `workflow active` 或 Plan/unavailable 暂停原因。
 
 Pi 没有 Codex 内建的 composer 像素级 Wave/Aurora/Pulse 渲染钩子，因此这里使用公开 extension API 实现等价的持久状态与一次性反馈，不 monkey-patch Pi 内部 TUI。
 

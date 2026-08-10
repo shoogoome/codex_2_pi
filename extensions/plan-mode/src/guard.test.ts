@@ -9,10 +9,11 @@ import {
 } from "./guard.js";
 
 describe("isWriteTool", () => {
-	it("is true for file-mutating tools", () => {
+	it("is true for file-mutating tools and task_agent boundary escapes", () => {
 		expect(isWriteTool("write")).toBe(true);
 		expect(isWriteTool("edit")).toBe(true);
 		expect(isWriteTool("apply_patch")).toBe(true);
+		expect(isWriteTool("task_agent")).toBe(true);
 	});
 
 	it("is false for read-only tools and bash", () => {
@@ -24,14 +25,14 @@ describe("isWriteTool", () => {
 		expect(isWriteTool("bash")).toBe(false);
 	});
 
-	it("exposes the write tool name set", () => {
-		expect([...WRITE_TOOL_NAMES].sort()).toEqual(["apply_patch", "edit", "write"]);
+	it("exposes the blocked tool name set", () => {
+		expect([...WRITE_TOOL_NAMES].sort()).toEqual(["apply_patch", "edit", "task_agent", "write"]);
 	});
 });
 
 describe("computeReadOnlyTools", () => {
-	it("removes write tools, keeps read-only + bash, adds the exit tool", () => {
-		const result = computeReadOnlyTools(["read", "grep", "bash", "write", "edit", "apply_patch"]);
+	it("removes write/delegation tools, keeps read-only + bash, adds the exit tool", () => {
+		const result = computeReadOnlyTools(["read", "grep", "bash", "write", "edit", "apply_patch", "task_agent"]);
 		expect(result).toContain("read");
 		expect(result).toContain("grep");
 		expect(result).toContain("bash");
@@ -39,6 +40,7 @@ describe("computeReadOnlyTools", () => {
 		expect(result).not.toContain("write");
 		expect(result).not.toContain("edit");
 		expect(result).not.toContain("apply_patch");
+		expect(result).not.toContain("task_agent");
 	});
 
 	it("adds the exit tool even when the pre-plan set is empty", () => {

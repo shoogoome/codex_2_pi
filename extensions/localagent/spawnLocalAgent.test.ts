@@ -6,6 +6,8 @@ import { _clearOutputsForTest } from "../tasks/diskOutput.js";
 import { _resetProgressForTest } from "./progress.js";
 import { GENERAL_PURPOSE_AGENT, FORK_AGENT } from "./agentDefinitions/builtIn.js";
 import type { LocalAgentTaskState } from "./types.js";
+import { createAgentCapacity } from "../tasks/agentCapacity.js";
+import { attachAgentCapacity } from "../tasks/agentCapacityHandle.js";
 
 interface FakeSession {
   sessionId: string;
@@ -47,6 +49,7 @@ beforeEach(() => {
   _setDefaultTaskStoreForTest(createTaskStore());
   _resetTaskOutputDirForTest();
   _resetProgressForTest();
+  attachAgentCapacity(fakePi, createAgentCapacity());
   fakePi.sendMessage.mockClear();
   _setSdkForTest({
     createAgentSessionServices: vi
@@ -524,15 +527,33 @@ describe("spawnLocalAgent — terminal behavior", () => {
     });
     expect(result.backgrounded).toBe(true);
 
+    fake.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "background final answer" }],
+      },
+    });
     fake.emit({ type: "agent_end", messages: [] });
-    // Drain microtasks so the runBackgroundFinalizer settles.
-    for (let i = 0; i < 10; i++) {
-      await new Promise((r) => setImmediate(r));
-    }
+    // Wait for the async flush + background finalizer to publish its terminal event.
+    await vi.waitFor(() => {
+      expect(fakePi.sendMessage.mock.calls.some(
+        ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/notification",
+      )).toBe(true);
+    });
 
     const summaryCalls = fakePi.sendMessage.mock.calls.filter(
       ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/summary",
     );
     expect(summaryCalls.length).toBe(0);
+    const notification = fakePi.sendMessage.mock.calls.find(
+      ([msg]: unknown[]) => (msg as { customType?: string }).customType === "tasks/notification",
+    );
+    expect(notification?.[0]).toMatchObject({
+      details: { finalMessage: "background final answer" },
+    });
+    expect((notification?.[0] as { content?: string }).content).toContain(
+      "background final answer",
+    );
   });
 });

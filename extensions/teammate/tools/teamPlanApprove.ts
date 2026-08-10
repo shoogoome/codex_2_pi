@@ -15,13 +15,15 @@ import { randomBytes } from "node:crypto";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { getTeammateHandle } from "../handle.js";
+import { emitTeammateEvent } from "../eventEmit.js";
+import { resolveLeaderAgentAddress } from "../messageAddress.js";
 import { buildPlanApprovalResponse } from "../protocol.js";
 import type { MailboxMessage } from "../types.js";
 
 const TeamPlanApproveParams = Type.Object({
   teammate: Type.String({
     description:
-      "Teammate agentName who is awaiting plan approval. The teammate must have outstanding request_plan_approval — find request_id in the most recent [from <teammate>] notification.",
+      "Teammate full agentId (preferred) or unique agentName awaiting plan approval. Find it with request_id in the latest [from <teammate>] notification.",
   }),
   request_id: Type.String({
     description:
@@ -53,7 +55,7 @@ const DESCRIPTION =
   "- Approve straightforward plans matching the user's intent.\n" +
   "- Reject plans that risk data loss, miss the user's actual goal, or violate constraints. Provide feedback so teammate can revise.\n\n" +
   "## Equivalent to send_message\n" +
-  "This tool is sugar over send_message {to:\"<name>\", message: '{\"type\":\"plan_approval_response\",\"request_id\":\"...\",\"approve\":...}'}. Use this for LLM ergonomics; the underlying protocol is identical.";
+  "This tool is sugar over send_message {to:\"<name@team>\", message: '{\"type\":\"plan_approval_response\",\"request_id\":\"...\",\"approve\":...}'}. Use this for LLM ergonomics; the underlying protocol is identical.";
 
 export function buildTeamPlanApproveTool(
   pi: ExtensionAPI,
@@ -97,20 +99,57 @@ export function buildTeamPlanApproveTool(
       }
 
       const handle = getTeammateHandle(pi);
+      const resolved = resolveLeaderAgentAddress(
+        teammate,
+        handle.teamStore,
+        handle.mailbox,
+      );
+      if (!resolved.ok) {
+        return {
+          content: [{ type: "text" as const, text: resolved.error }],
+          isError: true,
+          details: {
+            action: "team_plan_approve" as const,
+            teammate,
+            request_id: requestId,
+            approve,
+          },
+        };
+      }
+
       const body = buildPlanApprovalResponse(requestId, approve, feedback);
       const msg: MailboxMessage = {
         id: randomBytes(8).toString("hex"),
         from: "leader",
-        to: teammate,
+        to: resolved.agentId,
         body,
         timestamp: Date.now(),
         isProtocol: true,
       };
-      handle.mailbox.send(msg);
+      const sendResult = handle.mailbox.send(msg);
+      if (!sendResult.ok) {
+        return {
+          content: [{ type: "text" as const, text: sendResult.error }],
+          isError: true,
+          details: {
+            action: "team_plan_approve" as const,
+            teammate,
+            request_id: requestId,
+            approve,
+          },
+        };
+      }
+
+      for (const agentId of sendResult.recipientAgentIds) {
+        emitTeammateEvent(pi, {
+          kind: "message_sent",
+          msg: { ...msg, to: agentId },
+        });
+      }
 
       const details: TeamPlanApproveDetails = {
         action: "team_plan_approve",
-        teammate,
+        teammate: resolved.agentId,
         request_id: requestId,
         approve,
       };
@@ -120,7 +159,7 @@ export function buildTeamPlanApproveTool(
         content: [
           {
             type: "text" as const,
-            text: `Plan approval response sent to ${teammate} (request_id=${requestId}, approve=${approve})`,
+            text: `Plan approval response sent to ${resolved.agentId} (request_id=${requestId}, approve=${approve})`,
           },
         ],
         details,

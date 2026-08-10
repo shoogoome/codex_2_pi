@@ -43,6 +43,8 @@ import {
   unregisterTaskType,
 } from "./taskTypeRegistry.js";
 import { attachTasksHandle, type TasksHandle } from "./handle.js";
+import { createAgentCapacity } from "./agentCapacity.js";
+import { attachAgentCapacity } from "./agentCapacityHandle.js";
 import { logError } from "./logging.js";
 import { buildTaskPanel } from "./ui/taskPanel.js";
 import { createTaskPanelViewStateStore } from "./ui/viewState.js";
@@ -84,6 +86,8 @@ export default function tasksExtension(
     unregisterTaskType,
   };
   attachTasksHandle(pi, handle);
+  const agentCapacity = createAgentCapacity();
+  attachAgentCapacity(pi, agentCapacity);
 
   registerTaskNotificationRenderer(pi);
   registerTaskProgressRenderer(pi);
@@ -108,6 +112,9 @@ export default function tasksExtension(
   let panelVisible = false;
 
   pi.on("session_start", (_event, ctx) => {
+    // A replacement/resumed root session gets a fresh capacity accounting
+    // generation before localagent/teammate session_start handlers can spawn.
+    agentCapacity.reset("Root session replaced");
     // sessionManager 是 ReadonlySessionManager —— 取 sessionId 即可,不要 mutate。
     store._setSessionId(ctx.sessionManager.getSessionId());
     _resetTaskOutputDirForTest();

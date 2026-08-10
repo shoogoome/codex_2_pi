@@ -48,7 +48,7 @@
 | 扩展 | 一句话能力 | 主要命令 / 入口 | 详情 |
 |---|---|---|---|
 | `effort` | 通用 thinking 档位、两级高级选择器、模型+档位原子选择和推理升降快捷键。 | `/effort [status\|off\|minimal\|low\|medium\|high\|xhigh\|max\|ultra]` · `/model` · `Alt+,` / `Alt+.` | [effort.md](extensions/effort.md) |
-| `ultra` | 独立 Codex Ultra controller：Sol/Terra 的会话态 Ultra、wire `max`、主动 multi-agent 政策、恢复与 TUI 状态。 | 由 `/effort ultra` / `/model` 进入 | [ultra.md](extensions/ultra.md) |
+| `ultra` | Codex Ultra controller：Sol/Terra 会话态 Ultra、wire `max`，自动激活 `task_agent` 并注入可执行的并行 workflow；Plan 模式安全暂停。 | 由 `/effort ultra` / `/model` 进入 | [ultra.md](extensions/ultra.md) |
 | `local-models` | 发现本地大模型运行时（Ollama、LM Studio）并注册为指向 localhost 的 OpenAI 兼容 provider，支持列举/拉取/就绪检查。 | `/local-models`（`list`/`pull`/`ensure_ready`）· 别名 `/ollama` `/lm` | [local-models.md](extensions/local-models.md) |
 | `codebuddy-reasoning` | 对齐 CodeBuddy 原生 `gpt-5.6-sol` 请求参数，使 High thinking 返回并展示可见推理摘要。 | 无命令，自动生效 | — |
 
@@ -80,7 +80,7 @@
 
 ## 仓库原有扩展
 
-以下为本包更早期已提供的基础扩展（详情见 [README.md](../README.md) 对应章节）：
+以下为本包更早期已提供的基础扩展（详情见 [README.md](../README.md) 对应章节）。多 Agent 的运行模式、隔离、恢复、审批与容量限制另见 [multi-agent.md](extensions/multi-agent.md)：
 
 | 扩展 | 一句话能力 | 主要命令 / 工具 |
 |---|---|---|
@@ -93,10 +93,10 @@
 | `pets` | Codex 风格终端宠物 widget，依 agent 状态切换动画，Kitty graphics/tmux passthrough 可选，其余回退 block-art。 | （无命令，自动 widget） |
 | `goal` | Codex 风格 thread goal：持久目标 + 预算消耗 + 续跑提示，随 session 保存。 | 工具 `get_goal`/`create_goal`/`update_goal` · `/goal <objective>` · `/goal resume` |
 | `side` | `/side` 在 Pi overlay 中用当前 leaf 的 compaction-aware 上下文启动临时 side 对话，关闭窗口即丢弃。 | `/side [message]` |
-| `localagent` | 进程内运行一次性、后台或 fork 子 agent；默认继承父会话 model/reasoning，支持显式覆盖，并按 agent role 收敛工具。 | 工具 `task_agent` |
+| `localagent` | 进程内运行一次性、后台或 fork 子 agent；按 role 收敛工具，后台终态自动回传最终回答，并与 teammate 共享容量。 | 工具 `task_agent` |
 | `localshell` | 注册 `task_bash` 工具 + LocalShellTask；前台命令零额外通知，超时自动转后台，后台终态默认只在安全边界更新 TUI，Bash 调用/输出样式对齐 Claude UI。 | 工具 `task_bash` / `task_status` / `task_kill`；`PI_TASKS_WAKE_ON_BACKGROUND=1` 可主动唤醒 LLM |
-| `tasks` | 任务框架底座：进程内 default TaskStore + 背景 agents panel（Ctrl+Y 焦点 / Enter overlay）+ 任务查询/管理工具。 | 工具 `task_status`/`task_kill`/`task_list` |
-| `teammate` | 长生命周期多 agent 团队：继承父会话 model/reasoning、按 role 分配工具、身份绑定消息主动回传 leader，并支持计划审批、任务看板、resume 与优雅关闭。 | 工具 `team_create`/`task_agent(team_name+name)`/`send_message`/`request_plan_approval`/`team_delete`/`team_plan_approve` + team task 工具 |
+| `tasks` | 任务框架底座：TaskStore、背景 agents panel、查询管理工具，以及根 session 共享 resident/execution 容量控制。 | 工具 `task_status`/`task_kill`/`task_list` |
+| `teammate` | 长生命周期团队：`name@team` 隔离、共享任务看板、自动结果、未 ACK 消息重放、硬写审批、role 指纹 fail-closed resume 与优雅关闭。 | 工具 `team_create`/`task_agent(team_name+name)`/`send_message`/`request_plan_approval`/`team_delete`/`team_plan_approve` + team task 工具 |
 | `user-input` | 向用户提问 1-3 个带选项的问题（UI 自动加 `Other` 自由文本项）。 | 工具 `request_user_input`/`ask_user_question`/`askUserQuestion` |
 
 ---

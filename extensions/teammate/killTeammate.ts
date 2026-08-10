@@ -8,9 +8,9 @@
 //      emit/dispose work, avoiding double teammate_terminal events).
 //   3. Emit teammate_terminal event (status="killed").
 //   4. Remove member from teamStore.
-//   5. Try session.dispose() (defensive — onTerminal also tries; idempotent).
-//   6. Call abortController.abort() — wakes the loop, which calls onTerminal
-//      but sees notified=true and skips re-doing.
+//   5. Abort the loop wait and active AgentSession prompt, allowing its
+//      execution-capacity lease to settle.
+//   6. Dispose the session (defensive/idempotent).
 //   7. Evict task output (fire-and-forget).
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -27,6 +27,7 @@ import type { TeammateHandle } from "./handle.js";
 import { getTeammateHandle } from "./handle.js";
 import { emitTeammateEvent } from "./eventEmit.js";
 import type { InProcessTeammateTaskState } from "./types.js";
+import { unregisterApprovalSession } from "./approvalGate.js";
 
 /**
  * Tear down an in-process teammate without writing a terminal event. Used when
@@ -47,6 +48,8 @@ export async function suspendTeammate(
     notified: true,
   }));
 
+  task.agentResidentLease?.release();
+  unregisterApprovalSession(task.sessionFile);
   try {
     task.abortController?.abort();
   } catch (e) {
@@ -96,20 +99,30 @@ export async function killTeammate(
   // Step 4: remove from team.
   handle.teamStore.removeMember(task.identity.teamName, task.identity.agentId);
 
-  // Step 5: dispose session (defensive — loop's onTerminal would also dispose
-  // if not notified, but we already flipped notified so it's our job now).
+  // Release cross-session resources eagerly. The loop's terminal callback is
+  // idempotent and may run later after session.abort settles.
+  task.agentResidentLease?.release();
+  unregisterApprovalSession(task.sessionFile);
+
+  // Step 5: wake any capacity waiter, then abort an active prompt so the
+  // loop's finally block can release its execution lease.
+  try {
+    task.abortController?.abort();
+  } catch (e) {
+    logError(e, "killTeammate abortController");
+  }
+  try {
+    await task.session?.abort();
+  } catch (e) {
+    logError(e, "killTeammate session.abort");
+  }
+
+  // Step 6: dispose session (the loop sees notified=true and skips its own
+  // terminal dispose path).
   try {
     task.session?.dispose();
   } catch (e) {
     logError(e, "killTeammate session.dispose");
-  }
-
-  // Step 6: wake the loop so it exits cleanly. The loop sees abortSignal
-  // fired, runs its onTerminal callback, finds notified=true, and skips.
-  try {
-    task.abortController?.abort();
-  } catch (e) {
-    logError(e, "killTeammate abort");
   }
 
   // Step 7: evict output asynchronously.

@@ -34,6 +34,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import type { KeyId } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
+import { setAgentMutationPaused } from "../shared/agentMutationPause.js";
 import {
 	computeReadOnlyTools,
 	EXIT_TOOL_NAME,
@@ -117,6 +118,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	function enter(ctx: ExtensionContext): void {
 		const prePlan = pi.getActiveTools();
 		enterPlan(prePlan);
+		setAgentMutationPaused(true);
 		pi.setActiveTools(computeReadOnlyTools(prePlan));
 		persist();
 		updateStatus(ctx);
@@ -129,6 +131,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		const restored = sanitizeToolNames(prePlanActiveTools, available).filter((n) => n !== EXIT_TOOL_NAME);
 		exitPlan();
 		if (restored.length > 0) pi.setActiveTools(restored);
+		setAgentMutationPaused(false);
 		persist();
 		updateStatus(ctx);
 	}
@@ -202,11 +205,12 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	// Read-only guard: block write-class tools and write bash commands.
 	pi.on("tool_call", async (event) => {
 		if (!getState().enabled) return;
-		if (isToolCallEventType("bash", event)) {
-			if (isWriteBashCommand(event.input.command)) {
+		if (isToolCallEventType("bash", event) || event.toolName === "task_bash") {
+			const command = (event.input as { command?: unknown }).command;
+			if (typeof command === "string" && isWriteBashCommand(command)) {
 				return {
 					block: true,
-					reason: "Plan 模式只读:该 bash 命令会修改文件或系统状态,已被拦截。请仅用只读命令探查,完成后调用 exit_plan_mode 提交计划。",
+					reason: "Plan 模式只读:该 shell 命令会修改文件或系统状态,已被拦截。请仅用只读命令探查,完成后调用 exit_plan_mode 提交计划。",
 				};
 			}
 			return;
@@ -214,7 +218,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		if (isWriteTool(event.toolName)) {
 			return {
 				block: true,
-				reason: "Plan 模式只读,不能修改文件。完成探查后调用 exit_plan_mode 提交计划,经用户批准后再实现。",
+				reason: "Plan 模式只读,不能调用写工具或启动可能绕过只读边界的子 Agent。完成探查后调用 exit_plan_mode 提交计划,经用户批准后再实现。",
 			};
 		}
 	});
@@ -236,6 +240,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			setState({ enabled: true, prePlanActiveTools: [] });
 		}
 
+		setAgentMutationPaused(getState().enabled);
 		if (getState().enabled) {
 			// Only capture pre-plan tools if we didn't already have them persisted.
 			if (getState().prePlanActiveTools.length === 0) {
@@ -251,6 +256,8 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	pi.on("session_compact", async (_event, ctx) => restore(ctx));
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		// Invalidate any teammate approval before child sessions are suspended.
+		setAgentMutationPaused(true);
 		if (ctx.hasUI) {
 			ctx.ui.setStatus(STATUS_KEY, undefined);
 			ctx.ui.setWidget(STATUS_KEY, undefined);

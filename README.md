@@ -18,14 +18,14 @@
 | `extensions/imagegen` | Codex 订阅生图：复刻 codex 内置 `image_gen.imagegen`，走 openai-codex OAuth 直连 ChatGPT 图片 API（gpt-image-2），生成/编辑结果保存到 `~/.pi/agent/generated_images/<session>/` 并回传给模型检查迭代。 | `generate_image` |
 | `extensions/todo` | Codex 风格 `update_plan`（整份计划快照）+ 计划渲染 + 常驻 plan overlay。 | `update_plan` |
 | `extensions/effort` | 通用 thinking 档位、Codex 风格两级高级选择器、`/model` 模型+档位原子选择，以及 `Alt+,` / `Alt+.` 升降快捷键。 | `/effort [status\|off\|minimal\|low\|medium\|high\|xhigh\|max\|ultra]` · `/model` |
-| `extensions/ultra` | GPT-5.6 Sol/Terra 的独立 Codex Ultra controller：会话态 `ultra`、请求下沉 `max`、主动 multi-agent 政策、恢复语义和 TUI 状态。 | 由 `/effort ultra` 或 `/model` 高级选择器进入 |
+| `extensions/ultra` | GPT-5.6 Sol/Terra 的 Codex Ultra controller：会话态 `ultra`、wire `max`，自动激活 `task_agent` 并注入并行 multi-agent workflow。 | 由 `/effort ultra` 或 `/model` 高级选择器进入 |
 | `extensions/compact-ui` | Codex 风格紧凑 UI:消息前缀化 + 常见内置工具短渲染（与 claude-ui 互斥）。 | （`--claude-ui=false` 回退到此皮肤） |
 | `extensions/pets` | Codex 风格终端宠物 widget，依 agent 状态切换动画，Kitty graphics/tmux passthrough 可选，其余回退 block-art。 | （无命令，自动 widget） |
 | `extensions/goal` | Codex 风格 thread goal:持久目标 + 预算消耗 + 续跑提示，随 session 保存。 | `get_goal` / `create_goal` / `update_goal` · `/goal <objective>` · `/goal resume` |
 | `extensions/localagent` | 注册 `task_agent` + `local_agent` 任务类型，进程内运行一次性/后台/fork 子 agent；默认继承当前 model + reasoning，可显式覆盖，并按 agent role 收敛工具。 | `task_agent` |
 | `extensions/localshell` | 注册 `task_bash` 工具 + LocalShellTask：前台完成只保留一条 Bash 工具结果，超时转后台；后台终态默认在空闲时即时、忙时于 agent_end 安全边界更新 TUI，不打断/注入 LLM，调用头、输出 gutter、颜色和折叠与 Claude UI 的 `Bash` 一致。 | `task_bash` · `task_status` / `task_kill` · `PI_TASK_BASH_TIMEOUT_MS` 调默认超时 · `PI_TASKS_WAKE_ON_BACKGROUND=1` 可恢复 Claude 式主动唤醒 |
 | `extensions/tasks` | 任务框架底座:default TaskStore + 背景 agents panel（Ctrl+Y 焦点 / Enter overlay）+ 任务查询管理工具。 | `task_status` / `task_kill` / `task_list` |
-| `extensions/teammate` | 长生命周期多 agent 团队协作：成员继承父会话 model + reasoning、按 role 获得工具，经身份绑定通道主动回传 leader，并支持计划审批、任务看板、resume 与优雅关闭。 | `team_create` / `task_agent(team_name+name)` / `send_message` / `request_plan_approval` / `team_delete` / `team_plan_approve` |
+| `extensions/teammate` | 长生命周期多 agent 团队协作：完整 `name@team` 隔离、自动结果回传、持久消息重放、硬写审批、共享任务看板与安全 resume。 | `team_create` / `task_agent(team_name+name)` / `send_message` / `request_plan_approval` / `team_delete` / `team_plan_approve` |
 
 ### 新增扩展（Codex + Claude Code 能力移植）
 
@@ -94,34 +94,23 @@ curl "http://<机器IP>:4317/v1/messages" \
 
 直接向 agent 发送自定义评审指令，不打开预设选择器。
 
-## Subagent 工具
+## 多 Agent 工具
 
-此包注册了 Codex 风格的多 agent 工具：
-
-- `spawn_agent` 启动一个后台 `pi --mode rpc --no-session` 子 agent，并立即返回任务名和状态。默认不继承主 agent 会话上下文。只有当工具调用显式传入 `fork_context: true` 时，扩展会 clone 当前 Pi session 的 active branch，并用 `pi --mode rpc --session <forked-session>` 启动子 agent。
-- `wait_agent` 等待某个 subagent 的邮箱更新或超时。
-- `send_message` 向运行中的 subagent 发送引导消息；如果该 subagent 空闲，则启动新的提示轮次。
-- `followup_task` 向运行中的 subagent 排队后续任务；如果该 subagent 空闲，则启动新的提示轮次。
-- `list_agents` 列出当前 Pi 会话中的 subagents。
-- `close_agent` 中止并关闭 subagent 进程。
-
-`fork_context` 是显式 opt-in。模型不应因为任务复杂或需要并行分析就自动启用它；只有当用户明确要求 fork、clone、继承当前完整上下文，或让 subagent 使用当前会话上下文时才应设置为 `true`。如果当前主会话没有持久化 session 文件，fork 模式会报错；普通模式仍可使用。
-
-折叠后的 TUI 行使用 Codex 风格摘要：已启动 agent、已发送输入、等待中、等待结束、已关闭 agent。展开后的行显示 Pi 特定的调试信息，例如最近的子进程工具调用、stderr 预览和用量计数。这些信息只用于 UI 可观测性，不会作为完整日志返回给父模型。
-
-在交互式 TUI 中，`extensions/subagents` 还会在聊天输入框下方显示当前 `starting` / `running` 的 subagent 列表。列表只作为 UI 状态提示，不会写入模型上下文；所有 subagent 都结束后该提示会自动消失。
+当前多 Agent 实现统一由 `extensions/localagent`、`extensions/tasks` 和 `extensions/teammate` 提供；旧的 RPC `extensions/subagents`、`spawn_agent`、`wait_agent`、`followup_task`、`close_agent` 工具链已经移除。
 
 ### `task_agent` 与 teammate
 
-`extensions/localagent` 的 `task_agent` 是另一条**进程内**执行路径：省略 `team_name`/`name` 时运行一次性或后台 agent，使用 `run_in_background: true` 可后台化；省略 `subagent_type` 则 fork 当前有效上下文。子 agent 默认继承父会话当前 model 与 reasoning，只有显式传 `model` 才覆盖；实际 SDK 从当前 `pi` CLI 旁解析，避免项目开发依赖版本漂移。agent role 的 `tools`/`disallowedTools` 会真正约束子会话；未指定 tools 的自定义角色安全默认只读，内置 `general-purpose` 显式拥有当前可用工具（递归/团队管理工具仍移除）。
+`extensions/localagent` 的 `task_agent` 是一条**进程内**执行路径：省略 `team_name`/`name` 时运行一次性或后台 agent，使用 `run_in_background: true` 可后台化；省略 `subagent_type` 则 fork 当前有效上下文。子 agent 默认继承父会话当前 model 与 reasoning，只有显式传 `model` 才覆盖；实际 SDK 从当前 `pi` CLI 旁解析，避免项目开发依赖版本漂移。agent role 的 `tools`/`disallowedTools` 会真正约束子会话；未指定 tools 的自定义角色安全默认只读，内置 `general-purpose` 显式拥有当前可用工具（递归/团队管理工具仍移除）。后台 agent 结束时会把有界最终回答随终态通知自动送回 leader，完整轨迹仍保存在 `output_file`。
 
-同时传 `team_name` 与 `name` 会创建长生命周期 teammate。teammate 使用同一套 role 解析和 model/reasoning 继承，拥有身份绑定的 `send_message`、计划审批及 team task 工具；给 leader 的消息会主动注入主会话，而不是依赖轮询。团队在 session resume 时恢复；`session_shutdown` 以不写 terminal 事件的方式挂起成员，下一会话可重建；显式 `team_delete` 才会先执行 shutdown handshake，再对超时成员强制清理。
+localagent 与 teammate 共用根会话容量控制：默认最多 6 个驻留线程、4 个同时执行线程（都包含 leader，即最多 5 个驻留/3 个执行中的子 Agent）；可通过 `PI_AGENT_MAX_THREADS` 和 `PI_AGENT_MAX_CONCURRENT` 调整。teammate 仅在实际 turn 占执行槽，idle 时只占驻留槽；超过执行上限的工作按 FIFO 等待，取消、失败、kill 和 session 切换都会释放或重置配额。
+
+同时传 `team_name` 与 `name` 会创建长生命周期 teammate。成员用完整 `name@team` 路由：裸名称只有在 team 内（leader 侧则要求跨 team 唯一）才解析，广播也不会越 team。每轮最终回答和错误会自动注入 leader；成员间消息以 `message_sent → message_ack` 持久化，未 ACK 消息在 resume 后按序重放。team task 工具绑定 leader-realm 共享 store，并强制成员只能访问自己的 team。写文件、变更 shell 和 MCP 调用由运行时硬门禁拦截，只有 `request_plan_approval` 获批后才在当前 turn 开放；恢复时若原 role 被删除或定义指纹变化则 fail-closed，不会回退到 `general-purpose`。`session_shutdown` 会挂起成员供下一会话重建；显式 `team_delete` 才执行 shutdown handshake 和超时强制清理。详见 [多 Agent 说明](docs/extensions/multi-agent.md)。
 
 ## `/effort` 与 Codex Ultra
 
 `/effort` 不带参数时打开当前模型的推理档位选择器，`/effort status` 查看有效档位；普通档位调用 Pi 原生 thinking level。与 Codex 一样，Max/Ultra 收在第二层 `More reasoning…` 高级选择器中，`Alt+,` / `Alt+.` 可降低/提高普通档位，但提高操作不会静默跨入 Max/Ultra。交互式 `/model [过滤词]` 也会按“模型 → 推理档位”原子选择，取消档位选择不会先切模型。
 
-Ultra 的入口属于 reasoning effort，但实现独立放在 `extensions/ultra`：仅对 `openai-codex/gpt-5.6-sol` / `gpt-5.6-terra` 开放；会话中保留客户端态 `ultra`，provider 请求发送原生 `max`，同时注入 Codex 的 proactive multi-agent mode。非 Ultra 时恢复 exact explicit-request-only mode。Ultra 状态随 session 分支持久化，resume/fork/tree/compaction 会重新应用；切换档位或不支持的模型会退出。footer 显示 `» ULTRA · multi-agent`，并在启用时给出一次性激活反馈。`task_agent` 未安装/未激活时会警告。
+Ultra 的入口属于 reasoning effort，但实现独立放在 `extensions/ultra`：仅对 `openai-codex/gpt-5.6-sol` / `gpt-5.6-terra` 开放；会话中保留客户端态 `ultra`，provider 请求发送原生 `max`。启用时 controller 会自动激活已注册的 `task_agent`，同时注入 Codex proactive policy 和明确工作流：存在至少两个独立工作流时并行委派，leader 同时推进独立工作，等待自动终态通知后综合；简单任务不强行并行。Plan 模式下 workflow 暂停且不会绕过只读边界，退出后恢复；关闭 Ultra 时只撤销 Ultra 自己激活的 tool。footer/status 会显示 workflow active 或暂停原因。
 
 ## `/side`
 
@@ -233,4 +222,4 @@ npm run typecheck
 
 `/side` 现在作为 extension-only 版本提供：它使用独立模型请求和 Pi overlay 复刻 Codex 的临时 side conversation。它不依赖 Pi 核心线程切换，因此 UI 行为不完全等同 Codex 原生实现，但关闭 overlay 即关闭 side 会话。
 
-Subagent 的 `fork_context: true` 已支持基于 Pi session clone 的显式上下文 fork。agent 角色/配置文件，以及跨会话 subagent 恢复仍暂缓实现。
+`task_agent` 已支持基于 Pi session 的完整上下文 fork、自定义 agent role、共享并发/权限边界，以及长生命周期 teammate 的安全跨会话恢复。选择性继承最近 N 轮上下文、根会话级 token/费用硬预算和嵌套 Agent 仍暂缓；递归 spawn 继续关闭。

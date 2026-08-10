@@ -45,10 +45,12 @@ function buildRunningTask(
 ): {
   state: InProcessTeammateTaskState;
   abort: ReturnType<typeof vi.fn>;
+  sessionAbort: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
 } {
   const ac = new AbortController();
   const abort = vi.fn().mockImplementation(() => ac.abort());
+  const sessionAbort = vi.fn().mockResolvedValue(undefined);
   const dispose = vi.fn();
   const state: InProcessTeammateTaskState = {
     ...createTaskStateBase({
@@ -76,13 +78,13 @@ function buildRunningTask(
     turnCount: 0,
     abortController: { signal: ac.signal, abort } as unknown as AbortController,
     session: {
-      abort: vi.fn().mockResolvedValue(undefined),
+      abort: sessionAbort,
       dispose,
       prompt: vi.fn(),
       subscribe: vi.fn(),
     } as never,
   };
-  return { state, abort, dispose };
+  return { state, abort, sessionAbort, dispose };
 }
 
 describe("killTeammate — basics", () => {
@@ -103,15 +105,22 @@ describe("killTeammate — basics", () => {
     expect(fakePi.sendMessage).not.toHaveBeenCalled();
   });
 
-  it("running task → status=killed, abort+dispose called, teammate_terminal event emitted", async () => {
+  it("running task → status=killed, releases capacity, aborts, and emits terminal", async () => {
     const taskStore = createTaskStore();
     const handle = buildHandle("team1");
-    const { state, abort, dispose } = buildRunningTask("a2");
+    const { state, abort, sessionAbort, dispose } = buildRunningTask("a2");
+    const release = vi.fn();
+    state.agentResidentLease = {
+      released: false,
+      release,
+    };
     registerTask(state, taskStore);
     await killTeammate(fakePi as never, taskStore, handle, "a2");
     expect(taskStore.getTask("a2")?.status).toBe("killed");
     expect(abort).toHaveBeenCalled();
+    expect(sessionAbort).toHaveBeenCalled();
     expect(dispose).toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
     const events = fakePi.sendMessage.mock.calls.filter(
       ([m]: unknown[]) => (m as { customType?: string }).customType === "teammate/event",
     );

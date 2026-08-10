@@ -62,7 +62,7 @@ describe("buildTeammateSendMessageTool — identity-bound routing", () => {
     expect((delivered[0]!.details as { body: string }).body).toBe("member-a 第1轮消息");
 
     const details = (result as { details: { from?: string; to?: string; delivered?: boolean } }).details;
-    expect(details).toMatchObject({ from: "member-a", to: "leader", delivered: true });
+    expect(details).toMatchObject({ from: "member-a@team1", to: "leader", delivered: true });
   });
 
   it("prefers a directly captured leader delivery closure over cross-realm lookup", async () => {
@@ -89,35 +89,69 @@ describe("buildTeammateSendMessageTool — identity-bound routing", () => {
     });
     const deps = createDeps();
     const peer: MailboxMessage[] = [];
-    deps.mailbox.registerReceiver("member-b", (message) => peer.push(message));
+    deps.mailbox.registerReceiver("member-b@team1", (message) => peer.push(message));
 
     const tool = buildTeammateSendMessageTool(identity, deps);
     await run(tool, "*", "hello everyone");
 
     expect(delivered).toHaveLength(1);
     expect((delivered[0]!.details as { to: string }).to).toBe("*");
-    expect(peer[0]).toMatchObject({ from: "member-a", to: "*", body: "hello everyone" });
+    expect(peer[0]).toMatchObject({
+      from: "member-a@team1",
+      to: "member-b@team1",
+      body: "hello everyone",
+    });
   });
 
   it("routes direct peer messages and rejects unknown teammates", async () => {
     const deps = createDeps();
     const peer: MailboxMessage[] = [];
-    deps.mailbox.registerReceiver("member-b", (message) => peer.push(message));
-    const tool = buildTeammateSendMessageTool(identity, deps);
+    const persistEvent = vi.fn();
+    deps.mailbox.registerReceiver("member-b@team1", (message) => peer.push(message));
+    const tool = buildTeammateSendMessageTool(identity, {
+      ...deps,
+      persistEvent,
+    });
 
     const sent = await run(tool, "member-b", "please review");
-    expect(peer[0]).toMatchObject({ from: "member-a", to: "member-b", body: "please review" });
+    expect(peer[0]).toMatchObject({
+      from: "member-a@team1",
+      to: "member-b@team1",
+      body: "please review",
+    });
     expect((sent as { details: { delivered?: boolean } }).details.delivered).toBe(true);
+    expect(persistEvent).toHaveBeenCalledWith({
+      kind: "message_sent",
+      msg: expect.objectContaining({
+        from: "member-a@team1",
+        to: "member-b@team1",
+        body: "please review",
+      }),
+    });
 
     const unknown = await run(tool, "ghost", "hello");
     expect((unknown as { isError?: boolean }).isError).toBe(true);
+  });
+
+  it("rejects an explicit peer agentId from another team", async () => {
+    const deps = createDeps();
+    deps.teamStore.createTeam("team2", undefined, 2);
+    deps.teamStore.addMember("team2", "member-b@team2");
+    const otherTeam = vi.fn();
+    deps.mailbox.registerReceiver("member-b@team2", otherTeam);
+    const tool = buildTeammateSendMessageTool(identity, deps);
+
+    const result = await run(tool, "member-b@team2", "must not cross");
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(otherTeam).not.toHaveBeenCalled();
   });
 
   it("when no leader channel is registered, reports delivered=false", async () => {
     const tool = buildTeammateSendMessageTool(identity, createDeps());
     const result = await run(tool, "leader", "x");
     const details = (result as { details: { delivered?: boolean; from?: string } }).details;
-    expect(details).toMatchObject({ delivered: false, from: "member-a" });
+    expect(details).toMatchObject({ delivered: false, from: "member-a@team1" });
   });
 
   it("detects shutdown protocol bodies", async () => {

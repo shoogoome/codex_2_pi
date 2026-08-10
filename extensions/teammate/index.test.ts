@@ -13,6 +13,12 @@ import {
   getLeaderChannel,
   _resetLeaderBridgeForTest,
 } from "./leaderBridge.js";
+import {
+  _resetApprovalGateForTest,
+  grantApproval,
+  registerApprovalSession,
+  runWithApprovalSession,
+} from "./approvalGate.js";
 
 function buildFakeTasksHandle(): {
   handle: {
@@ -66,6 +72,40 @@ describe("teammateExtension entrypoint", () => {
     expect(handlers.has("session_start")).toBe(true);
     expect(handlers.has("session_shutdown")).toBe(true);
     expect(handlers.has("context")).toBe(true);
+  });
+
+  it("hard-blocks teammate mutations without turn approval", async () => {
+    _resetApprovalGateForTest();
+    const { pi, handlers } = buildFakePi();
+    teammateExtension(pi as never);
+    const toolCall = handlers.get("tool_call")!;
+    const identity = {
+      agentId: "writer@team",
+      agentName: "writer",
+      teamName: "team",
+      agentType: "general-purpose",
+    };
+    registerApprovalSession("child-session", identity);
+
+    const outsideChild = await toolCall(
+      { toolName: "write", input: { path: "x" } },
+      undefined,
+    );
+    expect(outsideChild).toBeUndefined();
+
+    const blocked = await runWithApprovalSession("child-session", () =>
+      toolCall({ toolName: "write", input: { path: "x" } }, undefined),
+    );
+    expect(blocked).toEqual(
+      expect.objectContaining({ block: true, reason: expect.stringContaining("writer@team") }),
+    );
+
+    grantApproval("child-session");
+    const allowed = await runWithApprovalSession("child-session", () =>
+      toolCall({ toolName: "write", input: { path: "x" } }, undefined),
+    );
+    expect(allowed).toBeUndefined();
+    _resetApprovalGateForTest();
   });
 
   it("attaches teammate handle (teamStore + mailbox) on pi.events", () => {
@@ -178,7 +218,7 @@ describe("teammateExtension entrypoint", () => {
     teammateExtension(pi as never);
     const { teamStore, mailbox, teamTaskStore } = getTeammateHandle(pi as never);
     teamStore.createTeam("t", undefined, 1);
-    mailbox.registerReceiver("a", () => {});
+    mailbox.registerReceiver("a@t", () => {});
     teamTaskStore.createTask({
       id: "tt1",
       teamName: "t",
@@ -186,7 +226,7 @@ describe("teammateExtension entrypoint", () => {
       createdAt: 1,
     });
     expect(teamStore.list()).toHaveLength(1);
-    expect(mailbox.onlineAgents()).toEqual(["a"]);
+    expect(mailbox.onlineAgents()).toEqual(["a@t"]);
     expect(Object.keys(teamTaskStore.get())).toEqual(["tt1"]);
 
     const shutdown = handlers.get("session_shutdown")!;

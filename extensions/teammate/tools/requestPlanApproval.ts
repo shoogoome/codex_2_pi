@@ -59,6 +59,8 @@ export interface BuildRequestPlanApprovalDeps {
    * registered (offline / test-only standalone mode).
    */
   getLeaderChannel: () => LeaderChannel | undefined;
+  /** Opens the hard mutation gate for the remainder of the current turn. */
+  onApproved?: () => boolean | void;
 }
 
 interface RequestPlanApprovalDetails {
@@ -71,7 +73,7 @@ interface RequestPlanApprovalDetails {
 const DESCRIPTION =
   "Request leader's approval before executing a non-trivial plan.\n\n" +
   "## When to use\n" +
-  "- Before ANY write/bash/edit operation that mutates the user's project (you don't have those tools directly — leader does — but if you delegate to leader via send_message, use this first to get explicit approval).\n" +
+  "- Before ANY write/bash/edit operation that mutates the user's project. The runtime gate blocks such calls until this request is approved.\n" +
   "- Before destructive operations (delete files, force-push, drop database).\n" +
   "- When unsure whether the leader's high-level goal aligns with your specific approach.\n\n" +
   "## Behavior\n" +
@@ -191,6 +193,21 @@ export function buildRequestPlanApprovalTool(
       if (decision.feedback !== undefined) details.feedback = decision.feedback;
 
       if (decision.approve) {
+        const gateOpened = deps.onApproved?.();
+        if (gateOpened === false) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  "Leader approved the plan, but the mutation gate remains closed " +
+                  "because the root session is in Plan mode.",
+              },
+            ],
+            isError: true,
+            details,
+          };
+        }
         const text = decision.feedback
           ? `Plan approved by leader.\n\nFeedback: ${decision.feedback}`
           : "Plan approved by leader.";

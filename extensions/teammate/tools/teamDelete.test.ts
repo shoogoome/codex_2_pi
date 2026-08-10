@@ -141,7 +141,7 @@ describe("team_delete tool", () => {
 
     // When mailbox receives shutdown_request, simulate the teammate's loop
     // marking the task terminal "completed" (graceful).
-    handle.mailbox.registerReceiver("alpha", (_msg) => {
+    handle.mailbox.registerReceiver("alpha@research", (_msg) => {
       // Immediately flip task to terminal completed (simulates fast graceful shutdown).
       updateTaskState<InProcessTeammateTaskState>(aliceTask.id, taskStore, (t) => ({
         ...t,
@@ -174,7 +174,7 @@ describe("team_delete tool", () => {
 
     const _aliceTask = makeTeammateTask(taskStore, "alpha", "research");
     // Receive but DO NOT respond — simulate uncooperative teammate
-    handle.mailbox.registerReceiver("alpha", () => {
+    handle.mailbox.registerReceiver("alpha@research", () => {
       // intentional no-op; task stays running
     });
 

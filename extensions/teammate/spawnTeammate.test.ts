@@ -8,6 +8,8 @@ import { _resetTaskOutputDirForTest } from "../tasks/outputPath.js";
 import { _clearOutputsForTest } from "../tasks/diskOutput.js";
 import type { TeammateHandle } from "./handle.js";
 import type { InProcessTeammateTaskState } from "./types.js";
+import { createAgentCapacity } from "../tasks/agentCapacity.js";
+import { attachAgentCapacity } from "../tasks/agentCapacityHandle.js";
 
 interface FakePi {
   events: Record<string, unknown>;
@@ -30,6 +32,7 @@ const fakePi: FakePi = {
 };
 
 beforeEach(() => {
+  fakePi.events = {};
   _setDefaultTaskStoreForTest(createTaskStore());
   _resetTaskOutputDirForTest();
   fakePi.sendMessage.mockClear();
@@ -265,10 +268,18 @@ describe("spawnTeammate — happy path", () => {
     expect(args.tools).toContain("task_bash");
     expect(args.tools).toContain("task_kill");
 
-    // An identity-bound send_message must be injected as a customTool so the
-    // teammate sub-session can resolve its sender without cross-realm ALS.
+    // Cross-realm collaboration tools must all be identity-bound customTools.
     const customTools = (args.customTools ?? []) as Array<{ name?: string }>;
-    expect(customTools.some((t) => t?.name === "send_message")).toBe(true);
+    expect(customTools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining([
+        "send_message",
+        "request_plan_approval",
+        "team_task_create",
+        "team_task_update",
+        "team_task_list",
+        "team_task_get",
+      ]),
+    );
   });
 
   it("injects identity-bound request_plan_approval as customTool", async () => {
@@ -365,6 +376,33 @@ describe("spawnTeammate — validation errors", () => {
         cwd: "/tmp",
       }),
     ).rejects.toThrow(/does not exist/);
+  });
+
+  it("enforces the shared resident-thread limit before spawning another teammate", async () => {
+    const capacity = createAgentCapacity({ maxThreads: 2, maxConcurrent: 2 });
+    attachAgentCapacity(fakePi as never, capacity);
+    const taskStore = createTaskStore();
+    _setDefaultTaskStoreForTest(taskStore);
+    const handle = buildHandle();
+    handle.teamStore.createTeam("research", undefined, 100);
+
+    await spawnTeammate(fakePi as never, taskStore, handle, {
+      teamName: "research",
+      agentName: "alice",
+      agentType: "general-purpose",
+      prompt: "go",
+      cwd: "/tmp",
+    });
+    await expect(
+      spawnTeammate(fakePi as never, taskStore, handle, {
+        teamName: "research",
+        agentName: "bob",
+        agentType: "general-purpose",
+        prompt: "go",
+        cwd: "/tmp",
+      }),
+    ).rejects.toThrow(/thread limit reached/);
+    expect(capacity.snapshot().residentChildren).toBe(1);
   });
 
   it("throws on duplicate agentId in same team (running task)", async () => {

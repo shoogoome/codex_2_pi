@@ -1,9 +1,15 @@
 import { randomBytes } from "node:crypto";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { getTeammateHandle } from "../../handle.js";
 import { emitTeammateEvent } from "../../eventEmit.js";
 import type { TeamTask } from "../types.js";
+import {
+  canAccessTeam,
+  findCrossTeamBlocker,
+  resolveTeamTaskHandle,
+  teamAccessError,
+  type TeamTaskToolBinding,
+} from "./teamTaskBinding.js";
 
 const TeamTaskCreateParams = Type.Object({
   team_name: Type.String({
@@ -58,6 +64,7 @@ const DESCRIPTION =
 
 export function buildTeamTaskCreateTool(
   pi: ExtensionAPI,
+  binding?: TeamTaskToolBinding,
 ): ToolDefinition<typeof TeamTaskCreateParams, TeamTaskCreateDetails> {
   return {
     name: "team_task_create",
@@ -94,7 +101,19 @@ export function buildTeamTaskCreateTool(
         };
       }
 
-      const handle = getTeammateHandle(pi);
+      const handle = resolveTeamTaskHandle(pi, binding);
+      if (binding && !canAccessTeam(binding, teamName)) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: teamAccessError(binding, teamName),
+            },
+          ],
+          isError: true,
+          details: { action: "team_task_create" as const, teamName },
+        };
+      }
       if (!handle.teamStore.getTeam(teamName)) {
         return {
           content: [
@@ -108,6 +127,25 @@ export function buildTeamTaskCreateTool(
       const taskId = `tt-${randomBytes(6).toString("hex")}`;
       const now = Date.now();
       const blockedBy = params.blocked_by ?? [];
+      const crossTeamBlocker = binding
+        ? findCrossTeamBlocker(handle, teamName, blockedBy)
+        : undefined;
+      if (crossTeamBlocker) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Blocked task '${crossTeamBlocker}' is not accessible in team '${teamName}'`,
+            },
+          ],
+          isError: true,
+          details: {
+            action: "team_task_create" as const,
+            teamName,
+            blockedBy,
+          },
+        };
+      }
 
       const created = handle.teamTaskStore.createTask({
         id: taskId,

@@ -41,6 +41,8 @@ import {
 import { markTaskNotified, notifyTaskTerminal } from "../tasks/notifications.js";
 import { emitTaskProgress } from "../tasks/progress.js";
 import { logError } from "../tasks/logging.js";
+import { getAgentCapacity } from "../tasks/agentCapacityHandle.js";
+import type { AgentCapacityLease } from "../tasks/agentCapacity.js";
 
 import type { AgentDefinition, LocalAgentTaskState } from "./types.js";
 import type { AgentModel, AgentThinkingLevel } from "./model.js";
@@ -62,6 +64,14 @@ import {
   type ForkSessionManagerLike,
 } from "./buildForkedMessages.js";
 
+const FINAL_MESSAGE_MAX_CHARS = 12_000;
+
+function boundedFinalMessage(text: string): string | undefined {
+  if (!text) return undefined;
+  if (text.length <= FINAL_MESSAGE_MAX_CHARS) return text;
+  return `${text.slice(0, FINAL_MESSAGE_MAX_CHARS)}\n\n[truncated; read output_file for the full result]`;
+}
+
 // ---------- public types ----------
 
 export interface SpawnLocalAgentOptions {
@@ -77,6 +87,8 @@ export interface SpawnLocalAgentOptions {
   forceBackground?: boolean;
   parentSessionFile?: string;
   allRegisteredTools?: readonly string[];
+  /** Abort while waiting for a shared execution slot. */
+  abortSignal?: AbortSignal;
   /**
    * Stream channel — invoked on each progress milestone (task_start / tool_start /
    * tool_end / task_end). Pass through the tool's `onUpdate` callback so partial
@@ -201,39 +213,67 @@ export async function spawnLocalAgent(
     );
   }
 
-  // 2. SDK calls
-  const services = await _sdk.createAgentSessionServices({
-    cwd: opts.cwd,
-    appendSystemPrompt: opts.agentDef.systemPrompt
-      ? [opts.agentDef.systemPrompt]
-      : undefined,
-  });
-  let sm: unknown;
-  if (isFork) {
-    sm = await _sdk.SessionManagerForkFrom(opts.parentSessionFile!, opts.cwd);
-    const wrapped: ForkSessionManagerLike = {
-      getEntries: () =>
-        (sm as { getEntries: () => readonly unknown[] }).getEntries(),
-      appendToolResultMessage: (msg) => {
-        (sm as { appendMessage: (m: unknown) => void }).appendMessage(msg);
-      },
-    };
-    injectForkPlaceholders(wrapped);
-  } else {
-    sm = await _sdk.SessionManagerInMemory(opts.cwd);
+  // 2. Reserve one resident slot and one execution slot from the shared
+  // root-session controller before creating SDK resources. This closes the
+  // race where parallel task_agent calls all created sessions before any task
+  // reached TaskStore. The leader occupies one implicit slot in each limit.
+  const capacity = getAgentCapacity(pi);
+  const residentLease = capacity.reserveResident();
+  let executionLease: AgentCapacityLease;
+  try {
+    executionLease = await capacity.acquireExecution(opts.abortSignal);
+  } catch (error) {
+    residentLease.release();
+    throw error;
+  }
+  let capacityReleased = false;
+  const releaseCapacity = (): void => {
+    if (capacityReleased) return;
+    capacityReleased = true;
+    executionLease.release();
+    residentLease.release();
+  };
+
+  // 3. SDK calls. Release both reservations if setup fails before ownership is
+  // transferred to the task cleanup path.
+  let session: AgentSession;
+  try {
+    const services = await _sdk.createAgentSessionServices({
+      cwd: opts.cwd,
+      appendSystemPrompt: opts.agentDef.systemPrompt
+        ? [opts.agentDef.systemPrompt]
+        : undefined,
+    });
+    let sm: unknown;
+    if (isFork) {
+      sm = await _sdk.SessionManagerForkFrom(opts.parentSessionFile!, opts.cwd);
+      const wrapped: ForkSessionManagerLike = {
+        getEntries: () =>
+          (sm as { getEntries: () => readonly unknown[] }).getEntries(),
+        appendToolResultMessage: (msg) => {
+          (sm as { appendMessage: (m: unknown) => void }).appendMessage(msg);
+        },
+      };
+      injectForkPlaceholders(wrapped);
+    } else {
+      sm = await _sdk.SessionManagerInMemory(opts.cwd);
+    }
+
+    const tools = resolveSubAgentTools(opts.agentDef, opts.allRegisteredTools ?? []);
+    const { session: sessionUnknown } = await _sdk.createAgentSessionFromServices({
+      services,
+      sessionManager: sm,
+      tools,
+      model: opts.model,
+      thinkingLevel: opts.thinkingLevel,
+    });
+    session = sessionUnknown as AgentSession;
+  } catch (error) {
+    releaseCapacity();
+    throw error;
   }
 
-  const tools = resolveSubAgentTools(opts.agentDef, opts.allRegisteredTools ?? []);
-  const { session: sessionUnknown } = await _sdk.createAgentSessionFromServices({
-    services,
-    sessionManager: sm,
-    tools,
-    model: opts.model,
-    thinkingLevel: opts.thinkingLevel,
-  });
-  const session = sessionUnknown as AgentSession;
-
-  // 3. register task
+  // 4. register task
   const taskId = generateTaskId("local_agent");
   const outputFile = getTaskOutputPath(taskId);
   initProgress(taskId, Date.now());
@@ -430,12 +470,16 @@ export async function spawnLocalAgent(
     }
   });
 
+  let cleanedUp = false;
   const cleanup = (): void => {
+    if (cleanedUp) return;
+    cleanedUp = true;
     try {
       unsub();
     } catch {
       // ignore
     }
+    releaseCapacity();
   };
   updateTaskState<LocalAgentTaskState>(taskId, store, (cur) => ({
     ...cur,
@@ -538,6 +582,9 @@ export async function spawnLocalAgent(
       description,
       outputFile,
       toolUseId: opts.toolUseId,
+      finalMessage: boundedFinalMessage(
+        runError ? `Agent failed: ${runError}` : lastFinalText,
+      ),
       triggerTurn: true,
       extra: { agentType: opts.agentDef.agentType, ...getProgress(taskId) },
     });

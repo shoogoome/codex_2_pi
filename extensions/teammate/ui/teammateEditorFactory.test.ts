@@ -51,7 +51,7 @@ function makeEditorStub(): {
 }
 
 describe("handleTeammateSubmit", () => {
-  it("non-empty text → mailbox.send routed to agentName, clears editor, fires onSent", () => {
+  it("non-empty text → mailbox.send routed to agentId, clears editor, fires onSent", () => {
     const { deps, mailbox, onSent, onExit } = makeDeps();
     const sendSpy = vi.spyOn(mailbox, "send");
     const editor = makeEditorStub();
@@ -61,7 +61,7 @@ describe("handleTeammateSubmit", () => {
     expect(sendSpy).toHaveBeenCalledTimes(1);
     const msg = sendSpy.mock.calls[0]![0];
     expect(msg.from).toBe("leader");
-    expect(msg.to).toBe("alpha");
+    expect(msg.to).toBe("alpha@team1");
     expect(msg.body).toBe("hello world");
     expect(msg.isProtocol).toBe(false);
     expect(typeof msg.id).toBe("string");

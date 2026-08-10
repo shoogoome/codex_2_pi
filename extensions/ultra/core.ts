@@ -2,6 +2,8 @@ export const ULTRA_STATE_ENTRY = "ultra/state";
 export const LEGACY_ULTRA_STATE_ENTRY = "effort/ultra";
 export const ULTRA_STATUS_KEY = "codex-ultra";
 export const ULTRA_IGNITION_WIDGET_KEY = "codex-ultra-ignition";
+export const TASK_AGENT_TOOL_NAME = "task_agent";
+export const EXIT_PLAN_MODE_TOOL_NAME = "exit_plan_mode";
 
 export const NATIVE_THINKING_LEVELS = [
   "off",
@@ -29,6 +31,14 @@ export const EXPLICIT_MULTI_AGENT_MODE_PROMPT = modePrompt(
   EXPLICIT_REQUEST_ONLY_MULTI_AGENT_MODE_TEXT,
 );
 
+export const ULTRA_WORKFLOW_PROMPT = [
+  "<ultra_multi_agent_workflow>",
+  "The Ultra multi-agent workflow is active.",
+  "For a non-trivial task with at least two independent workstreams, issue multiple task_agent calls in parallel in a single assistant message, using `run_in_background: true` when the main agent has its own independent workstream. Keep advancing that main-agent work while they run, then synthesize their results after automatic completion notifications arrive.",
+  "Do not parallelize simple tasks or work with strong sequential dependencies merely for the sake of parallelism. Do not poll teammates for status; use their automatic notifications.",
+  "</ultra_multi_agent_workflow>",
+].join("\n");
+
 export interface UltraState {
   enabled: boolean;
   /** Non-Ultra session default restored on graceful shutdown. */
@@ -48,6 +58,8 @@ export function isUltraCapableModel(model: ModelRef | undefined): boolean {
 }
 
 const MULTI_AGENT_MODE_BLOCK = /(?:\n{2})?<multi_agent_mode>[\s\S]*?<\/multi_agent_mode>/g;
+const ULTRA_WORKFLOW_BLOCK =
+  /(?:\n{2})?<ultra_multi_agent_workflow>[\s\S]*?<\/ultra_multi_agent_workflow>/g;
 
 /** Keep one effective mode block even if another integration already added one. */
 export function upsertMultiAgentModePrompt(
@@ -57,6 +69,41 @@ export function upsertMultiAgentModePrompt(
   const prompt = mode === "proactive" ? ULTRA_MODE_PROMPT : EXPLICIT_MULTI_AGENT_MODE_PROMPT;
   const base = systemPrompt.replace(MULTI_AGENT_MODE_BLOCK, "").trimEnd();
   return base ? `${base}\n\n${prompt}` : prompt;
+}
+
+/** Add one Ultra-owned workflow block, or remove it when the workflow is unavailable. */
+export function upsertUltraWorkflowPrompt(systemPrompt: string, active: boolean): string {
+  const base = systemPrompt.replace(ULTRA_WORKFLOW_BLOCK, "").trimEnd();
+  if (!active) return base;
+  return base ? `${base}\n\n${ULTRA_WORKFLOW_PROMPT}` : ULTRA_WORKFLOW_PROMPT;
+}
+
+export type UltraWorkflowState =
+  | "active"
+  | "paused-plan-mode"
+  | "paused-task-agent-inactive"
+  | "paused-task-agent-unavailable";
+
+/** Inspect workflow availability without changing the user's active-tool selection. */
+export function getUltraWorkflowState(
+  activeTools: readonly string[],
+  availableTools: readonly string[],
+): UltraWorkflowState {
+  if (activeTools.includes(EXIT_PLAN_MODE_TOOL_NAME)) return "paused-plan-mode";
+  if (!availableTools.includes(TASK_AGENT_TOOL_NAME)) return "paused-task-agent-unavailable";
+  if (!activeTools.includes(TASK_AGENT_TOOL_NAME)) return "paused-task-agent-inactive";
+  return "active";
+}
+
+/** Return the minimally changed tool set needed to activate Ultra, if activation is safe. */
+export function toolsForUltraTaskAgentActivation(
+  activeTools: readonly string[],
+  availableTools: readonly string[],
+): string[] | undefined {
+  if (getUltraWorkflowState(activeTools, availableTools) !== "paused-task-agent-inactive") {
+    return undefined;
+  }
+  return [...activeTools, TASK_AGENT_TOOL_NAME];
 }
 
 export function restoreUltraStateFromBranch(branch: Iterable<unknown>): UltraState | null {

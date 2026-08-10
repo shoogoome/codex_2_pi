@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { buildTeamPlanApproveTool } from "./teamPlanApprove.js";
 import { attachTeammateHandle } from "../handle.js";
 import { createTeamStore } from "../teamStore.js";
@@ -7,8 +7,11 @@ import { createTeamTaskStore } from "../teamTasks/teamTaskStore.js";
 import { parsePlanApprovalResponse } from "../protocol.js";
 import type { MailboxMessage } from "../types.js";
 
-function buildPi(): { events: Record<string, unknown> } {
-  return { events: {} };
+function buildPi(): {
+  events: Record<string, unknown>;
+  sendMessage: ReturnType<typeof vi.fn>;
+} {
+  return { events: {}, sendMessage: vi.fn() };
 }
 
 interface CapturedSend {
@@ -26,7 +29,7 @@ function attachWithReceiver(
     teamTaskStore: createTeamTaskStore(),
   });
   const captured: CapturedSend = { msgs: [] };
-  mailbox.registerReceiver(agentName, (m) => {
+  mailbox.registerReceiver(`${agentName}@team1`, (m) => {
     captured.msgs.push(m);
   });
   return { mailbox, captured };
@@ -60,13 +63,25 @@ describe("team_plan_approve tool", () => {
     expect(captured.msgs).toHaveLength(1);
     const msg = captured.msgs[0]!;
     expect(msg.from).toBe("leader");
-    expect(msg.to).toBe("researcher");
+    expect(msg.to).toBe("researcher@team1");
     expect(msg.isProtocol).toBe(true);
     const parsed = parsePlanApprovalResponse(msg.body);
     expect(parsed).toBeDefined();
     expect(parsed!.request_id).toBe("pa-deadbeef0001");
     expect(parsed!.approve).toBe(true);
     expect(parsed!.feedback).toBeUndefined();
+    expect(pi.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        details: expect.objectContaining({
+          kind: "message_sent",
+          msg: expect.objectContaining({
+            id: msg.id,
+            to: "researcher@team1",
+          }),
+        }),
+      }),
+      expect.anything(),
+    );
 
     const text = (result as { content: Array<{ text: string }> }).content[0]!
       .text;
@@ -75,7 +90,7 @@ describe("team_plan_approve tool", () => {
     expect(text).toContain("approve=true");
     expect(result.details).toMatchObject({
       action: "team_plan_approve",
-      teammate: "researcher",
+      teammate: "researcher@team1",
       request_id: "pa-deadbeef0001",
       approve: true,
     });
@@ -182,7 +197,7 @@ describe("team_plan_approve tool", () => {
     const result = await tool.execute(
       "c6",
       {
-        teammate: "offline-teammate",
+        teammate: "offline-teammate@team1",
         request_id: "pa-offline01",
         approve: true,
       } as never,
@@ -191,11 +206,11 @@ describe("team_plan_approve tool", () => {
       {} as never,
     );
     expect((result as { isError?: boolean }).isError).toBeFalsy();
-    expect(mailbox.bufferedCount("offline-teammate")).toBe(1);
+    expect(mailbox.bufferedCount("offline-teammate@team1")).toBe(1);
 
     // When teammate comes online, buffered msg flushes through.
     const captured: MailboxMessage[] = [];
-    mailbox.registerReceiver("offline-teammate", (m) => captured.push(m));
+    mailbox.registerReceiver("offline-teammate@team1", (m) => captured.push(m));
     expect(captured).toHaveLength(1);
     expect(captured[0]!.from).toBe("leader");
     expect(captured[0]!.isProtocol).toBe(true);

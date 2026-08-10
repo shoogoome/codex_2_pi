@@ -2,6 +2,7 @@
 
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { TaskStateBase } from "../tasks/Task.js";
+import type { AgentCapacityLease } from "../tasks/agentCapacity.js";
 import type { TeamTaskEvent } from "./teamTasks/types.js";
 
 /**
@@ -16,6 +17,8 @@ export interface TeammateIdentity {
   teamName: string;
   /** 创建时记录的 subagent_type */
   agentType: string;
+  /** 创建时角色定义的安全摘要；resume 时用于检测角色删除/变更。 */
+  roleFingerprint?: string;
   /** 可选,UI 上区分用 */
   color?: string;
 }
@@ -26,9 +29,9 @@ export interface TeammateIdentity {
  */
 export interface MailboxMessage {
   id: string;
-  /** "leader" 或 agentName */
+  /** "leader" or the sender's complete agentId (`name@team`). */
   from: string;
-  /** agentName 或 "*" */
+  /** Complete agentId, "*" (sender team), "*@team", or "leader". */
   to: string;
   /** 自由文本 or JSON-stringified protocol body */
   body: string;
@@ -55,6 +58,8 @@ export interface InProcessTeammateTaskState extends TaskStateBase {
   /** session.subscribe 的 unsub */
   cleanup?: () => void;
   abortController?: AbortController;
+  /** Shared root-session resident slot; released on every terminal path. */
+  agentResidentLease?: AgentCapacityLease;
 
   // Idle 状态
   isIdle: boolean;
@@ -98,6 +103,11 @@ export type LeaderNotificationDetails =
       body: string;
     }
   | {
+      kind: "result";
+      agentId: string;
+      body: string;
+    }
+  | {
       kind: "idle";
       agentId: string;
     }
@@ -131,6 +141,7 @@ export type TeammateEvent =
       status: "completed" | "failed" | "killed";
     }
   | { kind: "message_sent"; msg: MailboxMessage }
+  | { kind: "message_ack"; messageId: string; agentId: string }
   | { kind: "shutdown_request"; agentId: string; requestId: string }
   | {
       kind: "shutdown_response";

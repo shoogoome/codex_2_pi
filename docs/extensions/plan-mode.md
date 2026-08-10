@@ -4,7 +4,7 @@
 
 ## 能力
 
-- **只读规划模式**:进入后把当前活跃工具集收窄为只读集合(移除 `write` / `edit` / `apply_patch`,加入 `exit_plan_mode`),并在运行时拦截会修改文件或系统状态的 bash 命令。`bash` 本身仍保留,只读命令(cat、grep、ls、git status、git diff 等)照常可用。
+- **只读规划模式**:进入后把当前活跃工具集收窄为只读集合(移除 `write` / `edit` / `apply_patch` / `task_agent`,加入 `exit_plan_mode`),并在运行时同时拦截 `bash` 与 `task_bash` 的 mutating command。这样不能通过子 Agent 或后台 shell 绕过只读边界；只读命令(cat、grep、ls、git status、git diff 等)照常可用。
 - **系统提示增强**:进入 plan 模式后,在基础 system prompt 后追加一段规划指令(要求模型只探查、只设计、不改动,准备好后调用 `exit_plan_mode`)。
 - **状态展示**:底部 footer 显示 `⏸ plan mode on`。
 - **批准闸门**:模型通过调用 `exit_plan_mode` 提交计划,用户在弹窗中确认后才退出、恢复写工具;拒绝则留在 plan 模式继续打磨。

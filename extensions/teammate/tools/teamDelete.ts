@@ -105,7 +105,7 @@ export function buildTeamDeleteTool(
           const reqMsg: MailboxMessage = {
             id: randomBytes(8).toString("hex"),
             from: "leader",
-            to: task.identity.agentName,
+            to: task.identity.agentId,
             body: buildShutdownRequest(requestId),
             timestamp: Date.now(),
             isProtocol: true,
