@@ -18,6 +18,7 @@
 | `extensions/imagegen` | Codex 订阅生图：复刻 codex 内置 `image_gen.imagegen`，走 openai-codex OAuth 直连 ChatGPT 图片 API（gpt-image-2），生成/编辑结果保存到 `~/.pi/agent/generated_images/<session>/` 并回传给模型检查迭代。 | `generate_image` |
 | `extensions/todo` | Codex 风格 `update_plan`（整份计划快照）+ 计划渲染 + 常驻 plan overlay。 | `update_plan` |
 | `extensions/effort` | 通用 thinking 档位、Codex 风格两级高级选择器、`/model` 模型+档位原子选择，以及 `Alt+,` / `Alt+.` 升降快捷键。 | `/effort [status\|off\|minimal\|low\|medium\|high\|xhigh\|max\|ultra]` · `/model` |
+| `extensions/fast-mode` | Codex Fast service tier：仅对支持的 openai-codex OAuth 模型注入 `service_tier: "priority"`，约 1.5× 速度但增加额度消耗。 | `/fast [on\|off\|status]` · `--fast` |
 | `extensions/ultra` | GPT-5.6 Sol/Terra 的 Codex Ultra controller：会话态 `ultra`、wire `max`，自动激活 `task_agent` 并注入并行 multi-agent workflow。 | 由 `/effort ultra` 或 `/model` 高级选择器进入 |
 | `extensions/compact-ui` | Codex 风格紧凑 UI:消息前缀化 + 常见内置工具短渲染（与 claude-ui 互斥）。 | （`--claude-ui=false` 回退到此皮肤） |
 | `extensions/pets` | Codex 风格终端宠物 widget，依 agent 状态切换动画，Kitty graphics/tmux passthrough 可选，其余回退 block-art。 | （无命令，自动 widget） |
