@@ -57,6 +57,8 @@ export function parseChannelMessage(
   options: {
     now?: () => Date;
     idFactory?: () => string;
+    defaultDelivery?: ChannelDelivery;
+    defaultWake?: boolean;
   } = {},
 ): ParsedChannelMessage {
   if (!isRecord(value)) {
@@ -76,7 +78,7 @@ export function parseChannelMessage(
     );
   }
 
-  const requestedDelivery = value.delivery ?? "steer";
+  const requestedDelivery = value.delivery ?? options.defaultDelivery ?? "steer";
   if (
     typeof requestedDelivery !== "string" ||
     !DELIVERIES.has(requestedDelivery as ChannelDelivery)
@@ -109,7 +111,7 @@ export function parseChannelMessage(
       content: value.content,
       delivery,
       // nextTurn never wakes in Pi; normalizing it prevents misleading details.
-      wake: delivery === "nextTurn" ? false : (value.wake ?? true),
+      wake: delivery === "nextTurn" ? false : (value.wake ?? options.defaultWake ?? true),
       ...(value.metadata === undefined
         ? {}
         : { metadata: value.metadata as Record<string, unknown> }),

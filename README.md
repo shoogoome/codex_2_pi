@@ -37,7 +37,7 @@
 | `extensions/compact-continue` | Pi 阈值压缩后保守判断是否仍有工作：仅在 toolResult、截断/tool-use 回合或未完成计划等强信号下隐藏续跑一次，并让真实用户/自动队列优先。 | `--compact-continue`（默认开）· `--compact-continue=false` 关闭 |
 | `extensions/agents-context` | 补充加载 `AGENTS.md`/`CLAUDE.md`、`.claude/rules`、`@include`、条件 paths 规则，去重后隐藏注入。 | `--agents-context`（默认开）· `PI_AGENTS_CONTEXT=0` |
 | `extensions/settings-env` | 从全局和项目 `settings.json` 的顶层 `env` 读取变量并注入 Pi 进程；已有环境默认优先。 | `env` · `envOverride` |
-| `extensions/channel` | 通用外部 HTTP 入站 Channel：Bearer 鉴权、幂等/限流、会话发现，并用 steer/follow-up/next-turn 语义把事件注入当前 Pi 会话。默认监听 `0.0.0.0:4317`，仅配置 `PI_CHANNEL_TOKEN` 后启动。 | `/channel [status\|restart]` · `POST /v1/messages` |
+| `extensions/channel` | 多 Channel 通信中心：TUI 面板管理具名 HTTP/微信 ClawBot 通道，支持当前/多选/全部会话范围、入站/出站/双向限制；Pi 可感知名称并用 `channel_send` 路由阶段产物。认证由协议适配器提供，兼容原 `PI_CHANNEL_*` 单 HTTP 入站配置。 | `/channel` 面板 · `channel_send` · `/channel status\|restart\|auth\|login\|send` |
 | `extensions/memory` | Claude Code 风格自动长期记忆：零配置初始化、相关主题召回、每轮按需提炼并去重更新 `.pi/memory`。 | `/memory [list\|show\|init]` · `/remember <text>`（均为可选手动入口） |
 | `extensions/approvals` | 唯一审批闸门:权限模式 × 规则库 × 命令安全 × 受保护路径 × MCP 逐工具，统一 allow/ask/deny。 | `/approvals [mode\|rules\|allow\|ask\|deny\|remove]` |
 | `extensions/plan-mode` | 只读规划闸门:仅可探查，模型提交计划经批准后才恢复写工具。 | `/plan [on\|off]` · `Alt+P` · `exit_plan_mode` |
@@ -57,19 +57,25 @@
 | `extensions/monitor` | 只读效果监控:缓存命中率、上下文构成、清理/压缩回收比，面板 + footer 展示。 | `/monitor` |
 | `extensions/cost-usage` | 只读追踪会话美元成本、按模型 token、时长与编辑增删行，并在 OAuth 模式查看 Codex 订阅套餐额度与重置时间。 | `/cost` · `/usage` |
 
-## External HTTP Channel
+## Named Channels（HTTP + 微信 ClawBot）
 
-配置 `PI_CHANNEL_TOKEN` 后，`extensions/channel` 会监听 `0.0.0.0:4317`（host/port 可通过 `PI_CHANNEL_HOST`、`PI_CHANNEL_PORT` 覆盖），让外部告警、CI、IDE 或定时任务向当前 Pi 会话投递消息并按需唤醒模型：
+执行 `/channel auth`（`/channel login` 是兼容别名）会打开通用认证目标选择器：选择已有 Channel，或选择某个支持认证的协议来新建 Channel。当前首个认证适配器是微信 ClawBot，选中后扫码即可；后续 OAuth、设备码等协议可注册自己的认证适配器，不会把 `login` 固定等同于微信。也可执行 `/channel` 打开类似 `/plugin` 的配置面板，在列表按 `l` 打开同一通用认证选择器。
+
+- **作用域**：默认多会话（在各会话面板按 `m` 挂载），也可选全部会话；旧单会话配置自动迁移为多会话挂载。
+- **方向**：每个 Pi 会话可分别设置对端 → Pi、Pi → 对端或双向；微信只由一个会话长轮询，再把入站消息分发给所有允许入站的挂载会话，所有允许出站的会话都可共享发送。
+- **协议**：HTTP 入站 listener + 出站 callback；微信 iLink/ClawBot 扫码登录、文本收发。
+- **名称路由**：Pi 每轮感知已挂载 Channel 名称；用户从微信要求“给 `产物群` 发送阶段结果”时，Pi 可调用 `channel_send(channel="产物群", ...)`。
+
+原有环境变量配置保持兼容：设置 `PI_CHANNEL_TOKEN` 仍会得到只读的 `legacy-http` 入站 Channel，默认监听 `0.0.0.0:4317`。HTTP 入站继续使用 `POST /v1/messages`、Bearer 鉴权、幂等和限流：
 
 ```bash
 curl "http://<机器IP>:4317/v1/messages" \
   -H "Authorization: Bearer $PI_CHANNEL_TOKEN" \
   -H "Content-Type: application/json" \
-  -H "Idempotency-Key: alert-123" \
-  -d '{"source":"alertmanager","content":"生产环境出现告警，请检查","delivery":"steer","wake":true}'
+  -d '{"source":"alertmanager","content":"生产环境出现告警，请检查"}'
 ```
 
-接口返回 `202 Accepted` 只代表消息已进入 Pi；不会同步等待模型回答。`/channel status` 查看监听与发现文件，完整协议、安全限制和配置见 [`docs/extensions/channel.md`](docs/extensions/channel.md)。
+配置保存在私有文件 `~/.pi/agent/channel/config.json`（`0600`）；微信凭证按 Channel 隔离保存。完整面板操作、协议字段、安全限制及扫码流程见 [`docs/extensions/channel.md`](docs/extensions/channel.md)。
 
 ## 命令
 

@@ -24,7 +24,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 | `/effort [status\|off\|minimal\|low\|medium\|high\|xhigh\|max\|ultra]`、`/model`、`Alt+,` / `Alt+.` | effort + ultra | 两级选择 thinking；Ultra 为 Sol/Terra 开启 wire max、自动激活 `task_agent` 与主动并行 workflow（Plan 模式暂停） |
 | `/local-models [list\|pull\|ensure_ready]`, `/ollama`, `/lm` | local-models | 发现/拉取/就绪检查本地模型(Ollama/LM Studio) |
 | `/mcp [list\|status\|add\|remove\|reconnect]` | mcp | 管理 MCP server 连接 |
-| `/channel [status\|restart]` | channel | 查看/重启外部 HTTP 入站 Channel；配置 `PI_CHANNEL_TOKEN` 后接受 `POST /v1/messages` 并可唤醒 Pi |
+| `/channel [status\|restart\|auth\|send]` | channel | 管理具名 HTTP/微信 Channel；默认多会话挂载，每个 Pi 会话可独立设置通信方向 |
 | `/plugin`, `/plugin marketplace …`, `/plugin install\|remove\|update …` | plugin-loader | 管理 Marketplace 与 user/project/local scope 的 Claude 风格插件 |
 | `/hooks` | hooks-runner | 列出已配置生命周期 hook |
 | `/agents [list\|show <name>\|use <name>]` | agents | 查看/应用 subagent 角色 |
@@ -72,7 +72,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **切回过去的会话 / 找以前聊过的内容**：`/resume-picker`、`/search`(pi 内置 `/resume` 也能朴素切换会话)。
 - **常用配置组合一键切换**：`/profile save` 后 `/profile <name>`，或 `--profile` 启动应用。
 - **接外部工具 / 第三方能力**：`/mcp add`（Pi 主动调用 MCP server）；Claude 风格插件用 `/plugin marketplace add` 后 `/plugin install`。
-- **让告警、CI、IDE 等外部系统主动通知/唤醒 Pi**：配置 `PI_CHANNEL_TOKEN`，调用 Channel 的 `POST /v1/messages`；用 `/channel status` 查看监听地址与发现文件。
+- **让告警、CI、IDE、微信等外部系统与 Pi 通信**：用 `/channel` 管理具名 Channel；新建默认多会话，各会话可独立设为入站、出站或双向。旧 HTTP 可继续配置 `PI_CHANNEL_TOKEN` 并调用 `POST /v1/messages`。
 - **复用已有 Claude/Cursor 配置**：`/migrate`。
 - **跨会话记住偏好/事实**：memory 默认自动初始化、召回和按需提炼；`/remember`、`/memory` 只在需要强制记录、查看或纠错时使用。
 - **调模型推理强度 / 开 Codex Ultra 编排**：`/effort` 或 `/model` 两级选择器；Sol/Terra 的 Ultra 会自动激活 `task_agent`，在适合时并行委派并等待自动终态结果综合。

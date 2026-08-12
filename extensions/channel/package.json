@@ -1,13 +1,16 @@
 {
   "name": "pi-channel-extension",
   "version": "0.1.0",
-  "description": "Authenticated HTTP ingress for delivering external events into a running Pi session.",
+  "description": "Named multi-session HTTP and WeChat ClawBot channels for Pi.",
   "type": "module",
   "main": "./index.ts",
   "pi": {
     "extensions": [
       "dist/index.js"
     ]
+  },
+  "dependencies": {
+    "qrcode-terminal": "^0.12.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

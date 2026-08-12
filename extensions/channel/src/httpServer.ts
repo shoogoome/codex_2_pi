@@ -12,7 +12,7 @@ import {
   parseChannelMessage,
   validateIdempotencyKey,
 } from "./protocol.js";
-import type { ChannelMessage } from "./types.js";
+import type { ChannelDelivery, ChannelMessage } from "./types.js";
 
 const JSON_CONTENT_TYPE = "application/json; charset=utf-8";
 
@@ -23,6 +23,8 @@ export interface StartHttpChannelServerOptions {
   maxBodyBytes: number;
   rateLimitPerMinute: number;
   idempotencyTtlMs: number;
+  defaultDelivery?: ChannelDelivery;
+  defaultWake?: boolean;
   dispatch(message: ChannelMessage): void | Promise<void>;
   now?: () => number;
   idFactory?: () => string;
@@ -201,6 +203,8 @@ function createHandler(options: StartHttpChannelServerOptions) {
       const parsed = parseChannelMessage(raw, {
         now: () => new Date(now()),
         idFactory: options.idFactory,
+        defaultDelivery: options.defaultDelivery,
+        defaultWake: options.defaultWake,
       });
       const headerKey = validateIdempotencyKey(
         headerValue(request.headers["idempotency-key"]),
