@@ -62,11 +62,20 @@ function discoverExtensions() {
  * This keeps ALL peer/runtime packages external — @earendil-works/*, typebox(/*),
  * @sinclair/typebox(/*), jimp, node: builtins — while bundling the extension's own
  * relative imports (./x, ../shared/y). Future-proof: any new peer stays external.
+ *
+ * Small implementation dependencies that must travel with a published extension
+ * can be allowlisted here. Pi may load a copied/prebuilt extension directory
+ * without installing that extension's nested package.json dependencies; leaving
+ * these imports external would make an otherwise single-file bundle non-portable.
  */
+const BUNDLED_BARE_PACKAGES = new Set(["qrcode-terminal"]);
 const externalizeBare = {
   name: "externalize-bare",
   setup(b) {
-    b.onResolve({ filter: /^[^./]/ }, (args) => ({ path: args.path, external: true }));
+    b.onResolve({ filter: /^[^./]/ }, (args) => {
+      if (BUNDLED_BARE_PACKAGES.has(args.path)) return undefined;
+      return { path: args.path, external: true };
+    });
   },
 };
 
