@@ -59,10 +59,17 @@ export interface ChannelSessionIdentity {
   cwd: string;
 }
 
+export interface ChannelImage {
+  data: string;
+  mimeType: string;
+}
+
 export interface ChannelMessage {
   id: string;
   source: string;
   content: string;
+  /** 图片以 Pi 原生 image block 进入模型；当前仅微信入站会填充。 */
+  images?: ChannelImage[];
   delivery: ChannelDelivery;
   wake: boolean;
   metadata?: Record<string, unknown>;

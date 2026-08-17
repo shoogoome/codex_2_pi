@@ -424,6 +424,7 @@ export function installChannelExtension(
               id: message.id,
               source: `wechat/${message.userId}`,
               content: message.content,
+              ...(message.images?.length ? { images: message.images } : {}),
               delivery: channel.delivery,
               wake: channel.delivery === "nextTurn" ? false : channel.wake,
               receivedAt: message.receivedAt,

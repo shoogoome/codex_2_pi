@@ -217,7 +217,7 @@ X-Pi-Channel: 产物群
 
 联系人 `context_token`、游标和最后联系人写在同目录 `state.json`，均为 `0600`。
 
-当前版本的 Channel 协议层支持微信文字、语音转写文本和引用文本；图片/文件媒体桥接尚未并入通用 `channel_send`。
+当前版本支持微信文字、语音转写文本、引用文本和**图片入站**。图片会从微信可信 CDN 下载，必要时按 iLink `aeskey` 做 AES-128-ECB 解密，经大小与格式校验后，以 Pi 原生 image block 注入当前模型；纯图片消息也会自动补充“请分析图片内容”的文本并按 Channel 的 Delivery/Auto-trigger 设置触发。图片可通过私有多会话 Relay 分发给其它允许入站的挂载会话。`channel_send` 出站和微信文件媒体目前仍仅支持文本。
 
 ### 自动回复与主动发送
 
@@ -349,3 +349,4 @@ name=legacy-http · protocol=http · direction=inbound · scope=selected
 - 每条可唤醒消息都可能触发模型调用和费用；外部系统应聚合事件并使用稳定幂等键。
 - 出站 callback 会携带当前 session 名、ID 与 cwd；不要把 callback 配到不可信服务。
 - 微信 token 只保存在当前 OS 用户的私有文件中；不要提交 `~/.pi/agent/channel/` 的内容。
+- 微信图片仅允许从受信任的微信 CDN HTTPS 域名下载，拒绝重定向；单张下载上限 10 MiB，每条微信消息最多处理 5 张，支持 JPEG、PNG、GIF、WebP。图片以 base64 随 session/私有 Relay 保存，会增加会话文件和模型上下文体积。

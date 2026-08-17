@@ -31,6 +31,24 @@ describe("channel dispatch", () => {
     expect(buildChannelContent(input)).toContain(input.content);
   });
 
+  it("injects inbound images as native Pi image blocks without duplicating base64 in details", () => {
+    const pi = { sendMessage: vi.fn() };
+    const input = message({
+      content: "用户通过微信发送了一张图片，请分析图片内容。",
+      images: [{ data: "iVBORw0KGgo=", mimeType: "image/png" }],
+    });
+
+    dispatchChannelMessage(pi as never, input);
+
+    const sent = pi.sendMessage.mock.calls[0]![0];
+    expect(sent.content).toEqual([
+      { type: "text", text: expect.stringContaining("用户通过微信发送了一张图片") },
+      { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" },
+    ]);
+    expect(sent.details).toMatchObject({ id: "event-1", images: undefined });
+    expect(input.images).toHaveLength(1);
+  });
+
   it("does not wake nextTurn delivery", () => {
     const pi = { sendMessage: vi.fn() };
     dispatchChannelMessage(

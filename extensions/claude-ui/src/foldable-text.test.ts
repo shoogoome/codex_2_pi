@@ -101,4 +101,31 @@ describe("FoldableText", () => {
     });
     expect(component.render(6)).toEqual([`ab${" ".repeat(4)}`]);
   });
+
+  it("reuses the fully rendered rows when width and fold state are unchanged", () => {
+    const component = new FoldableText("one\ntwo", theme, {
+      maxLines: 5,
+      padRowsToWidth: true,
+    });
+
+    const first = component.render(10);
+    expect(component.render(10)).toBe(first);
+
+    component.invalidate();
+    const afterInvalidate = component.render(10);
+    expect(afterInvalidate).not.toBe(first);
+    expect(afterInvalidate).toEqual(first);
+  });
+
+  it("refreshes the final cache when mutable fold options change", () => {
+    const options = { maxLines: 1, expanded: false, padRowsToWidth: true };
+    const component = new FoldableText("one\ntwo\nthree", theme, options);
+    const collapsed = component.render(10);
+
+    options.expanded = true;
+    const expanded = component.render(10);
+
+    expect(expanded).not.toBe(collapsed);
+    expect(expanded.map((row) => row.trimEnd())).toEqual(["one", "two", "three"]);
+  });
 });

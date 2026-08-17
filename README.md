@@ -57,6 +57,7 @@
 | `extensions/migrate` | 一次性把 Claude/Cursor 的 MCP、subagents、commands、hooks、memory 导入 `.pi/`，只导缺失不覆盖。 | `/migrate [category]` · `--dry-run` |
 | `extensions/monitor` | 只读效果监控:缓存命中率、上下文构成、清理/压缩回收比，面板 + footer 展示。 | `/monitor` |
 | `extensions/cost-usage` | 只读追踪会话美元成本、按模型 token、时长与编辑增删行，并在 OAuth 模式查看 Codex 订阅套餐额度与重置时间。 | `/cost` · `/usage` |
+| `extensions/web` | 浏览器 Web UI：管理整机 `~/.pi/agent/sessions` 的 Pi 会话并从 CLI 到 Web 聊天；后端零依赖 HTTP + SSE，每个会话一个 `pi --mode rpc` 子进程，支持流式事件/工具调用/图片/审批对话框。 | `/web` · `/web status\|stop` · `--web` / `--web-host` / `--web-port` / `--web-token` |
 
 ## Named Channels（HTTP + 微信 ClawBot）
 
@@ -64,7 +65,7 @@
 
 - **作用域**：默认多会话（在各会话面板按 `m` 挂载），也可选全部会话；旧单会话配置自动迁移为多会话挂载。
 - **方向**：每个 Pi 会话可分别设置对端 → Pi、Pi → 对端或双向；微信只由一个会话长轮询，再把入站消息分发给所有允许入站的挂载会话，所有允许出站的会话都可共享发送。
-- **协议**：HTTP 入站 listener + 出站 callback；微信 iLink/ClawBot 扫码登录、文本收发。
+- **协议**：HTTP 入站 listener + 出站 callback；微信 iLink/ClawBot 扫码登录、文本收发，以及可信 CDN 下载/AES 解密后的图片入站分析。
 - **名称路由**：Pi 每轮感知已挂载 Channel 名称；用户从微信要求“给 `产物群` 发送阶段结果”时，Pi 可调用 `channel_send(channel="产物群", ...)`。
 
 原有环境变量配置保持兼容：设置 `PI_CHANNEL_TOKEN` 仍会得到只读的 `legacy-http` 入站 Channel，默认监听 `0.0.0.0:4317`。HTTP 入站继续使用 `POST /v1/messages`、Bearer 鉴权、幂等和限流：

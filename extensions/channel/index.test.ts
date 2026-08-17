@@ -198,6 +198,64 @@ describe("channel extension entrypoint", () => {
     expect(config.channels[0]).toMatchObject({ name: "微信", protocol: "wechat", direction: "both" });
   });
 
+  it("forwards WeChat image blocks through the Channel envelope and relay", async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), "pi-channel-index-image-"));
+    tempRoots.push(agentDir);
+    const wechat = createChannelDefinition({
+      name: "图片微信",
+      protocol: "wechat",
+      direction: "both",
+      scope: "selected",
+      sessionId: "session-1",
+    });
+    await saveChannelSettings(agentDir, { version: 1, channels: [wechat] });
+    let receiveWechat: ((message: any) => Promise<void>) | undefined;
+    const publish = vi.fn(async () => undefined);
+    const startWechat = vi.fn(async (options: any) => {
+      receiveWechat = options.onMessage;
+      return {
+        status: "connected" as const,
+        send: async () => undefined,
+        close: async () => undefined,
+      };
+    });
+    const startRelay = vi.fn(async () => ({
+      publish,
+      close: async () => undefined,
+    }));
+    const harness = buildHarness();
+    installChannelExtension(harness.pi as never, {
+      env: {},
+      agentDir,
+      startWechat,
+      startRelay,
+    });
+
+    await harness.handlers.get("session_start")!({}, harness.ctx);
+    await receiveWechat?.({
+      id: "wx-image-1",
+      userId: "wx-user-1",
+      content: "用户通过微信发送了一张图片，请分析图片内容。",
+      images: [{ data: "iVBORw0KGgo=", mimeType: "image/png" }],
+      receivedAt: "2026-08-13T00:00:00.000Z",
+    });
+
+    const sent = harness.sendMessage.mock.calls.at(-1)?.[0];
+    expect(sent).toMatchObject({
+      customType: "channel/message",
+      display: true,
+      content: [
+        { type: "text", text: expect.stringContaining("用户通过微信发送了一张图片") },
+        { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" },
+      ],
+    });
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({
+      id: "wx-image-1",
+      images: [{ data: "iVBORw0KGgo=", mimeType: "image/png" }],
+    }));
+    await harness.handlers.get("session_shutdown")!({}, harness.ctx);
+  });
+
   it("enforces a bidirectional HTTP channel and routes its assistant reply to the callback", async () => {
     const agentDir = await mkdtemp(join(tmpdir(), "pi-channel-index-"));
     tempRoots.push(agentDir);

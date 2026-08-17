@@ -1,0 +1,29 @@
+{
+  "name": "pi-web-extension",
+  "version": "0.1.0",
+  "description": "Open Pi in a browser: machine-wide session management plus a full chat web UI, backed by Pi's native RPC mode.",
+  "type": "module",
+  "main": "./index.ts",
+  "files": [
+    "index.ts",
+    "src",
+    "package.json",
+    "README.md"
+  ],
+  "keywords": [
+    "pi-extension",
+    "pi",
+    "web",
+    "webui",
+    "rpc",
+    "ui"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "dist/index.js"
+    ]
+  }
+}

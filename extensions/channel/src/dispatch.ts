@@ -28,12 +28,29 @@ export function dispatchChannelMessage(
   pi: Pick<ExtensionAPI, "sendMessage">,
   message: ChannelMessage,
 ): void {
+  const envelope = buildChannelContent(message);
+  const content = message.images?.length
+    ? [
+        { type: "text" as const, text: envelope },
+        ...message.images.map((image) => ({
+          type: "image" as const,
+          data: image.data,
+          mimeType: image.mimeType,
+        })),
+      ]
+    : envelope;
+  // Avoid persisting base64 twice: image bytes already live in content blocks;
+  // structured details are only for Channel routing/rendering metadata.
+  const details = message.images?.length
+    ? { ...message, images: undefined }
+    : message;
+
   pi.sendMessage(
     {
       customType: CHANNEL_CUSTOM_TYPE,
-      content: buildChannelContent(message),
+      content,
       display: true,
-      details: message,
+      details,
     },
     {
       deliverAs: message.delivery,

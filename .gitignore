@@ -44,4 +44,5 @@ Thumbs.db
 *.swp
 *.swo
 *~
-.pi/memory/
+.pi/memory/ 
+deepseek-harness/

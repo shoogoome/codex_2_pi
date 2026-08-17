@@ -10,11 +10,18 @@ import {
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import qrcode from "qrcode-terminal";
-import type { ChannelDefinition } from "./types.js";
+import type { ChannelDefinition, ChannelImage } from "./types.js";
+import {
+  buildWechatCdnDownloadUrl,
+  DEFAULT_WECHAT_IMAGE_MAX_BYTES,
+  downloadWechatImage,
+  MAX_WECHAT_IMAGES_PER_MESSAGE,
+  type WechatImageReference,
+} from "./wechatMedia.js";
 
 /**
- * Minimal text-only iLink/ClawBot transport. The wire format follows the
- * MIT-licensed shenjiecode/pi-wechat-assistant project, while lifecycle,
+ * iLink/ClawBot text + inbound-image transport. The wire/media format follows
+ * the MIT-licensed shenjiecode/pi-wechat-assistant project, while lifecycle,
  * scoping and routing are owned by this Channel extension.
  */
 
@@ -46,6 +53,15 @@ interface RawWechatMessage {
   item_list?: Array<{
     type?: number;
     text_item?: { text?: string };
+    image_item?: {
+      aeskey?: string;
+      url?: string;
+      media?: {
+        full_url?: string;
+        encrypt_query_param?: string;
+        aes_key?: string;
+      };
+    };
     voice_item?: { text?: string };
     ref_msg?: { message_item?: { text_item?: { text?: string } } };
   }>;
@@ -77,6 +93,7 @@ export interface WechatInboundMessage {
   id: string;
   userId: string;
   content: string;
+  images?: ChannelImage[];
   receivedAt: string;
 }
 
@@ -320,6 +337,27 @@ function incomingText(raw: RawWechatMessage): string {
   return parts.join("\n").trim();
 }
 
+function incomingImages(raw: RawWechatMessage): {
+  declared: number;
+  references: WechatImageReference[];
+} {
+  let declared = 0;
+  const references: WechatImageReference[] = [];
+  for (const item of raw.item_list ?? []) {
+    const image = item.image_item;
+    if (item.type !== 2 && !image) continue;
+    declared += 1;
+    const media = image?.media;
+    const fullUrl = media?.full_url?.trim() || image?.url?.trim();
+    const encryptedQuery = media?.encrypt_query_param?.trim();
+    const url = fullUrl || (encryptedQuery ? buildWechatCdnDownloadUrl(encryptedQuery) : undefined);
+    if (!url) continue;
+    const aesKey = image?.aeskey?.trim() || media?.aes_key?.trim();
+    references.push({ url, ...(aesKey ? { aesKey } : {}) });
+  }
+  return { declared, references };
+}
+
 function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve();
   return new Promise((resolve) => {
@@ -387,6 +425,7 @@ export async function startWechatTransport(options: {
   channel: ChannelDefinition;
   instanceId?: string;
   fetcher?: typeof fetch;
+  imageMaxBytes?: number;
   onMessage(message: WechatInboundMessage): void | Promise<void>;
   onError?(error: unknown): void;
 }): Promise<RunningWechatTransport> {
@@ -458,12 +497,38 @@ export async function startWechatTransport(options: {
             state.lastUserId = userId;
             state.contextTokens[userId] = raw.context_token;
           }
-          const content = incomingText(raw);
-          if (!userId || !content) continue;
+          let content = incomingText(raw);
+          const imageInput = incomingImages(raw);
+          const references = imageInput.references.slice(0, MAX_WECHAT_IMAGES_PER_MESSAGE);
+          const images: ChannelImage[] = [];
+          let imageFailures = imageInput.declared - references.length;
+          for (const reference of references) {
+            try {
+              images.push(await downloadWechatImage(reference, {
+                ...(options.fetcher ? { fetcher: options.fetcher } : {}),
+                signal: abort.signal,
+                maxBytes: options.imageMaxBytes ?? DEFAULT_WECHAT_IMAGE_MAX_BYTES,
+              }));
+            } catch (error) {
+              imageFailures += 1;
+              options.onError?.(error);
+            }
+          }
+          if (images.length > 0 && !content) {
+            content = images.length === 1
+              ? "用户通过微信发送了一张图片，请分析图片内容。"
+              : `用户通过微信发送了 ${images.length} 张图片，请分析图片内容。`;
+          }
+          if (imageFailures > 0) {
+            const failureNote = `[${imageFailures} 张微信图片下载、解密或格式校验失败]`;
+            content = content ? `${content}\n\n${failureNote}` : failureNote;
+          }
+          if (!userId || (!content && images.length === 0)) continue;
           await options.onMessage({
             id: String(raw.message_id || randomUUID()),
             userId,
             content,
+            ...(images.length > 0 ? { images } : {}),
             receivedAt: new Date(raw.create_time_ms ?? Date.now()).toISOString(),
           });
         }

@@ -49,14 +49,21 @@ export function wrapVisualLines(text: string, width: number): string[] {
  * hundreds of rows before the existing line cap can see it.
  */
 export class FoldableText implements Component {
-  // Memoize the expensive ANSI wrap (graphemeWidth/wrapSingleLine) keyed by the
-  // resolved content width. `text`/`options.widthOffset` are fixed per instance,
-  // so for a given width the wrapped rows are deterministic. The TUI re-renders
-  // cached components every frame; without this the wrap dominated CPU (100%
-  // spin) on large transcripts. The cheap fold/slice logic still runs each frame
-  // (so `expanded` toggles stay live).
+  // Memoize both ANSI wrapping and the final folded/padded output. The TUI
+  // re-renders every transcript component on each animation frame; caching only
+  // wrapping still left diff rows running padRow -> visibleWidth (Intl.Segmenter)
+  // thousands of times per frame in long sessions.
   private cacheWidth = -1;
   private cacheRows: string[] | null = null;
+  private renderedCache: {
+    contentWidth: number;
+    expanded: boolean;
+    limit: number;
+    expandHint: string | undefined;
+    overflowMarker: string | undefined;
+    padRowsToWidth: boolean;
+    rows: string[];
+  } | null = null;
 
   constructor(
     private readonly text: string,
@@ -66,6 +73,27 @@ export class FoldableText implements Component {
 
   render(width: number): string[] {
     const contentWidth = Math.max(1, width - (this.options.widthOffset ?? 0));
+    const {
+      expanded = false,
+      maxLines = DEFAULT_MAX_RESULT_LINES,
+      expandHint,
+      overflowMarker,
+      padRowsToWidth = false,
+    } = this.options;
+    const limit = Math.max(1, maxLines);
+    const rendered = this.renderedCache;
+    if (
+      rendered !== null &&
+      rendered.contentWidth === contentWidth &&
+      rendered.expanded === expanded &&
+      rendered.limit === limit &&
+      rendered.expandHint === expandHint &&
+      rendered.overflowMarker === overflowMarker &&
+      rendered.padRowsToWidth === padRowsToWidth
+    ) {
+      return rendered.rows;
+    }
+
     let rows: string[];
     if (contentWidth === this.cacheWidth && this.cacheRows !== null) {
       rows = this.cacheRows;
@@ -74,36 +102,38 @@ export class FoldableText implements Component {
       this.cacheWidth = contentWidth;
       this.cacheRows = rows;
     }
+
+    let output: string[];
     if (rows.length === 0) {
-      return [];
+      output = [];
+    } else if (expanded || rows.length <= limit) {
+      output = this.finish(rows, contentWidth);
+    } else {
+      const hidden = rows.length - limit;
+      if (overflowMarker !== undefined && limit === 1) {
+        const marker = this.theme.fg("dim", overflowMarker || GLYPH_ELLIPSIS);
+        output = [truncateToWidth(this.text, contentWidth, marker)];
+      } else if (hidden === 1) {
+        output = this.finish(rows.slice(0, limit + 1), contentWidth);
+      } else {
+        const hint = buildFoldHint(hidden, this.theme, expandHint);
+        output = this.finish(
+          [...rows.slice(0, limit), truncateToWidth(hint, contentWidth, GLYPH_ELLIPSIS)],
+          contentWidth,
+        );
+      }
     }
 
-    const {
-      expanded = false,
-      maxLines = DEFAULT_MAX_RESULT_LINES,
+    this.renderedCache = {
+      contentWidth,
+      expanded,
+      limit,
       expandHint,
       overflowMarker,
-    } = this.options;
-    const limit = Math.max(1, maxLines);
-    if (expanded || rows.length <= limit) {
-      return this.finish(rows, contentWidth);
-    }
-
-    const hidden = rows.length - limit;
-    if (overflowMarker !== undefined && limit === 1) {
-      const marker = this.theme.fg("dim", overflowMarker || GLYPH_ELLIPSIS);
-      return [truncateToWidth(this.text, contentWidth, marker)];
-    }
-
-    if (hidden === 1) {
-      return this.finish(rows.slice(0, limit + 1), contentWidth);
-    }
-
-    const hint = buildFoldHint(hidden, this.theme, expandHint);
-    return this.finish(
-      [...rows.slice(0, limit), truncateToWidth(hint, contentWidth, GLYPH_ELLIPSIS)],
-      contentWidth,
-    );
+      padRowsToWidth,
+      rows: output,
+    };
+    return output;
   }
 
   /** Apply the optional full-width padding to the final rows. */
@@ -117,5 +147,6 @@ export class FoldableText implements Component {
   invalidate(): void {
     this.cacheWidth = -1;
     this.cacheRows = null;
+    this.renderedCache = null;
   }
 }
