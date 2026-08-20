@@ -6,6 +6,7 @@
 - 每次完整 `agent_end`（包括其中的多轮工具调用）生成一行 `AI` 工作摘要；
 - 用完整边框包住标题、摘要和当前位置，避免与聊天区混在一起；框内标题（`summary`）、角色、摘要、等待提示和滚动信息全部使用灰色弱化显示，不抢主对话视觉焦点；
 - 默认显示最近 8 行，可通过 settings 设置 2-30 行；使用 `Alt+↑` 向旧记录滚动、`Alt+↓` 回到新记录，底边会显示 `起止/总数` 和上下方剩余条数；
+- 摘要模型默认携带最近 3 轮原始对话上下文，主要用于正确理解“它”“继续”“按刚才那个”等承接表达，可配置为 0-20 轮；
 - 摘要写入 session `CustomEntry`，恢复会话或切换分支时会随当前 branch 恢复，但不会进入 LLM 上下文。
 
 空会话也会保留带边框的“等待首轮对话”区域，因此用户始终能看到这个常驻组件。新摘要到达时默认跟随最新内容；如果用户正在查看旧记录，则保持当前窗口稳定，不会强制跳到底部。
@@ -19,13 +20,14 @@
 /session-summary model global mini
 ```
 
-全局模型和展示条数保存在 Pi 的 `~/.pi/agent/settings.json`（实际路径遵守 `PI_CODING_AGENT_DIR`）的同一个配置段中：
+全局模型、展示条数和摘要上下文轮数保存在 Pi 的 `~/.pi/agent/settings.json`（实际路径遵守 `PI_CODING_AGENT_DIR`）的同一个配置段中：
 
 ```json
 {
   "sessionSummary": {
     "model": "openai/gpt-4o-mini",
-    "lines": 8
+    "lines": 8,
+    "contextTurns": 3
   }
 }
 ```
@@ -75,6 +77,7 @@ pi --session-summary-model openai/gpt-4o-mini
 /session-summary on
 /session-summary off
 /session-summary clear
+/session-summary context <0-20|inherit>
 /session-summary lines <2-30|inherit>
 /session-summary model [global|session] [provider/model|inherit]
 ```
@@ -82,6 +85,7 @@ pi --session-summary-model openai/gpt-4o-mini
 - `status`：查看开关、有效模型及其来源、全局默认、记录数、显示行数和最近错误；
 - `on` / `off`：会话内持久开关；
 - `clear`：清空当前 branch 后续可见的摘要记录；
+- `context`：把所有会话共用的上下文轮数写入 `settings.json`；默认 3 轮，`0` 完全关闭上下文，`inherit` 恢复默认；
 - `lines`：把所有会话共用的展示条数写入 `settings.json`；`inherit` 清除设置并恢复默认 8 条；
 - `model global`：把所有会话的默认摘要模型写入 `settings.json`；
 - `model session`：仅覆盖当前会话；`inherit` 清除对应层级的设置。
@@ -103,8 +107,10 @@ pi --session-summary-model openai/gpt-4o-mini
 
 ## 发送给摘要模型的内容
 
-- 用户摘要：该条用户文本；
-- Agent 摘要：本次 run 中的用户文本、Assistant 可见文本和调用过的工具名；
+- 用户摘要：最近 `sessionSummary.contextTurns` 轮的用户/Assistant 可见文本，以及当前用户文本；
+- Agent 摘要：同样的最近 N 轮上下文，加上本次 run 中的用户文本、Assistant 可见文本和调用过的工具名；
+- 上下文按“一个用户消息及其后续 Assistant 输出”为一轮，只取最近 N 轮；当前待总结轮不会在上下文中重复；
+- 上下文只用于消解指代、省略和承接，提示词明确要求不要把旧信息写成当前新信息；
 - **不会发送 tool result 内容或工具参数**，避免把文件内容、命令输出等额外扩散给独立模型。
 
-摘要模型输出被限制为单行短文本。扩展最多在内存中保留最近 100 条摘要，常驻区只渲染 `settings.json` 的 `sessionSummary.lines`（或启动参数覆盖）指定的最近若干条。
+每条上下文消息最多取 1500 字符，上下文合计最多 6000 字符，包含当前材料后的总输入材料最多 20000 字符。摘要模型输出被限制为单行短文本。扩展最多在内存中保留最近 100 条摘要，常驻区只渲染 `settings.json` 的 `sessionSummary.lines`（或启动参数覆盖）指定的最近若干条。

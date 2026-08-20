@@ -37,17 +37,19 @@ describe("session summary settings", () => {
     await saveGlobalSummaryConfig(agentDir, {
       modelRef: "small/mini",
       visibleRows: 12,
+      contextTurns: 4,
     });
 
     expect(await loadGlobalSummaryConfig(agentDir)).toEqual({
       version: 1,
       modelRef: "small/mini",
       visibleRows: 12,
+      contextTurns: 4,
     });
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
       theme: "dark",
       env: { EXISTING: "yes" },
-      sessionSummary: { model: "small/mini", lines: 12 },
+      sessionSummary: { model: "small/mini", lines: 12, contextTurns: 4 },
     });
     expect((await stat(path)).mode & 0o777).toBe(0o600);
   });
@@ -56,16 +58,17 @@ describe("session summary settings", () => {
     const agentDir = await root();
     const path = globalSummarySettingsPath(agentDir);
     await writeFile(path, JSON.stringify({
-      sessionSummary: { model: "small/mini", lines: 6, futureSetting: true },
+      sessionSummary: { model: "small/mini", lines: 6, contextTurns: 3, futureSetting: true },
     }), "utf8");
 
     await expect(saveGlobalSummaryConfig(agentDir, { visibleRows: 12 })).resolves.toEqual({
       version: 1,
       modelRef: "small/mini",
       visibleRows: 12,
+      contextTurns: 3,
     });
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
-      sessionSummary: { model: "small/mini", lines: 12, futureSetting: true },
+      sessionSummary: { model: "small/mini", lines: 12, contextTurns: 3, futureSetting: true },
     });
   });
 
@@ -74,10 +77,10 @@ describe("session summary settings", () => {
     const path = globalSummarySettingsPath(agentDir);
     await writeFile(path, JSON.stringify({
       quietStartup: true,
-      sessionSummary: { model: "small/mini", lines: 10 },
+      sessionSummary: { model: "small/mini", lines: 10, contextTurns: 5 },
     }), "utf8");
 
-    await saveGlobalSummaryConfig(agentDir, { modelRef: null, visibleRows: null });
+    await saveGlobalSummaryConfig(agentDir, { modelRef: null, visibleRows: null, contextTurns: null });
 
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ quietStartup: true });
   });
@@ -85,6 +88,7 @@ describe("session summary settings", () => {
   it("rejects malformed settings or invalid display lines", async () => {
     expect(() => validateGlobalSummaryConfig({ version: 1, modelRef: 42 })).toThrow("modelRef");
     expect(() => validateGlobalSummaryConfig({ version: 1, visibleRows: 31 })).toThrow("2-30");
+    expect(() => validateGlobalSummaryConfig({ version: 1, contextTurns: 21 })).toThrow("0-20");
     const agentDir = await root();
     const path = globalSummarySettingsPath(agentDir);
     await writeFile(path, "{broken", "utf8");

@@ -1,5 +1,7 @@
 import {
   buildAgentSummarySource,
+  buildContextualAgentSummarySource,
+  buildUserSummarySource,
   cleanModelSummary,
   fallbackAgentSummary,
   fallbackUserSummary,
@@ -32,6 +34,41 @@ describe("session summary extraction", () => {
     expect(source).toContain("调用过的工具：read、edit");
     expect(source).not.toContain("SECRET_SHOULD_NOT_BE_INCLUDED");
     expect(source).not.toContain("/secret/file");
+  });
+
+  it("adds only the configured recent turns as context for user summaries", () => {
+    const branch = [
+      { type: "message", message: { role: "user", content: [{ type: "text", text: "第一轮" }] } },
+      { type: "message", message: { role: "assistant", content: [{ type: "text", text: "第一轮结果" }] } },
+      { type: "message", message: { role: "user", content: [{ type: "text", text: "第二轮" }] } },
+      { type: "message", message: { role: "assistant", content: [{ type: "text", text: "第二轮结果" }] } },
+      { type: "message", message: { role: "toolResult", content: [{ type: "text", text: "SECRET" }] } },
+    ];
+
+    const source = buildUserSummarySource("把它继续优化", branch, 1);
+    expect(source).toContain("第二轮");
+    expect(source).toContain("第二轮结果");
+    expect(source).toContain("当前用户消息：\n把它继续优化");
+    expect(source).not.toContain("第一轮结果");
+    expect(source).not.toContain("SECRET");
+    expect(buildUserSummarySource("不带上下文", branch, 0)).toBe("不带上下文");
+  });
+
+  it("does not duplicate the current turn in agent context", () => {
+    const current = [
+      { role: "user", content: [{ type: "text", text: "当前需求" }] },
+      { role: "assistant", content: [{ type: "text", text: "当前完成结果" }] },
+    ];
+    const branch = [
+      { type: "message", message: { role: "user", content: [{ type: "text", text: "上一轮需求" }] } },
+      { type: "message", message: { role: "assistant", content: [{ type: "text", text: "上一轮结果" }] } },
+      ...current.map((message) => ({ type: "message", message })),
+    ];
+
+    const source = buildContextualAgentSummarySource(current, branch, 1);
+    expect(source).toContain("上一轮需求");
+    expect(source.match(/当前需求/g)).toHaveLength(1);
+    expect(source.match(/当前完成结果/g)).toHaveLength(1);
   });
 
   it("uses the final assistant text or error as the immediate fallback", () => {

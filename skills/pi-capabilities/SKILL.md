@@ -31,7 +31,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 | `/agents [list\|show <name>\|use <name>]` | agents | 查看/应用 subagent 角色 |
 | `/migrate [mcp\|agents\|commands\|hooks\|memory]` | migrate | 导入 Claude/Cursor 配置到 .pi/ |
 | `/memory [list\|show\|init]`, `/remember <text>` | memory | 长期记忆管理与写入 |
-| `/session-summary [status\|on\|off\|clear\|lines\|model]` | session-summary | 管理输入框上方标题为 `summary`、框内全灰色且可滚动的摘要；模型和条数存入全局 settings.json |
+| `/session-summary [status\|on\|off\|clear\|context\|lines\|model]` | session-summary | 管理标题为 `summary` 的全灰色可滚动摘要；模型、条数及最近 N 轮上下文存入全局 settings.json |
 | `/monitor` | monitor | 效果监控面板(缓存/上下文构成/回收比) |
 | `/cost`, `/usage` | cost-usage | 会话成本与 token 用量面板 |
 | `/diff` | diff | git 工作树变更(含未跟踪) |
@@ -45,7 +45,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **claude-ui**：Claude Code 风格无边框 TUI 皮肤（● 助手前导、用户灰底整行、工具去背景盒 ⎿、整行底色 diff）。`--claude-ui`（默认开），长输出用 `Ctrl+O` 展开/收起；`--claude-ui=false` 回退 compact-ui。
 - **compact-ui**：Codex 风格紧凑 UI（消息前缀化 + 内置工具短渲染），与 claude-ui 互斥。
 - **input-history**：跨会话输入历史 + 反向增量搜索，默认 `Alt+R`（可改绑 `ctrl+r`）。
-- **session-summary**：输入框上方用标题为 `summary` 的全灰色边框区显示“用户一行 + 每次完整 Agent run 一行”；`Alt+↑/↓` 滚动，`/session-summary model <provider/model>` 和 `/session-summary lines <2-30>` 分别把全局模型、条数写入 settings.json，摘要不会进入 LLM 上下文。
+- **session-summary**：输入框上方用标题为 `summary` 的全灰色边框区显示“用户一行 + 每次完整 Agent run 一行”；默认给摘要模型附带最近 3 轮可见对话以理解指代，`/session-summary context <0-20>` 可调，模型、条数和上下文轮数写入 settings.json，生成的摘要不会进入主 LLM 上下文。
 - **compact-continue**：Pi 阈值压缩后若检测到 toolResult、截断/tool-use 回合或未完成计划，会隐藏续跑一次；默认开，`--compact-continue=false` 关闭，真实用户/自动队列优先。
 - **agents-context**：自动加载 `AGENTS.md`/`CLAUDE.md`、`.claude/rules`、`@include`、条件 paths 规则；`--agents-context`（默认开）/ `PI_AGENTS_CONTEXT=0`。
 - **settings-env**：启动时读取全局和项目 `settings.json` 顶层 `env` 并注入 `process.env`；已有启动环境默认优先，`envOverride: true` 可覆盖。

@@ -10,7 +10,9 @@ import {
 import type { KeyId } from "@earendil-works/pi-tui";
 import {
   GLOBAL_SUMMARY_CONFIG_VERSION,
+  MAX_CONTEXT_TURNS,
   MAX_SUMMARY_LINES,
+  MIN_CONTEXT_TURNS,
   MIN_SUMMARY_LINES,
   loadGlobalSummaryConfig,
   saveGlobalSummaryConfig,
@@ -21,7 +23,8 @@ import { findSummaryModelMatches, modelRef, resolveSummaryModel, summaryModelLab
 import { SessionSummaryOverlay } from "./src/overlay.js";
 import { restoreSessionSummaryState, toPersistedEntry, upsertSummaryEntry } from "./src/state.js";
 import {
-  buildAgentSummarySource,
+  buildContextualAgentSummarySource,
+  buildUserSummarySource,
   fallbackAgentSummary,
   fallbackUserSummary,
   runModelSummary,
@@ -40,6 +43,7 @@ const ENABLED_FLAG = "session-summary";
 const MODEL_FLAG = "session-summary-model";
 const LINES_FLAG = "session-summary-lines";
 const DEFAULT_VISIBLE_ROWS = 8;
+const DEFAULT_CONTEXT_TURNS = 3;
 const SHUTDOWN_WAIT_MS = 3_000;
 const SCROLL_OLDER_KEY: KeyId = "alt+up";
 const SCROLL_NEWER_KEY: KeyId = "alt+down";
@@ -67,6 +71,14 @@ function parseExplicitVisibleRows(value: string): number | undefined {
   if (!/^\d+$/.test(value.trim())) return undefined;
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed >= MIN_SUMMARY_LINES && parsed <= MAX_SUMMARY_LINES
+    ? parsed
+    : undefined;
+}
+
+function parseExplicitContextTurns(value: string): number | undefined {
+  if (!/^\d+$/.test(value.trim())) return undefined;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= MIN_CONTEXT_TURNS && parsed <= MAX_CONTEXT_TURNS
     ? parsed
     : undefined;
 }
@@ -223,7 +235,7 @@ export default function sessionSummaryExtension(
   function enqueueSummary(
     entry: SessionSummaryEntry,
     role: SummaryRole,
-    source: string,
+    source: string | ((contextTurns: number) => string),
     ctx: ExtensionContext,
   ): void {
     const jobGeneration = generation;
@@ -238,7 +250,10 @@ export default function sessionSummaryExtension(
         await reloadGlobalConfig();
         if (signal.aborted || jobGeneration !== generation) return;
         const model: SummaryModel = resolveSummaryModel(ctx, effectiveModelSelection().ref);
-        const summary = await summaryRunner({ role, source, model, ctx, signal });
+        const resolvedSource = typeof source === "function"
+          ? source(globalConfig.contextTurns ?? DEFAULT_CONTEXT_TURNS)
+          : source;
+        const summary = await summaryRunner({ role, source: resolvedSource, model, ctx, signal });
         if (signal.aborted || jobGeneration !== generation) return;
         if (!updateEntry(entry.id, { summary, pending: false })) return;
         lastError = undefined;
@@ -304,15 +319,22 @@ export default function sessionSummaryExtension(
   pi.on("input", (event, ctx) => {
     if (!enabled() || !isUserInput(event)) return { action: "continue" };
     const source = event.text.trim();
+    const branch = [...ctx.sessionManager.getBranch()];
     const entry = addEntry("user", fallbackUserSummary(source));
-    enqueueSummary(entry, "user", source, ctx);
+    enqueueSummary(entry, "user", (contextTurns) => (
+      buildUserSummarySource(source, branch, contextTurns)
+    ), ctx);
     return { action: "continue" };
   });
 
   pi.on("agent_end", (event: AgentEndEvent, ctx) => {
     if (!enabled()) return;
-    const entry = addEntry("agent", fallbackAgentSummary(event.messages));
-    enqueueSummary(entry, "agent", buildAgentSummarySource(event.messages), ctx);
+    const messages = [...event.messages];
+    const branch = [...ctx.sessionManager.getBranch()];
+    const entry = addEntry("agent", fallbackAgentSummary(messages));
+    enqueueSummary(entry, "agent", (contextTurns) => (
+      buildContextualAgentSummarySource(messages, branch, contextTurns)
+    ), ctx);
   });
 
   pi.on("session_shutdown", async (event: SessionShutdownEvent) => {
@@ -353,13 +375,15 @@ export default function sessionSummaryExtension(
   }
 
   pi.registerCommand("session-summary", {
-    description: "Manage summary: status | on | off | clear | lines <2-30> | model [global|session] [provider/model]",
+    description: "Manage summary: status | on | off | clear | context <0-20> | lines <2-30> | model [global|session] [provider/model]",
     getArgumentCompletions: (prefix) => {
       const options = [
         "status",
         "on",
         "off",
         "clear",
+        "context",
+        "context inherit",
         "lines",
         "lines inherit",
         "model",
@@ -399,6 +423,36 @@ export default function sessionSummaryExtension(
           refresh();
           ctx.ui.notify("当前会话的脉络摘要已清空。", "info");
           return;
+        case "context":
+        case "context-turns": {
+          const value = rest.join(" ").trim().toLowerCase();
+          const selectedTurns = value === "inherit" || value === "default"
+            ? undefined
+            : parseExplicitContextTurns(value);
+          if (selectedTurns === undefined && value !== "inherit" && value !== "default") {
+            ctx.ui.notify(`用法：/session-summary context <${MIN_CONTEXT_TURNS}-${MAX_CONTEXT_TURNS}|inherit>`, "warning");
+            return;
+          }
+          try {
+            globalConfig = await saveGlobalConfig(agentDir, {
+              contextTurns: selectedTurns ?? null,
+            });
+            globalConfigError = undefined;
+          } catch (error) {
+            globalConfigError = errorText(error);
+            refresh();
+            ctx.ui.notify(`保存 summary 上下文轮数失败：${globalConfigError}`, "error");
+            return;
+          }
+          refresh();
+          ctx.ui.notify(
+            selectedTurns !== undefined
+              ? `所有会话的 summary 上下文已设为最近 ${selectedTurns} 轮。`
+              : `已清除上下文轮数设置，将使用默认值 ${DEFAULT_CONTEXT_TURNS} 轮。`,
+            "info",
+          );
+          return;
+        }
         case "lines": {
           const value = rest.join(" ").trim().toLowerCase();
           const selectedRows = value === "inherit" || value === "default"
@@ -508,17 +562,18 @@ export default function sessionSummaryExtension(
           };
           const globalLabel = globalConfig.modelRef ?? "未设置";
           const globalRows = globalConfig.visibleRows ?? DEFAULT_VISIBLE_ROWS;
+          const contextTurns = globalConfig.contextTurns ?? DEFAULT_CONTEXT_TURNS;
           const failure = lastError ?? globalConfigError;
           const error = failure ? `；最近错误：${failure}` : "";
           ctx.ui.notify(
-            `summary：${enabled() ? "开启" : "关闭"}；有效模型：${label}（${sourceLabels[selection.source]}）；全局默认：${globalLabel}；已记录 ${state.entries.length} 条；显示 ${visibleRows} 条（settings.json：${globalRows}）${error}`,
+            `summary：${enabled() ? "开启" : "关闭"}；有效模型：${label}（${sourceLabels[selection.source]}）；全局默认：${globalLabel}；上下文：${contextTurns} 轮；已记录 ${state.entries.length} 条；显示 ${visibleRows} 条（settings.json：${globalRows}）${error}`,
             failure ? "warning" : "info",
           );
           refresh();
           return;
         }
         default:
-          ctx.ui.notify("用法：/session-summary [status|on|off|clear|lines <2-30|inherit>|model [global|session] [provider/model|inherit]]", "warning");
+          ctx.ui.notify("用法：/session-summary [status|on|off|clear|context <0-20|inherit>|lines <2-30|inherit>|model [global|session] [provider/model|inherit]]", "warning");
       }
     },
   });

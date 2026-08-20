@@ -18,6 +18,7 @@ import { applyUserMessagePatch } from "./src/user-message-patch.js";
 import { registerToolOverrides } from "./src/tool-overrides.js";
 import { CLAUDE_UI_FLAG } from "./src/constants.js";
 import type { ClaudeUiTheme } from "./src/theme-types.js";
+import { applyWorkingIndicatorPerformancePolicy } from "./src/working-indicator.js";
 
 export default function activateClaudeUi(pi: ExtensionAPI): void {
   let activeTheme: ClaudeUiTheme | undefined;
@@ -52,10 +53,16 @@ export default function activateClaudeUi(pi: ExtensionAPI): void {
     refreshEnabled();
     activeTheme = ctx.ui.theme as unknown as ClaudeUiTheme;
     applyPatches();
+    if (enabled) {
+      applyWorkingIndicatorPerformancePolicy(ctx);
+    }
   });
 
-  pi.on("before_agent_start", async () => {
+  pi.on("before_agent_start", async (_event, ctx) => {
     refreshEnabled();
     applyPatches();
+    if (enabled) {
+      applyWorkingIndicatorPerformancePolicy(ctx);
+    }
   });
 }

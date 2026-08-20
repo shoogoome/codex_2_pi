@@ -5,6 +5,8 @@ import type { SummaryRole } from "./types.js";
 
 const MAX_SOURCE_CHARS = 20_000;
 const MAX_MESSAGE_CHARS = 5_000;
+const MAX_CONTEXT_CHARS = 6_000;
+const MAX_CONTEXT_MESSAGE_CHARS = 1_500;
 const MAX_FALLBACK_CHARS = 180;
 
 export interface SummaryRequest {
@@ -39,6 +41,12 @@ function messageText(message: unknown): string {
     .join("\n");
 }
 
+function unwrapMessage(value: unknown): unknown {
+  if (!value || typeof value !== "object") return value;
+  const entry = value as { type?: unknown; message?: unknown };
+  return entry.type === "message" ? entry.message : value;
+}
+
 function toolNames(message: unknown): string[] {
   if (!message || typeof message !== "object") return [];
   const content = (message as { content?: unknown }).content;
@@ -70,6 +78,94 @@ export function buildAgentSummarySource(messages: readonly unknown[]): string {
   }
   if (tools.size > 0) sections.push(`调用过的工具：${[...tools].join("、")}`);
   return bounded(sections.join("\n\n"), MAX_SOURCE_CHARS);
+}
+
+interface ConversationTurn {
+  user: string;
+  assistant: string[];
+}
+
+function conversationTurns(values: readonly unknown[]): ConversationTurn[] {
+  const turns: ConversationTurn[] = [];
+  for (const value of values) {
+    const message = unwrapMessage(value);
+    if (!message || typeof message !== "object") continue;
+    const role = (message as { role?: unknown }).role;
+    const text = messageText(message).trim();
+    if (role === "user" && text) {
+      turns.push({ user: text, assistant: [] });
+    } else if (role === "assistant" && text && turns.length > 0) {
+      turns[turns.length - 1]?.assistant.push(text);
+    }
+  }
+  return turns;
+}
+
+function comparableText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+export function buildRecentConversationContext(
+  values: readonly unknown[],
+  maxTurns: number,
+  excludeTrailingUserTexts: readonly string[] = [],
+): string {
+  if (maxTurns <= 0) return "";
+  const turns = conversationTurns(values);
+  const excluded = excludeTrailingUserTexts.map(comparableText).filter(Boolean);
+  for (let index = excluded.length - 1; index >= 0; index -= 1) {
+    const last = turns.at(-1);
+    if (!last || comparableText(last.user) !== excluded[index]) break;
+    turns.pop();
+  }
+
+  const selected = turns.slice(-Math.max(0, Math.floor(maxTurns)));
+  const formatted = selected.map((turn, index) => {
+    const user = bounded(turn.user, MAX_CONTEXT_MESSAGE_CHARS);
+    const assistant = turn.assistant
+      .map((text) => bounded(text, MAX_CONTEXT_MESSAGE_CHARS))
+      .filter(Boolean)
+      .join("\n");
+    return `上下文第 ${index + 1} 轮\n用户：${user}${assistant ? `\nAI：${assistant}` : ""}`;
+  }).join("\n\n");
+  return bounded(formatted, MAX_CONTEXT_CHARS);
+}
+
+function combineWithContext(context: string, currentLabel: string, currentSource: string): string {
+  if (!context) return bounded(currentSource, MAX_SOURCE_CHARS);
+  const framingChars = 80 + currentLabel.length;
+  const currentBudget = Math.max(1_000, MAX_SOURCE_CHARS - context.length - framingChars);
+  return bounded(
+    `最近上下文（仅用于理解指代和省略，不是本次要总结的新内容）：\n${context}\n\n${currentLabel}：\n${bounded(currentSource, currentBudget)}`,
+    MAX_SOURCE_CHARS,
+  );
+}
+
+export function buildUserSummarySource(
+  text: string,
+  branch: readonly unknown[],
+  contextTurns: number,
+): string {
+  const context = buildRecentConversationContext(branch, contextTurns);
+  return combineWithContext(context, "当前用户消息", text);
+}
+
+export function buildContextualAgentSummarySource(
+  messages: readonly unknown[],
+  branch: readonly unknown[],
+  contextTurns: number,
+): string {
+  const currentUserTexts = messages
+    .map(unwrapMessage)
+    .filter((message): message is { role: "user"; content?: unknown } => (
+      Boolean(message)
+      && typeof message === "object"
+      && (message as { role?: unknown }).role === "user"
+    ))
+    .map(messageText)
+    .filter((text) => Boolean(text.trim()));
+  const context = buildRecentConversationContext(branch, contextTurns, currentUserTexts);
+  return combineWithContext(context, "当前 Agent 工作材料", buildAgentSummarySource(messages));
 }
 
 export function fallbackUserSummary(text: string): string {
@@ -113,7 +209,7 @@ function responseText(message: AssistantMessage): string {
 
 function buildPrompt(role: SummaryRole, source: string): string {
   const subject = role === "user" ? "用户刚才表达的需求/信息" : "Agent 这一轮实际完成的工作";
-  return `请把下面“${subject}”压缩成一条会话脉络摘要。\n\n要求：\n- 只输出一行纯文本，不要前缀、列表、引号或 Markdown\n- 保留目标、关键动作、结果或阻塞；不要写空泛的“进行了处理”\n- 使用原对话的主要语言\n- 中文尽量不超过 60 字，其他语言不超过 140 个字符\n- 不推测没有发生的事情\n\n材料：\n${source}`;
+  return `请把下面“${subject}”压缩成一条会话脉络摘要。\n\n要求：\n- 只输出一行纯文本，不要前缀、列表、引号或 Markdown\n- 保留目标、关键动作、结果或阻塞；不要写空泛的“进行了处理”\n- 如果材料带有“最近上下文”，它只用于理解当前内容中的指代、省略和承接关系，不要把旧内容写成当前新信息\n- 使用原对话的主要语言\n- 中文尽量不超过 60 字，其他语言不超过 140 个字符\n- 不推测没有发生的事情\n\n材料：\n${source}`;
 }
 
 export const runModelSummary: SummaryRunner = async (request) => {

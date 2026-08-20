@@ -105,6 +105,27 @@ describe("claude-ui extension activation", () => {
     expect(events).toContain("before_agent_start");
   });
 
+  it("stops the animated working spinner for long sessions", async () => {
+    const { api, handlers } = createFakeApi();
+    const setWorkingIndicator = vi.fn();
+    activateClaudeUi(api as never);
+
+    await handlers.get("session_start")?.({}, {
+      sessionManager: { getBranch: () => Array(1_000) },
+      ui: {
+        setWorkingIndicator,
+        theme: {
+          name: "test",
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+          getBgAnsi: () => "",
+        },
+      },
+    });
+
+    expect(setWorkingIndicator).toHaveBeenCalledWith({ frames: ["●"] });
+  });
+
   it("does not call a stale extension API while rendering after session replacement", async () => {
     const prototype = UserMessageComponent.prototype as unknown as Record<
       string,
@@ -137,7 +158,9 @@ describe("claude-ui extension activation", () => {
       const sessionStart = handlers.get("session_start");
       expect(sessionStart).toBeTypeOf("function");
       await sessionStart?.({}, {
+        sessionManager: { getBranch: () => [] },
         ui: {
+          setWorkingIndicator: vi.fn(),
           theme: {
             name: "test",
             fg: (_color: string, text: string) => text,

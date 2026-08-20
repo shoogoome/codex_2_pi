@@ -2,7 +2,12 @@ import sessionSummaryExtension, { _setSummaryRunnerForTest } from "./index.js";
 import type { GlobalSummaryConfig, GlobalSummaryConfigUpdate } from "./src/global-config.js";
 import { SUMMARY_CUSTOM_ENTRY } from "./src/types.js";
 
-function boot(options: { globalModelRef?: string; globalVisibleRows?: number } = {}) {
+function boot(options: {
+  globalModelRef?: string;
+  globalVisibleRows?: number;
+  globalContextTurns?: number;
+  branch?: any[];
+} = {}) {
   const handlers = new Map<string, Function[]>();
   const commands = new Map<string, any>();
   const shortcuts = new Map<string, any>();
@@ -14,6 +19,7 @@ function boot(options: { globalModelRef?: string; globalVisibleRows?: number } =
     version: 1,
     ...(options.globalModelRef ? { modelRef: options.globalModelRef } : {}),
     ...(options.globalVisibleRows !== undefined ? { visibleRows: options.globalVisibleRows } : {}),
+    ...(options.globalContextTurns !== undefined ? { contextTurns: options.globalContextTurns } : {}),
   };
   const loadGlobalConfig = vi.fn(async () => globalConfig);
   const saveGlobalConfig = vi.fn(async (_agentDir: string, update: GlobalSummaryConfigUpdate) => {
@@ -25,6 +31,9 @@ function boot(options: { globalModelRef?: string; globalVisibleRows?: number } =
       ...(update.visibleRows === undefined
         ? (globalConfig.visibleRows !== undefined ? { visibleRows: globalConfig.visibleRows } : {})
         : (update.visibleRows !== null ? { visibleRows: update.visibleRows } : {})),
+      ...(update.contextTurns === undefined
+        ? (globalConfig.contextTurns !== undefined ? { contextTurns: globalConfig.contextTurns } : {})
+        : (update.contextTurns !== null ? { contextTurns: update.contextTurns } : {})),
     };
     return globalConfig;
   });
@@ -47,7 +56,7 @@ function boot(options: { globalModelRef?: string; globalVisibleRows?: number } =
   const ctx: any = {
     hasUI: true,
     model: models[0],
-    sessionManager: { getBranch: () => [] },
+    sessionManager: { getBranch: () => options.branch ?? [] },
     modelRegistry: {
       getAvailable: () => models,
       getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "test" })),
@@ -142,6 +151,28 @@ describe("session summary extension", () => {
     expect(appended.filter((item) => item.data?.kind === "upsert")).toHaveLength(0);
   });
 
+  it("includes the configured recent turns when summarizing a user message", async () => {
+    const runner = vi.fn(async () => "结合上下文的摘要");
+    _setSummaryRunnerForTest(runner);
+    const branch = [
+      { type: "message", message: { role: "user", content: [{ type: "text", text: "旧需求" }] } },
+      { type: "message", message: { role: "assistant", content: [{ type: "text", text: "旧需求已完成" }] } },
+      { type: "message", message: { role: "user", content: [{ type: "text", text: "把标题改成 summary" }] } },
+      { type: "message", message: { role: "assistant", content: [{ type: "text", text: "标题已经修改" }] } },
+    ];
+    const { ctx, handlers } = boot({ globalContextTurns: 1, branch });
+    await handler(handlers, "session_start")({ type: "session_start", reason: "startup" }, ctx);
+
+    handler(handlers, "input")({ type: "input", text: "然后把它改成灰色", source: "interactive" }, ctx);
+
+    await vi.waitFor(() => expect(runner).toHaveBeenCalled());
+    const source = (runner.mock.calls as any)[0][0].source as string;
+    expect(source).toContain("把标题改成 summary");
+    expect(source).toContain("标题已经修改");
+    expect(source).toContain("当前用户消息：\n然后把它改成灰色");
+    expect(source).not.toContain("旧需求已完成");
+  });
+
   it("uses a separately selected model without changing the main session model", async () => {
     const runner = vi.fn(async () => "小模型摘要");
     _setSummaryRunnerForTest(runner);
@@ -185,6 +216,19 @@ describe("session summary extension", () => {
 
     await vi.waitFor(() => expect(runner).toHaveBeenCalled());
     expect((runner.mock.calls as any)[0][0].model).toBe(models[1]);
+  });
+
+  it("persists the global context turn count", async () => {
+    const { ctx, handlers, commands, saveGlobalConfig, getGlobalConfig } = boot();
+    await handler(handlers, "session_start")({ type: "session_start", reason: "startup" }, ctx);
+
+    await commands.get("session-summary").handler("context 5", ctx);
+
+    expect(saveGlobalConfig).toHaveBeenCalledWith(
+      "/tmp/pi-session-summary-test",
+      { contextTurns: 5 },
+    );
+    expect(getGlobalConfig()).toEqual({ version: 1, contextTurns: 5 });
   });
 
   it("persists the global display row count next to the model setting", async () => {

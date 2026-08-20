@@ -34,7 +34,7 @@
 |---|---|---|
 | `extensions/claude-ui` | Claude Code 风格无边框 TUI 皮肤:● 助手前导、用户灰底整行、工具去背景盒 ⎿、整行底色 diff、长输出折叠。 | `--claude-ui`（默认开）· `Ctrl+O` 展开 |
 | `extensions/input-history` | 跨会话输入历史持久化 + 反向增量搜索。 | `Alt+R`（可改绑 `ctrl+r`） |
-| `extensions/session-summary` | 输入框上方标题为 `summary`、框内全灰色的可滚动摘要：每条用户输入和完整 Agent run 各一行，模型与展示条数共存于全局 `settings.json`。 | `/session-summary model <provider/model>` · `/session-summary lines <2-30>` · `Alt+↑/↓` |
+| `extensions/session-summary` | 输入框上方标题为 `summary`、框内全灰色的可滚动摘要：用户输入和完整 Agent run 各一行，模型、展示条数及最近 N 轮上下文共存于全局 `settings.json`。 | `/session-summary context <0-20>` · `/session-summary model <provider/model>` · `Alt+↑/↓` |
 | `extensions/context-pipeline` | 分层上下文管理：按预算截断 tool_result、microcompact 清旧结果（默认手动，保护 prompt 缓存），并为 Pi 原生压缩生成结构化摘要。 | `/prune [status\|soft\|hard]` · `/context-prune` · `--prune-auto` / `PI_CTXPIPE_PRUNE_MODE=auto` 开自动 prune |
 | `extensions/compact-continue` | Pi 阈值压缩后保守判断是否仍有工作：仅在 toolResult、截断/tool-use 回合或未完成计划等强信号下隐藏续跑一次，并让真实用户/自动队列优先。 | `--compact-continue`（默认开）· `--compact-continue=false` 关闭 |
 | `extensions/agents-context` | 补充加载 `AGENTS.md`/`CLAUDE.md`、`.claude/rules`、`@include`、条件 paths 规则，去重后隐藏注入。 | `--agents-context`（默认开）· `PI_AGENTS_CONTEXT=0` |

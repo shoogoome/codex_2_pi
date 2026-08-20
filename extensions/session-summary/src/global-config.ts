@@ -6,18 +6,23 @@ export const GLOBAL_SUMMARY_CONFIG_VERSION = 1;
 export const SESSION_SUMMARY_SETTINGS_KEY = "sessionSummary";
 export const SESSION_SUMMARY_MODEL_KEY = "model";
 export const SESSION_SUMMARY_LINES_KEY = "lines";
+export const SESSION_SUMMARY_CONTEXT_TURNS_KEY = "contextTurns";
 export const MIN_SUMMARY_LINES = 2;
 export const MAX_SUMMARY_LINES = 30;
+export const MIN_CONTEXT_TURNS = 0;
+export const MAX_CONTEXT_TURNS = 20;
 
 export interface GlobalSummaryConfig {
   version: typeof GLOBAL_SUMMARY_CONFIG_VERSION;
   modelRef?: string;
   visibleRows?: number;
+  contextTurns?: number;
 }
 
 export interface GlobalSummaryConfigUpdate {
   modelRef?: string | null;
   visibleRows?: number | null;
+  contextTurns?: number | null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -50,10 +55,24 @@ export function validateGlobalSummaryConfig(value: unknown): GlobalSummaryConfig
     visibleRows = value.visibleRows;
   }
 
+  let contextTurns: number | undefined;
+  if (value.contextTurns !== undefined && value.contextTurns !== null && value.contextTurns !== "") {
+    if (
+      typeof value.contextTurns !== "number"
+      || !Number.isInteger(value.contextTurns)
+      || value.contextTurns < MIN_CONTEXT_TURNS
+      || value.contextTurns > MAX_CONTEXT_TURNS
+    ) {
+      throw new Error(`会话摘要上下文轮数必须是 ${MIN_CONTEXT_TURNS}-${MAX_CONTEXT_TURNS} 的整数`);
+    }
+    contextTurns = value.contextTurns;
+  }
+
   return {
     version: GLOBAL_SUMMARY_CONFIG_VERSION,
     ...(modelRef ? { modelRef } : {}),
     ...(visibleRows !== undefined ? { visibleRows } : {}),
+    ...(contextTurns !== undefined ? { contextTurns } : {}),
   };
 }
 
@@ -74,6 +93,7 @@ function configFromSettings(value: unknown): GlobalSummaryConfig {
     version: GLOBAL_SUMMARY_CONFIG_VERSION,
     modelRef: section[SESSION_SUMMARY_MODEL_KEY],
     visibleRows: section[SESSION_SUMMARY_LINES_KEY],
+    contextTurns: section[SESSION_SUMMARY_CONTEXT_TURNS_KEY],
   });
 }
 
@@ -123,10 +143,12 @@ export async function saveGlobalSummaryConfig(
 ): Promise<GlobalSummaryConfig> {
   const applyModel = update.modelRef !== undefined;
   const applyRows = update.visibleRows !== undefined;
+  const applyContextTurns = update.contextTurns !== undefined;
   const validated = validateGlobalSummaryConfig({
     version: GLOBAL_SUMMARY_CONFIG_VERSION,
     modelRef: update.modelRef,
     visibleRows: update.visibleRows,
+    contextTurns: update.contextTurns,
   });
   await mkdir(agentDir, { recursive: true, mode: 0o700 });
   const destination = globalSummarySettingsPath(agentDir);
@@ -147,6 +169,13 @@ export async function saveGlobalSummaryConfig(
     if (applyRows) {
       if (validated.visibleRows !== undefined) nextSection[SESSION_SUMMARY_LINES_KEY] = validated.visibleRows;
       else delete nextSection[SESSION_SUMMARY_LINES_KEY];
+    }
+    if (applyContextTurns) {
+      if (validated.contextTurns !== undefined) {
+        nextSection[SESSION_SUMMARY_CONTEXT_TURNS_KEY] = validated.contextTurns;
+      } else {
+        delete nextSection[SESSION_SUMMARY_CONTEXT_TURNS_KEY];
+      }
     }
 
     if (Object.keys(nextSection).length > 0) {
