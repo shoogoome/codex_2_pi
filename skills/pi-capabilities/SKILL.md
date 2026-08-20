@@ -31,6 +31,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 | `/agents [list\|show <name>\|use <name>]` | agents | 查看/应用 subagent 角色 |
 | `/migrate [mcp\|agents\|commands\|hooks\|memory]` | migrate | 导入 Claude/Cursor 配置到 .pi/ |
 | `/memory [list\|show\|init]`, `/remember <text>` | memory | 长期记忆管理与写入 |
+| `/session-summary [status\|on\|off\|clear\|lines\|model]` | session-summary | 管理输入框上方标题为 `summary`、框内全灰色且可滚动的摘要；模型和条数存入全局 settings.json |
 | `/monitor` | monitor | 效果监控面板(缓存/上下文构成/回收比) |
 | `/cost`, `/usage` | cost-usage | 会话成本与 token 用量面板 |
 | `/diff` | diff | git 工作树变更(含未跟踪) |
@@ -44,6 +45,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **claude-ui**：Claude Code 风格无边框 TUI 皮肤（● 助手前导、用户灰底整行、工具去背景盒 ⎿、整行底色 diff）。`--claude-ui`（默认开），长输出用 `Ctrl+O` 展开/收起；`--claude-ui=false` 回退 compact-ui。
 - **compact-ui**：Codex 风格紧凑 UI（消息前缀化 + 内置工具短渲染），与 claude-ui 互斥。
 - **input-history**：跨会话输入历史 + 反向增量搜索，默认 `Alt+R`（可改绑 `ctrl+r`）。
+- **session-summary**：输入框上方用标题为 `summary` 的全灰色边框区显示“用户一行 + 每次完整 Agent run 一行”；`Alt+↑/↓` 滚动，`/session-summary model <provider/model>` 和 `/session-summary lines <2-30>` 分别把全局模型、条数写入 settings.json，摘要不会进入 LLM 上下文。
 - **compact-continue**：Pi 阈值压缩后若检测到 toolResult、截断/tool-use 回合或未完成计划，会隐藏续跑一次；默认开，`--compact-continue=false` 关闭，真实用户/自动队列优先。
 - **agents-context**：自动加载 `AGENTS.md`/`CLAUDE.md`、`.claude/rules`、`@include`、条件 paths 规则；`--agents-context`（默认开）/ `PI_AGENTS_CONTEXT=0`。
 - **settings-env**：启动时读取全局和项目 `settings.json` 顶层 `env` 并注入 `process.env`；已有启动环境默认优先，`envOverride: true` 可覆盖。
@@ -83,12 +85,13 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **生命周期自动化（提交前/工具前后注入或拦截）**：hooks-runner + `/hooks`，配置 `.pi/hooks.json`。
 - **切换 agent 角色（只读探索/规划/验证等）**：`/agents use <name>`。
 - **调出以前输入过的 prompt**：`Alt+R` 反向搜索（input-history）。
+- **快速感知当前会话在做什么**：看输入框上方的 session-summary；用 `/session-summary model global <provider/model>` 给所有会话统一选择便宜的小模型。
 - **切换 TUI 观感**：`--claude-ui`（默认，Claude 风格）↔ `--claude-ui=false`（compact-ui）。
 - **抓取网页 / 查在线文档 / 读 URL 内容**：`webfetch`（公开 URL → HTML 转 markdown 交模型读；SSRF 防护;认证 / 私有页请改用 MCP 或 `gh`）。
 - **在 settings.json 配环境变量**：用 settings-env 的顶层 `env`；项目配置覆盖全局配置，但默认不覆盖启动 Pi 时已有的变量。
 
 ## 详情文档
 
-- 新增扩展文档：`docs/extensions/{claude-ui,input-history,context-pipeline,compact-continue,agents-context,settings-env,channel,memory,approvals,plan-mode,profiles,resume-picker,autopilot,loop,effort,fast-mode,ultra,multi-agent,local-models,mcp,plugin-loader,hooks-runner,agents,migrate,monitor,cost-usage}.md`
+- 新增扩展文档：`docs/extensions/{claude-ui,input-history,session-summary,context-pipeline,compact-continue,agents-context,settings-env,channel,memory,approvals,plan-mode,profiles,resume-picker,autopilot,loop,effort,fast-mode,ultra,multi-agent,local-models,mcp,plugin-loader,hooks-runner,agents,migrate,monitor,cost-usage}.md`
 - 原有基础扩展（diff/review/init/imagegen/todo/compact-ui/pets/goal/side/localagent/localshell/tasks/teammate/user-input）：见仓库 `README.md`
 - 总表：`docs/CAPABILITIES.md`

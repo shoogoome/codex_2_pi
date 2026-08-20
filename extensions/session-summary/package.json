@@ -1,0 +1,17 @@
+{
+  "name": "pi-session-summary-extension",
+  "version": "0.1.0",
+  "description": "Persistent above-editor session thread that summarizes each user input and completed agent run with an independently selectable model.",
+  "type": "module",
+  "main": "./index.ts",
+  "pi": {
+    "extensions": [
+      "dist/index.js"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}

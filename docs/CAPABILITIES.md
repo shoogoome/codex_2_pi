@@ -16,6 +16,7 @@
 |---|---|---|---|
 | `claude-ui` | Claude Code 风格无边框 TUI 皮肤：● 助手前导、用户灰底整行、工具去背景盒 ⎿、整行底色 diff、长输出折叠。 | `--claude-ui`（默认开）· 展开键 `Ctrl+O` | [claude-ui.md](extensions/claude-ui.md) |
 | `input-history` | 跨会话输入历史持久化 + 反向增量搜索，补齐原生编辑器只有会话内 ↑/↓ 的缺口。 | 反向搜索键 `Alt+R`（可改绑，如 `ctrl+r`） | [input-history.md](extensions/input-history.md) |
+| `session-summary` | 输入框上方标题为 `summary`、框内全灰色的可滚动常驻摘要；所有会话共用的模型和展示条数存入 `settings.json`。 | `/session-summary model <provider/model>` · `/session-summary lines <2-30>` · `Alt+↑/↓` | [session-summary.md](extensions/session-summary.md) |
 
 ### 上下文
 
