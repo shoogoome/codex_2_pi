@@ -1,7 +1,7 @@
 // pi-localshell-extension — 注册 task_bash + LocalShellTask 类型挂载。
 //
-// 加载顺序:目录字典序 'localshell' < 'tasks',因此 tasks extension 先初始化
-// default store / registerMessageRenderer,再到本扩展挂 task_bash。
+// tasks 在 factory 同步体里 attach handle；本扩展只在 session_start 再读取，
+// 不依赖目录字典序。Pi 0.84+ 的 pi.events 是每扩展一份 facade，handle 走共享 EventBus。
 //
 // session_shutdown 内先 kill 自己的 running task,再 unregisterTaskType。
 

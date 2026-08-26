@@ -75,10 +75,9 @@ export default function tasksExtension(
   const store = deps.storeFactory?.() ?? createTaskStore();
   setDefaultTaskStore(store);
 
-  // Attach handle on pi.events so cross-extension consumers (localshell,
-  // localagent, teammate, dream extensions) can find this store + registry
-  // even though their import of `taskStore.js` resolves to a different
-  // module instance under Pi's per-extension jiti loader.
+  // Publish handle on the shared EventBus so cross-extension consumers
+  // (localshell, localagent, teammate) can find this store + registry even
+  // though each extension gets its own pi.events facade and jiti realm.
   const handle: TasksHandle = {
     store,
     registerTaskType,

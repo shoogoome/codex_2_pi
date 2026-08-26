@@ -2,19 +2,19 @@
 //
 // Pi loads each extension via a fresh jiti instance with moduleCache:false,
 // so module-level singletons (e.g. _defaultStore in taskStore.ts) DO NOT
-// share across extensions. But pi.events (EventBus) IS the same object
-// across all extensions. We attach the framework handle as a property on
-// pi.events, giving any extension a stable lookup.
+// share across extensions. Pi 0.84+ also gives each extension its own
+// `pi.events` facade, so writing extra properties there is invisible to
+// consumers. attachSessionHandle publishes on the shared EventBus instead.
 //
 // Tasks extension MUST attach the handle in its sync extension body (before
-// any session_start fires). Other extensions (localshell, future LocalAgent,
+// any session_start fires). Other extensions (localshell, LocalAgent,
 // Teammate, Dream) MUST read the handle inside their session_start handler.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { attachSessionHandle, getSessionHandle } from "../shared/sessionHandle.js";
 import type { Task, TaskType } from "./Task.js";
 import { setDefaultTaskStore, type TaskStore } from "./taskStore.js";
 
-/** Symbol-keyed property to avoid name collisions on the EventBus object. */
 const HANDLE_KEY = "__pi_tasks_handle__";
 
 export interface TasksHandle {
@@ -24,14 +24,14 @@ export interface TasksHandle {
   unregisterTaskType(type: TaskType): void;
 }
 
-/** Attach the handle on pi.events so cross-extension consumers can find it. */
+/** Publish the handle so cross-extension consumers can find it. */
 export function attachTasksHandle(pi: ExtensionAPI, handle: TasksHandle): void {
-  (pi.events as unknown as Record<string, TasksHandle>)[HANDLE_KEY] = handle;
+  attachSessionHandle(pi, HANDLE_KEY, handle);
 }
 
-/** Read the handle from pi.events; throws if tasks extension hasn't attached yet. */
+/** Read the handle; throws if tasks extension hasn't attached yet. */
 export function getTasksHandle(pi: ExtensionAPI): TasksHandle {
-  const handle = (pi.events as unknown as Record<string, TasksHandle | undefined>)[HANDLE_KEY];
+  const handle = getSessionHandle<TasksHandle>(pi, HANDLE_KEY);
   if (!handle) {
     throw new Error(
       "pi-tasks-extension handle not found on pi.events. Ensure pi-tasks-extension is installed and loaded.",

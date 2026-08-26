@@ -28,7 +28,7 @@ type PiThinkingLevel = Parameters<ExtensionAPI["setThinkingLevel"]>[0];
  *
  * Native levels, model/effort selectors, and stepping shortcuts live here.
  * Codex Ultra's state/request/orchestration lifecycle lives in extensions/ultra
- * and is reached through its pi.events-backed handle.
+ * and is reached through its session-handle (shared EventBus).
  */
 export default function effortExtension(pi: ExtensionAPI): void {
   let modelInputUnsubscribe: (() => void) | undefined;

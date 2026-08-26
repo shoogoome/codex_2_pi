@@ -3,7 +3,7 @@ import type {
   Model,
   SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import { streamSimpleOpenAICompletions } from "@earendil-works/pi-ai/openai-completions";
+import { streamSimple as streamSimpleOpenAICompletions } from "@earendil-works/pi-ai/api/openai-completions";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const CODEBUDDY_PROVIDER = "codebuddy";

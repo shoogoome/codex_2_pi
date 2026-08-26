@@ -1,10 +1,11 @@
 // Cross-extension AgentCapacity handle.
 //
-// Pi loads extension packages in isolated module realms, while pi.events is
-// shared by every extension in the current root session. Store the controller
-// there so localagent and teammate enforce one combined budget.
+// Pi loads extension packages in isolated module realms. Pi 0.84+ also gives
+// each extension its own `pi.events` facade, so the capacity controller is
+// published through attachSessionHandle (shared EventBus + direct property).
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { attachSessionHandle, getSessionHandle } from "../shared/sessionHandle.js";
 import {
   createAgentCapacity,
   type AgentCapacity,
@@ -14,16 +15,18 @@ import {
 const HANDLE_KEY = "__pi_agent_capacity__";
 
 export function attachAgentCapacity(pi: ExtensionAPI, capacity: AgentCapacity): void {
-  (pi.events as unknown as Record<string, AgentCapacity>)[HANDLE_KEY] = capacity;
+  attachSessionHandle(pi, HANDLE_KEY, capacity);
 }
 
 export function getAgentCapacity(
   pi: ExtensionAPI,
   options?: AgentCapacityOptions,
 ): AgentCapacity {
-  const events = pi.events as unknown as Record<string, AgentCapacity | undefined>;
+  const existing = getSessionHandle<AgentCapacity>(pi, HANDLE_KEY);
+  if (existing) return existing;
   // Lazy fallback keeps direct unit-test harnesses and selectively installed
   // extensions safe; production attaches the canonical controller from tasks.
-  if (!events[HANDLE_KEY]) events[HANDLE_KEY] = createAgentCapacity(options);
-  return events[HANDLE_KEY];
+  const created = createAgentCapacity(options);
+  attachSessionHandle(pi, HANDLE_KEY, created);
+  return created;
 }

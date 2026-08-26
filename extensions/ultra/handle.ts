@@ -1,10 +1,11 @@
 // Cross-extension Ultra handle.
 //
 // Pi loads extensions in isolated module realms, so effort and ultra cannot
-// share a module-level singleton. The per-session pi.events object is shared;
-// attach the live Ultra controller there and resolve it lazily from effort.
+// share a module-level singleton. Pi 0.84+ also gives each extension its own
+// `pi.events` facade; attachSessionHandle publishes on the shared EventBus.
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { attachSessionHandle, getSessionHandle } from "../shared/sessionHandle.js";
 
 const HANDLE_KEY = "__pi_codex_ultra_handle__";
 
@@ -27,9 +28,9 @@ export interface UltraHandle {
 }
 
 export function attachUltraHandle(pi: ExtensionAPI, handle: UltraHandle): void {
-  (pi.events as unknown as Record<string, UltraHandle>)[HANDLE_KEY] = handle;
+  attachSessionHandle(pi, HANDLE_KEY, handle);
 }
 
 export function getUltraHandle(pi: ExtensionAPI): UltraHandle | undefined {
-  return (pi.events as unknown as Record<string, UltraHandle | undefined>)[HANDLE_KEY];
+  return getSessionHandle<UltraHandle>(pi, HANDLE_KEY);
 }
