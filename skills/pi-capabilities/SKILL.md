@@ -33,6 +33,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 | `/memory [list\|show\|init]`, `/remember <text>` | memory | 长期记忆管理与写入 |
 | `/session-summary [status\|on\|off\|clear\|context\|lines\|model]` | session-summary | 管理标题为 `summary` 的全灰色可滚动摘要；模型、条数及最近 N 轮上下文存入全局 settings.json |
 | `/monitor` | monitor | 效果监控面板(缓存/上下文构成/回收比) |
+| `/speed` | token-speed | 底部 token 生成速度(tok/s)面板；footer 实时估算 + 精确测量 |
 | `/cost`, `/usage` | cost-usage | 会话成本与 token 用量面板 |
 | `/diff` | diff | git 工作树变更(含未跟踪) |
 | `/review [指令]` | review | Codex 风格评审预设 |
@@ -50,6 +51,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **agents-context**：自动加载 `AGENTS.md`/`CLAUDE.md`、`.claude/rules`、`@include`、条件 paths 规则；`--agents-context`（默认开）/ `PI_AGENTS_CONTEXT=0`。
 - **settings-env**：启动时读取全局和项目 `settings.json` 顶层 `env` 并注入 `process.env`；已有启动环境默认优先，`envOverride: true` 可覆盖。
 - **pets**：终端宠物 widget，依 agent 状态切换动画。
+- **token-speed**：footer 常驻 `⚡ 42.3 tok/s · avg 38.1`（流式中显示 `⚡ ~167 tok/s` 估算），`--token-speed=false` 关闭；测量口径为首个→最后 delta 的 decode 窗口。
 
 ## 模型可调用的工具（非命令）
 
@@ -82,6 +84,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **Codex 订阅优先加速**：`/fast`；仅支持官方 catalog 声明 Fast 的 openai-codex OAuth 模型，速度更快但额度消耗增加，与 reasoning effort 相互独立。
 - **用本地模型**：`/local-models list` / `pull` / `ensure_ready`。
 - **要花了多少钱 / 用了多少 token**：`/cost`。
+- **想知道模型生成得快不快**：看 footer 的 `⚡ … tok/s`（流式中是实时估算，空闲时是最近一条 + 会话平均）；`/speed` 展开 TTFT / decode 窗口 / 最近序列明细，`/speed off` 关掉 footer 行。
 - **生命周期自动化（提交前/工具前后注入或拦截）**：hooks-runner + `/hooks`，配置 `.pi/hooks.json`。
 - **切换 agent 角色（只读探索/规划/验证等）**：`/agents use <name>`。
 - **调出以前输入过的 prompt**：`Alt+R` 反向搜索（input-history）。
@@ -92,6 +95,6 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 
 ## 详情文档
 
-- 新增扩展文档：`docs/extensions/{claude-ui,input-history,session-summary,context-pipeline,compact-continue,agents-context,settings-env,channel,memory,approvals,plan-mode,profiles,resume-picker,autopilot,loop,effort,fast-mode,ultra,multi-agent,local-models,mcp,plugin-loader,hooks-runner,agents,migrate,monitor,cost-usage}.md`
+- 新增扩展文档：`docs/extensions/{claude-ui,input-history,session-summary,context-pipeline,compact-continue,agents-context,settings-env,channel,memory,approvals,plan-mode,profiles,resume-picker,autopilot,loop,effort,fast-mode,ultra,multi-agent,local-models,mcp,plugin-loader,hooks-runner,agents,migrate,monitor,token-speed,cost-usage}.md`
 - 原有基础扩展（diff/review/init/imagegen/todo/compact-ui/pets/goal/side/localagent/localshell/tasks/teammate/user-input）：见仓库 `README.md`
 - 总表：`docs/CAPABILITIES.md`

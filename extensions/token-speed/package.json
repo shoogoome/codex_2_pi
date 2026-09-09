@@ -1,0 +1,17 @@
+{
+  "name": "pi-token-speed-extension",
+  "version": "0.1.0",
+  "description": "Footer token-generation speed (tok/s) with live streaming estimate, per-response measurement, and a /speed detail panel.",
+  "type": "module",
+  "main": "./index.ts",
+  "pi": {
+    "extensions": [
+      "dist/index.js"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}

@@ -57,6 +57,7 @@
 | `extensions/agents` | 加载 Claude 风格 subagent 角色 `.md` + 内置角色库，应用到当前会话（收敛工具 + 注入系统提示）。 | `/agents [list\|show <name>\|use <name>]` |
 | `extensions/migrate` | 一次性把 Claude/Cursor 的 MCP、subagents、commands、hooks、memory 导入 `.pi/`，只导缺失不覆盖。 | `/migrate [category]` · `--dry-run` |
 | `extensions/monitor` | 只读效果监控:缓存命中率、上下文构成、清理/压缩回收比，面板 + footer 展示。 | `/monitor` |
+| `extensions/token-speed` | 底部展示 token 生成速度(tok/s):流式实时估算 + 每条响应精确测量，含 TTFT、会话加权平均与最近序列。 | `/speed` · `/speed on\|off\|status` · `--token-speed=false` |
 | `extensions/cost-usage` | 只读追踪会话美元成本、按模型 token、时长与编辑增删行，并在 OAuth 模式查看 Codex 订阅套餐额度与重置时间。 | `/cost` · `/usage` |
 | `extensions/web` | 浏览器 Web UI：管理整机 `~/.pi/agent/sessions` 的 Pi 会话并从 CLI 到 Web 聊天；后端零依赖 HTTP + SSE，每个会话一个 `pi --mode rpc` 子进程，支持流式事件/工具调用/图片/审批对话框。 | `/web` · `/web status\|stop` · `--web` / `--web-host` / `--web-port` / `--web-token` |
 

@@ -76,6 +76,7 @@
 | 扩展 | 一句话能力 | 主要命令 / 入口 | 详情 |
 |---|---|---|---|
 | `monitor` | 只读效果监控：缓存命中率、上下文构成、清理/压缩回收比，经面板与 footer 展示，不进 LLM 上下文。 | `/monitor` | [monitor.md](extensions/monitor.md) |
+| `token-speed` | 底部 token 生成速度：流式实时估算 + 每条响应精确 tok/s，含 TTFT、decode 窗口、会话加权平均与最近序列，不进 LLM 上下文。 | `/speed` · `/speed on\|off\|status` · `--token-speed=false` | [token-speed.md](extensions/token-speed.md) |
 | `cost-usage` | 只读追踪会话美元成本、按模型 token、时长与编辑增删行；OAuth 模式额外展示 Codex 订阅套餐额度、窗口与重置时间。 | `/cost` · 别名 `/usage` | [cost-usage.md](extensions/cost-usage.md) |
 
 ---
