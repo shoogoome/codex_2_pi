@@ -71,7 +71,7 @@ async function fire(handlers: Map<string, Handler[]>, event: string, payload: an
 
 describe("fast mode core", () => {
   it("recognizes only Codex models advertised with the priority tier", () => {
-    for (const id of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"]) {
+    for (const id of ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"]) {
       expect(isFastCapableModel({ ...codexModel, id } as any)).toBe(true);
     }
     expect(isFastCapableModel({ ...codexModel, id: "gpt-5.4-mini" } as any)).toBe(false);
@@ -80,15 +80,16 @@ describe("fast mode core", () => {
   });
 
   it("adds priority without mutating the original request", () => {
-    const payload = { model: "gpt-5.6-sol", input: [] };
+    const astraModel = { ...codexModel, id: "gpt-6-astra" };
+    const payload = { model: "gpt-6-astra", input: [] };
     const result = applyFastServiceTier(payload, {
       enabled: true,
-      model: codexModel as any,
+      model: astraModel as any,
       usingOAuth: true,
     });
 
     expect(result).toEqual({ ...payload, service_tier: "priority" });
-    expect(payload).toEqual({ model: "gpt-5.6-sol", input: [] });
+    expect(payload).toEqual({ model: "gpt-6-astra", input: [] });
   });
 
   it("leaves requests unchanged outside the supported OAuth path", () => {

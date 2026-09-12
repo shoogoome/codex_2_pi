@@ -1,9 +1,63 @@
 {
   "providers": {
     "game-studio": {
-      "baseUrl": "http://aiproxy.litellm-dev.gdpziyansgpp.woa.com",
+      "baseUrl2": "http://aiproxy.litellm-dev.gdpziyansgpp.woa.com",
+      "baseUrl": "http://aiproxy.litellm-smallgame.gdpziyansgpp.woa.com",
       "apiKey": "$OPENAI_API_KEY",
       "models": [
+        {
+          "id": "gpt-5.6-sol",
+          "name": "GPT-5.6 Sol",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1050000,
+          "maxTokens": 128000,
+          "thinkingLevelMap": {
+            "off": "none",
+            "minimal": "low",
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh"
+          },
+          "api": "openai-responses",
+          "baseUrl": "http://gdp.aiproxy.litellm-smallgame.production.polaris/v1",
+          "compat": {
+            // 双版本写法：旧键 sendSessionIdHeader 给 0.74.0，新键 sessionAffinityFormat 给 0.84.2
+            // （0.80.7 移除了旧键）。两版都透传未知键、各读各的，实测发出的 header 等价。
+            // 两个都要留，删任何一个都会让对应版本的 session 亲和性回退到默认。
+            "sendSessionIdHeader": false,
+            "sessionAffinityFormat": "openai-nosession"
+          }
+        },
+        {
+          "id": "claude-sonnet-5",
+          "name": "Claude Sonnet 5",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 128000,
+          "api": "openai-completions",
+          "baseUrl": "http://gdp.aiproxy.litellm-smallgame.production.polaris/v1",
+          "compat": {
+            "supportsStore": false,
+            "supportsDeveloperRole": false,
+            "supportsReasoningEffort": true,
+            "supportsUsageInStreaming": true,
+            "maxTokensField": "max_tokens",
+            "supportsStrictMode": false,
+            "cacheControlFormat": "anthropic",
+            "sendSessionAffinityHeaders": true,
+            "supportsLongCacheRetention": false,
+            "supportsEagerToolInputStreaming": true
+          }
+        },
         {
           "id": "claude-opus-4-8",
           "name": "Claude Opus 4.8",
@@ -210,6 +264,27 @@
           }
         },
         {
+          "id": "deepseek-v4.1-flash",
+          "name": "Deepseek-V4.1-Flash",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 128000,
+          "thinkingLevelMap": {
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "cost": {
+            "input": 0.09,
+            "output": 0.18,
+            "cacheRead": 0.0018,
+            "cacheWrite": 0
+          }
+        },
+        {
           "id": "deepseek-v3-2-volc-ioa",
           "name": "DeepSeek-V3.2",
           "reasoning": true,
@@ -339,6 +414,52 @@
             "input": 0.95,
             "output": 4,
             "cacheRead": 0.16,
+            "cacheWrite": 0
+          }
+        },
+        {
+          "id": "glm-5.3-ioa",
+          "name": "GLM-5.3",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 48000,
+          "thinkingLevelMap": {
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "cost": {
+            "input": 0.98,
+            "output": 3.08,
+            "cacheRead": 0.182,
+            "cacheWrite": 0
+          }
+        },
+        {
+          "id": "glm-5.3-flash-ioa",
+          "name": "GLM-5.3-Flash",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 32000,
+          "thinkingLevelMap": {
+            "minimal": "low",
+            "low": "low",
+            "medium": "high",
+            "high": "high",
+            "xhigh": "high",
+            "max": "max"
+          },
+          "cost": {
+            "input": 0.0744,
+            "output": 0.2339,
+            "cacheRead": 0.0138,
             "cacheWrite": 0
           }
         },
@@ -473,6 +594,28 @@
           }
         },
         {
+          "id": "hy4-preview-ioa",
+          "name": "Hy4 preview",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 200000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "hy4-preview-ioa-1m",
+          "name": "Hy4 preview-1M",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
           "id": "hy3-ioa",
           "name": "Hy3",
           "reasoning": true,
@@ -555,6 +698,27 @@
             "output": 15,
             "cacheRead": 0.3,
             "cacheWrite": 3.75
+          }
+        },
+        {
+          "id": "claude-opus-5",
+          "name": "Claude-Opus-5",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 128000,
+          "thinkingLevelMap": {
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "cost": {
+            "input": 5,
+            "output": 25,
+            "cacheRead": 0.5,
+            "cacheWrite": 6.25
           }
         },
         {
@@ -674,6 +838,27 @@
             "output": 5,
             "cacheRead": 0.1,
             "cacheWrite": 1.25
+          }
+        },
+        {
+          "id": "gpt-6-astra",
+          "name": "GPT-6-Astra",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 128000,
+          "thinkingLevelMap": {
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "cost": {
+            "input": 9.6,
+            "output": 57.6,
+            "cacheRead": 0.96,
+            "cacheWrite": 0
           }
         },
         {
@@ -884,6 +1069,16 @@
             "cacheRead": 0.125,
             "cacheWrite": 0
           }
+        },
+        {
+          "id": "echo",
+          "name": "Echo",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 238000,
+          "maxTokens": 24000
         }
       ]
     },

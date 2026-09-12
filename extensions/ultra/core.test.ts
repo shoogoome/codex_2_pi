@@ -16,8 +16,9 @@ describe("Ultra workflow prompt", () => {
     expect(twice.match(/<ultra_multi_agent_workflow>/g)).toHaveLength(1);
     expect(twice).toContain(ULTRA_WORKFLOW_PROMPT);
     expect(twice).toContain("multiple task_agent calls in parallel in a single assistant message");
-    expect(twice).toContain("`run_in_background: true`");
-    expect(twice).toContain("Do not poll teammates");
+    expect(twice).toContain("runs in background automatically");
+    expect(twice).toContain("inherits its provider/model configuration");
+    expect(twice).toContain("Do not poll forked agents");
   });
 
   it("removes only the Ultra workflow block when inactive", () => {

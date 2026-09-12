@@ -1,6 +1,6 @@
 // Pure agent mapping: a parsed Claude subagent → a pi-native agent .md file.
 //
-// pi agent frontmatter (from localagent/agentDefinitions/frontmatter.ts):
+// pi agent role frontmatter (consumed by extensions/agents):
 //   agentType (req), whenToUse (req), description?, tools? (string[]),
 //   model? ∈ {sonnet,opus,haiku,inherit}; body = systemPrompt.
 // Claude agents carry: name, description, tools (comma string), model.

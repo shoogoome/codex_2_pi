@@ -4,6 +4,7 @@ export const FAST_MODE_STATE_ENTRY = "fast-mode-state";
 export const FAST_SERVICE_TIER = "priority";
 
 const FAST_MODEL_IDS = new Set([
+  "gpt-6-astra",
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "gpt-5.6-luna",

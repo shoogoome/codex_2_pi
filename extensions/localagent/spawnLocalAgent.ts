@@ -1,20 +1,9 @@
-// spawnLocalAgent — three execution modes (sync / auto-bg / explicit-bg) plus
-// fork mode for inheriting the parent session.
+// spawnLocalAgent — background-only fork of the current persisted Pi session.
 //
-// Design notes (per Task 0 SDK probe + Task 11 spec):
-//   - Token semantics: usage.totalTokens is cumulative — always replace via
-//     setTokens, never accumulate.
-//   - abort+dispose race: prompt promise must `.catch` BEFORE abort to avoid
-//     unhandled rejection. Cleanup order: abort → unsub (cleanup) → dispose.
-//   - Fork mode: forces background, uses SessionManager.forkFrom, runs
-//     buildForkedMessages.injectForkPlaceholders to repair unmatched
-//     tool_use blocks, and prefixes the prompt with FORK_BOILERPLATE.
-//   - Recursion hard-stop: if parent ctxMessages already contain the fork
-//     boilerplate tag (i.e. we are already inside a forked worker), throw.
-//
-// SDK injection: tests can override SDK constructors via _setSdkForTest. The
-// real SDK calls live in a tiny adapter so we do not need to spin up a real
-// LLM session in unit tests.
+// LocalAgent has exactly one mode: clone the parent branch with
+// SessionManager.forkFrom, inherit its exact provider/model/thinking runtime,
+// repair any in-flight tool calls, and run the delegated prompt in background.
+// Recursive forks are rejected by the boilerplate guard.
 
 import type {
   AgentSession,
@@ -38,18 +27,18 @@ import {
   createTaskStateBase,
   generateTaskId,
 } from "../tasks/Task.js";
-import { markTaskNotified, notifyTaskTerminal } from "../tasks/notifications.js";
+import { notifyTaskTerminal } from "../tasks/notifications.js";
 import { emitTaskProgress } from "../tasks/progress.js";
 import { logError } from "../tasks/logging.js";
 import { getAgentCapacity } from "../tasks/agentCapacityHandle.js";
 import type { AgentCapacityLease } from "../tasks/agentCapacity.js";
 
-import type { AgentDefinition, LocalAgentTaskState } from "./types.js";
+import type { LocalAgentTaskState } from "./types.js";
 import type { AgentModel, AgentThinkingLevel } from "./model.js";
 import { FORK_AGENT_TYPE } from "./agentDefinitions/builtIn.js";
 import { buildChildDirective } from "./boilerplate.js";
 import { isInForkChild } from "./recursionGuard.js";
-import { resolveSubAgentTools } from "./toolPool.js";
+import { resolveForkTools } from "./toolPool.js";
 import { translateAgentEvent } from "./outputTranslator.js";
 import { previewToolEnd, previewToolStart } from "./formatPreview.js";
 import {
@@ -76,16 +65,15 @@ function boundedFinalMessage(text: string): string | undefined {
 
 export interface SpawnLocalAgentOptions {
   prompt: string;
-  agentDef: AgentDefinition;
   ctxMessages: readonly unknown[];
   cwd: string;
   description?: string;
   toolUseId?: string;
-  model?: AgentModel;
-  thinkingLevel?: AgentThinkingLevel;
-  timeoutMs?: number;
-  forceBackground?: boolean;
-  parentSessionFile?: string;
+  /** Exact active model object from the parent ExtensionContext. */
+  model: AgentModel;
+  /** Current parent thinking level. */
+  thinkingLevel: AgentThinkingLevel;
+  parentSessionFile: string;
   allRegisteredTools?: readonly string[];
   /** Abort while waiting for a shared execution slot. */
   abortSignal?: AbortSignal;
@@ -134,9 +122,8 @@ export interface SpawnLocalAgentResult {
   outputFile: string;
   durationMs?: number;
   /**
-   * Full progress timeline captured during the run. Present on completed/failed
-   * sync + background-finalizer results so the task_agent renderResult can paint
-   * an expanded timeline view (Ctrl+O) without round-tripping back to disk.
+   * Full progress timeline captured during the run when a terminal result is
+   * materialized by a caller or status surface.
    */
   timeline?: SpawnLocalAgentTimelineEntry[];
 }
@@ -148,7 +135,6 @@ interface SdkBindings {
     cwd: string;
     appendSystemPrompt?: string[];
   }) => Promise<unknown>;
-  SessionManagerInMemory: (cwd: string) => unknown | Promise<unknown>;
   SessionManagerForkFrom: (parent: string, cwd: string) => unknown | Promise<unknown>;
   createAgentSessionFromServices: (opts: {
     services: unknown;
@@ -169,7 +155,6 @@ let _sdk: SdkBindings = {
         : undefined,
     }) as unknown as Promise<unknown>;
   },
-  SessionManagerInMemory: async (cwd) => (await loadPiRuntimeSdk()).SessionManager.inMemory(cwd),
   SessionManagerForkFrom: async (parent, cwd) =>
     (await loadPiRuntimeSdk()).SessionManager.forkFrom(parent, cwd),
   createAgentSessionFromServices: async (opts) => {
@@ -203,11 +188,7 @@ export async function spawnLocalAgent(
     );
   }
 
-  const isFork = opts.agentDef.agentType === FORK_AGENT_TYPE;
-  const forceBg = opts.forceBackground === true || opts.agentDef.background === true || isFork;
-  const timeoutMs = opts.timeoutMs ?? 120_000;
-
-  if (isFork && !opts.parentSessionFile) {
+  if (!opts.parentSessionFile) {
     throw new Error(
       "Fork requires a persisted parent session. Run pi without --no-session.",
     );
@@ -238,28 +219,18 @@ export async function spawnLocalAgent(
   // transferred to the task cleanup path.
   let session: AgentSession;
   try {
-    const services = await _sdk.createAgentSessionServices({
-      cwd: opts.cwd,
-      appendSystemPrompt: opts.agentDef.systemPrompt
-        ? [opts.agentDef.systemPrompt]
-        : undefined,
-    });
-    let sm: unknown;
-    if (isFork) {
-      sm = await _sdk.SessionManagerForkFrom(opts.parentSessionFile!, opts.cwd);
-      const wrapped: ForkSessionManagerLike = {
-        getEntries: () =>
-          (sm as { getEntries: () => readonly unknown[] }).getEntries(),
-        appendToolResultMessage: (msg) => {
-          (sm as { appendMessage: (m: unknown) => void }).appendMessage(msg);
-        },
-      };
-      injectForkPlaceholders(wrapped);
-    } else {
-      sm = await _sdk.SessionManagerInMemory(opts.cwd);
-    }
+    const services = await _sdk.createAgentSessionServices({ cwd: opts.cwd });
+    const sm = await _sdk.SessionManagerForkFrom(opts.parentSessionFile, opts.cwd);
+    const wrapped: ForkSessionManagerLike = {
+      getEntries: () =>
+        (sm as { getEntries: () => readonly unknown[] }).getEntries(),
+      appendToolResultMessage: (msg) => {
+        (sm as { appendMessage: (m: unknown) => void }).appendMessage(msg);
+      },
+    };
+    injectForkPlaceholders(wrapped);
 
-    const tools = resolveSubAgentTools(opts.agentDef, opts.allRegisteredTools ?? []);
+    const tools = resolveForkTools(opts.allRegisteredTools ?? []);
     const { session: sessionUnknown } = await _sdk.createAgentSessionFromServices({
       services,
       sessionManager: sm,
@@ -288,10 +259,10 @@ export async function spawnLocalAgent(
     type: "local_agent",
     status: "running",
     prompt: opts.prompt,
-    agentType: opts.agentDef.agentType,
-    model: opts.model ? `${opts.model.provider}/${opts.model.id}` : undefined,
-    isBackgrounded: false,
-    isFork,
+    agentType: FORK_AGENT_TYPE,
+    model: `${opts.model.provider}/${opts.model.id}`,
+    isBackgrounded: true,
+    isFork: true,
     forkParentSessionFile: opts.parentSessionFile,
     session,
   };
@@ -322,7 +293,7 @@ export async function spawnLocalAgent(
       kind: full.kind,
       summary: full.summary,
       description,
-      agentType: opts.agentDef.agentType,
+      agentType: FORK_AGENT_TYPE,
       toolName: full.toolName,
       isError: full.isError,
       toolCallCount:
@@ -336,7 +307,7 @@ export async function spawnLocalAgent(
     try {
       opts.onProgress?.({
         taskId,
-        agentType: opts.agentDef.agentType,
+        agentType: FORK_AGENT_TYPE,
         description,
         timeline: timeline.slice(),
         lastEvent: full,
@@ -352,7 +323,7 @@ export async function spawnLocalAgent(
 
   pushProgress({
     kind: "task_start",
-    summary: `${opts.agentDef.agentType} → ${opts.prompt.slice(0, 60)}`,
+    summary: `${FORK_AGENT_TYPE} → ${opts.prompt.slice(0, 60)}`,
   });
 
   // Mirror the in-memory progress.ts store onto LocalAgentTaskState.progress so the
@@ -422,10 +393,6 @@ export async function spawnLocalAgent(
     }
     if (e.type === "turn_start") {
       turnCount += 1;
-      if (opts.agentDef.maxTurns && turnCount > opts.agentDef.maxTurns && !runError) {
-        runError = `Agent exceeded maxTurns=${opts.agentDef.maxTurns}`;
-        void session.abort();
-      }
     }
     if (e.type === "message_end" && e.message?.role === "assistant") {
       const total = e.message?.usage?.totalTokens ?? 0;
@@ -487,7 +454,7 @@ export async function spawnLocalAgent(
   }));
 
   // 5. start prompt — MUST .catch immediately to avoid unhandled rejection.
-  const promptText = isFork ? buildChildDirective(opts.prompt) : opts.prompt;
+  const promptText = buildChildDirective(opts.prompt);
   const promptPromise = session.prompt(promptText).catch((e) => {
     runError = (e as Error)?.message ?? String(e);
     logError(e, "session.prompt");
@@ -502,59 +469,6 @@ export async function spawnLocalAgent(
       agentEndedResolve();
     }
   });
-
-  const finalize = async (): Promise<SpawnLocalAgentResult> => {
-    await promptPromise;
-    cleanup();
-    await flushTaskOutput(taskId);
-    const statusVal = runError ? "failed" as const : "completed" as const;
-    const t = store.getTask(taskId) as LocalAgentTaskState | undefined;
-    if (t && t.status === "running") {
-      updateTaskState<LocalAgentTaskState>(taskId, store, (cur) => ({
-        ...cur,
-        status: statusVal,
-        endTime: Date.now(),
-        error: runError,
-        result: {
-          finalText: lastFinalText,
-          toolCallCount: toolCount,
-          tokenCount: getProgress(taskId)?.tokenCount ?? 0,
-        },
-      }));
-    }
-    // Foreground completion is returned by task_agent itself. Sending an
-    // additional custom notification here steers it into the still-running
-    // parent turn, so one terminal event is observed both as a notification
-    // and as the tool result. Mark it consumed for eviction/status bookkeeping
-    // without enqueueing a second model-visible message.
-    markTaskNotified(taskId, store);
-    const tokenCount = getProgress(taskId)?.tokenCount ?? 0;
-    // NOTE (terminal-summary removal): a `tasks/summary` customMessage used to
-    // be emitted here. The task_agent tool's renderResult now owns the
-    // user-visible "this task is done" line in the TUI (head + Ctrl+O expand
-    // timeline), so a second main-stream row was redundant. The summary
-    // module is kept (no caller is active) for future task types that want
-    // to surface a structured terminal entry of their own.
-    try {
-      session.dispose();
-    } catch (e) {
-      logError(e, "session.dispose");
-    }
-    removeProgress(taskId);
-    void evictTaskOutput(taskId);
-    return {
-      taskId,
-      status: statusVal,
-      backgrounded: false,
-      finalText: runError ? `Agent failed: ${runError}` : lastFinalText,
-      toolCallCount: toolCount,
-      tokenCount,
-      agentType: opts.agentDef.agentType,
-      outputFile,
-      durationMs: Date.now() - initial.startTime,
-      timeline: timeline.slice(),
-    };
-  };
 
   const runBackgroundFinalizer = async (): Promise<void> => {
     await agentEndedPromise;
@@ -586,9 +500,8 @@ export async function spawnLocalAgent(
         runError ? `Agent failed: ${runError}` : lastFinalText,
       ),
       triggerTurn: true,
-      extra: { agentType: opts.agentDef.agentType, ...getProgress(taskId) },
+      extra: { agentType: FORK_AGENT_TYPE, ...getProgress(taskId) },
     });
-    // NOTE: see note in finalize() — `tasks/summary` is no longer emitted here.
     try {
       session.dispose();
     } catch (e) {
@@ -598,61 +511,16 @@ export async function spawnLocalAgent(
     void evictTaskOutput(taskId);
   };
 
-  // (terminal-summary removal): emitSummaryFor used to publish a `tasks/summary`
-  // customMessage for completed/failed transitions. The task_agent tool's
-  // renderResult now owns the user-visible terminal row in the TUI, so a second
-  // main-stream entry was redundant. Killed transitions previously emitted from
-  // kill.ts are also gone for the same reason.
-
-  // 6. forced background path: return immediately, sub keeps running.
-  if (forceBg) {
-    updateTaskState<LocalAgentTaskState>(taskId, store, (cur) => ({
-      ...cur,
-      isBackgrounded: true,
-    }));
-    void runBackgroundFinalizer();
-    return {
-      taskId,
-      status: "running",
-      backgrounded: true,
-      toolCallCount: getProgress(taskId)?.toolCallCount ?? 0,
-      tokenCount: getProgress(taskId)?.tokenCount ?? 0,
-      agentType: opts.agentDef.agentType,
-      outputFile,
-    };
-  }
-
-  // 7. sync mode: race agent_end vs timeout.
-  let timedOut = false;
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<void>((resolve) => {
-    timeoutHandle = setTimeout(() => {
-      if (!agentEnded) {
-        timedOut = true;
-      }
-      resolve();
-    }, timeoutMs);
-  });
-  await Promise.race([agentEndedPromise, timeoutPromise]);
-  if (timeoutHandle) clearTimeout(timeoutHandle);
-
-  if (timedOut && !agentEnded) {
-    updateTaskState<LocalAgentTaskState>(taskId, store, (cur) => ({
-      ...cur,
-      isBackgrounded: true,
-    }));
-    void runBackgroundFinalizer();
-    return {
-      taskId,
-      status: "running",
-      backgrounded: true,
-      toolCallCount: getProgress(taskId)?.toolCallCount ?? 0,
-      tokenCount: getProgress(taskId)?.tokenCount ?? 0,
-      agentType: opts.agentDef.agentType,
-      outputFile,
-    };
-  }
-
-  // 8. sync finalize.
-  return finalize();
+  // LocalAgent is always background-only: completion is delivered by the
+  // terminal notification and the full transcript remains in outputFile.
+  void runBackgroundFinalizer();
+  return {
+    taskId,
+    status: "running",
+    backgrounded: true,
+    toolCallCount: getProgress(taskId)?.toolCallCount ?? 0,
+    tokenCount: getProgress(taskId)?.tokenCount ?? 0,
+    agentType: FORK_AGENT_TYPE,
+    outputFile,
+  };
 }

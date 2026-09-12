@@ -55,10 +55,9 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 
 ## 模型可调用的工具（非命令）
 
-- **task_agent**（localagent）：运行一次性/后台/fork 子 agent，终态自动回传最终回答；也可用 `team_name` + `name` 创建长生命周期 teammate，并与其共享并发容量。
+- **task_agent**（localagent）：从当前持久会话完整 fork 后台子 agent，精确继承主会话 provider/model/thinking，终态自动回传最终回答。
 - **task_bash**（localshell）：后台执行 shell 命令（超时自动转后台）。
 - **task_status / task_kill / task_list**（tasks）：任务框架的查询与管理。
-- **team_create / send_message / request_plan_approval / team_delete / team_plan_approve** + team task 工具（teammate）：`name@team` 隔离、自动结果、消息 ACK/replay、硬写审批、共享任务与 fail-closed resume。
 - **update_plan**（todo）：整份计划快照更新 + 常驻 overlay。
 - **get_goal / create_goal / update_goal**（goal）：thread 持久目标。
 - **generate_image**（imagegen）：Codex 订阅生图/编辑（gpt-image-2，走 openai-codex OAuth），保存到 `~/.pi/agent/generated_images/<session>/` 并默认把图返回模型迭代；`--imagegen-return-image=false` 可只返回路径。
@@ -96,5 +95,5 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 ## 详情文档
 
 - 新增扩展文档：`docs/extensions/{claude-ui,input-history,session-summary,context-pipeline,compact-continue,agents-context,settings-env,channel,memory,approvals,plan-mode,profiles,resume-picker,autopilot,loop,effort,fast-mode,ultra,multi-agent,local-models,mcp,plugin-loader,hooks-runner,agents,migrate,monitor,token-speed,cost-usage}.md`
-- 原有基础扩展（diff/review/init/imagegen/todo/compact-ui/pets/goal/side/localagent/localshell/tasks/teammate/user-input）：见仓库 `README.md`
+- 原有基础扩展（diff/review/init/imagegen/todo/compact-ui/pets/goal/side/localagent/localshell/tasks/user-input）：见仓库 `README.md`
 - 总表：`docs/CAPABILITIES.md`
