@@ -48,7 +48,7 @@ import {
 import { _resetTaskOutputDirForTest } from "../tasks/outputPath.js";
 import { _clearOutputsForTest } from "../tasks/diskOutput.js";
 import { createTaskStateBase } from "../tasks/Task.js";
-import { attachTeammateHandle, type TeammateHandle } from "./handle.js";
+import { attachTeammateHandle, createApprovalRequestRegistry, type TeammateHandle } from "./handle.js";
 import type {
   InProcessTeammateTaskState,
   LeaderNotificationDetails,
@@ -94,6 +94,7 @@ function attachHandle(pi: ExtensionAPI): TeammateHandle {
     teamStore: createTeamStore(),
     mailbox: createMailbox(),
     teamTaskStore: createTeamTaskStore(),
+    approvalRequests: createApprovalRequestRegistry(),
   };
   attachTeammateHandle(pi, handle);
   return handle;
@@ -255,6 +256,7 @@ describe("D2 integration: Module B — plan_approval round-trip", () => {
         delete: (id) => {
           store.delete(id);
         },
+        ids: () => [...store.keys()].sort(),
       },
     };
   }
@@ -300,6 +302,9 @@ describe("D2 integration: Module B — plan_approval round-trip", () => {
     // without spinning up the loop.)
     const { pi: leaderPi } = buildLeaderPi();
     const leaderHandle = attachHandle(leaderPi);
+    // Production registers the spawn-allocated pending map on the handle so
+    // team_plan_approve can verify the request_id exists. Mirror that here.
+    leaderHandle.approvalRequests.register(identity.agentId, pending);
     leaderHandle.mailbox.registerReceiver(identity.agentId, (msg) => {
       const planResp = parsePlanApprovalResponse(msg.body);
       if (!planResp) return;

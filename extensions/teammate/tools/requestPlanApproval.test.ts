@@ -35,6 +35,9 @@ function makePending(): PendingApprovals & { _store: Map<string, PendingEntry> }
     delete(id) {
       store.delete(id);
     },
+    ids() {
+      return [...store.keys()].sort();
+    },
   };
 }
 
@@ -349,5 +352,72 @@ describe("buildRequestPlanApprovalTool — validation + edge cases", () => {
     // Pending entry has been cleaned up — no leaked map entry that would
     // leave the teammate's loop confused on a later plan_approval_response.
     expect(localPending._store.size).toBe(0);
+  });
+
+  it("times out with actionable guidance instead of hanging forever", async () => {
+    // Regression: without a timeout the await had only two exits (leader
+    // answers, or the user hits Esc). A lost notification meant the teammate
+    // stalled silently for 21+ minutes in the field report. A bounded wait
+    // turns that into an error that tells the model what to do next.
+    process.env.PI_TEAMMATE_APPROVAL_TIMEOUT_MS = "20";
+    try {
+      const localDelivered: DeliveredCall[] = [];
+      const localChannel = makeChannel(localDelivered);
+      const localPending = makePending();
+      const tool = buildRequestPlanApprovalTool({
+        identity,
+        pendingApprovals: localPending,
+        getLeaderChannel: () => localChannel,
+      });
+
+      const result = await tool.execute(
+        "c-timeout",
+        { plan: "step 1" } as never,
+        undefined,
+        undefined,
+        {} as never,
+      );
+
+      expect((result as { isError?: boolean }).isError).toBe(true);
+      const text = (result.content[0] as { text: string }).text;
+      expect(text).toMatch(/timeout waiting for leader approval/);
+      // The guidance must steer away from a blind retry: a retry mints a NEW
+      // request_id and will time out again if the channel is still broken.
+      expect(text).toMatch(/Do NOT just retry/i);
+      expect(text).toMatch(/send_message/);
+      expect(text).toContain("PI_TEAMMATE_APPROVAL_TIMEOUT_MS");
+      // No leaked pending entry after the timeout fires.
+      expect(localPending._store.size).toBe(0);
+    } finally {
+      delete process.env.PI_TEAMMATE_APPROVAL_TIMEOUT_MS;
+    }
+  });
+
+  it("a late approval after timeout does not reopen the request", async () => {
+    // The timeout deletes the pending entry, so a response that arrives later
+    // must be a no-op rather than resolving a promise twice.
+    process.env.PI_TEAMMATE_APPROVAL_TIMEOUT_MS = "15";
+    try {
+      const localDelivered: DeliveredCall[] = [];
+      const localPending = makePending();
+      const tool = buildRequestPlanApprovalTool({
+        identity,
+        pendingApprovals: localPending,
+        getLeaderChannel: () => makeChannel(localDelivered),
+      });
+
+      const result = await tool.execute(
+        "c-late",
+        { plan: "step 1" } as never,
+        undefined,
+        undefined,
+        {} as never,
+      );
+
+      expect((result as { isError?: boolean }).isError).toBe(true);
+      expect(localPending._store.size).toBe(0);
+    } finally {
+      delete process.env.PI_TEAMMATE_APPROVAL_TIMEOUT_MS;
+    }
   });
 });

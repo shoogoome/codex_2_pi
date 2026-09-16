@@ -52,6 +52,41 @@ export interface RenderTeammateOverlayOptions {
 const PLAIN_THEME: TeammateOverlayRenderTheme = { fg: (_c, t) => t };
 const SEP_CHAR = "─";
 
+/** Rows below the overlay that must stay visible (the input dock). */
+const DEFAULT_DOCK_RESERVE_ROWS = 14;
+/** Never shrink the teammate view below this — a 2-row view is useless. */
+const MIN_VIEW_ROWS = 6;
+
+/**
+ * How many rows the teammate overlay may occupy.
+ *
+ * The overlay is composited ON TOP of the already-rendered frame, starting at
+ * the top of the viewport (`anchor:"top-left"`, `margin:0` → row 0). The input
+ * dock — pending messages, widgets, the editor, the footer — is laid out at the
+ * BOTTOM of that same frame. An overlay taller than (viewport − dock) therefore
+ * paints straight over the editor, and since the editor keeps keyboard focus
+ * the user sees their typing go nowhere. Reserve the dock explicitly.
+ *
+ * The reserve is a heuristic: extensions cannot query the dock's height, and it
+ * grows with multi-line input and lazily-mounted widgets. Override with
+ * `PI_TEAMMATE_VIEW_RESERVE_ROWS` when the local widget stack is unusually tall
+ * or short.
+ */
+export function teammateViewHeight(
+  termRows: number,
+  reserveRows?: number,
+): number {
+  const envRaw = Number(process.env.PI_TEAMMATE_VIEW_RESERVE_ROWS);
+  const configured =
+    reserveRows ??
+    (Number.isFinite(envRaw) && envRaw >= 0 ? envRaw : DEFAULT_DOCK_RESERVE_ROWS);
+  // Never let a large reserve (or a short terminal) collapse the view, and
+  // never claim the whole screen.
+  const maxReserve = Math.max(0, termRows - MIN_VIEW_ROWS);
+  const reserve = Math.max(0, Math.min(configured, maxReserve));
+  return Math.max(MIN_VIEW_ROWS, termRows - reserve);
+}
+
 /**
  * Build the header row in coloured pieces. We size the line off the plain
  * text (no ANSI) so layout stays width-correct; theme.fg is applied as a
@@ -90,17 +125,94 @@ function wrap(line: string, w: number): string[] {
 
 function summarizeArgs(args: Record<string, unknown>): string {
   try {
-    const s = JSON.stringify(args);
-    return visibleWidth(s) <= 60 ? s : truncateToWidth(s, 60, "...");
+    // Route through sanitize/oneLine: tool ARGUMENTS echo the command the
+    // teammate ran, which often carries raw ANSI. Unfiltered, the overlay
+    // re-emitted those codes and the column truncate sliced them, leaving
+    // literal `[0m` garbage in the header line.
+    return oneLine(JSON.stringify(args), 60);
   } catch {
     return "{...}";
   }
 }
 
+/**
+ * customType prefixes that are pure telemetry and carry no conversation
+ * content. A teammate session writes one per turn (cost) or several (speed /
+ * monitor), so a long run produces thousands of entries — rendering even one
+ * placeholder line each buried the actual conversation under a wall of
+ * `[custom]`. Filtered by prefix so `cost-usage/snapshot` and future
+ * `cost-usage/*` variants are both covered.
+ */
+const TELEMETRY_CUSTOM_TYPES = [
+  "cost-usage/",
+  "token-speed/",
+  "monitor/",
+  "session-summary",
+] as const;
+
+function isTelemetryCustomType(customType: string): boolean {
+  return TELEMETRY_CUSTOM_TYPES.some(
+    (prefix) => customType === prefix || customType.startsWith(prefix),
+  );
+}
+
+/**
+ * Strip whole ANSI/escape sequences from agent-produced text.
+ *
+ * Teammate output routinely embeds raw ANSI (tool results echo the terminal
+ * colouring of the commands they ran). Two problems follow if it reaches the
+ * view: the overlay re-emits those codes (it owns colour here), and a
+ * column-based truncate slices through a sequence mid-way.
+ *
+ * `stripTerminalSequences` from pi-tui turned out to leave the printable body
+ * behind for some inputs — the ESC byte vanished while `[0m` stayed, showing up
+ * as literal `[0m` noise. Match the complete sequences instead:
+ *   - OSC:  ESC ] ... (BEL | ESC \)
+ *   - CSI:  ESC [ params intermediates final
+ *   - other two-char escapes: ESC <char>
+ * Then drop any remaining C0/C1 control bytes (\n and \t are collapsed by the
+ * whitespace pass in `sanitize`, so removing them here is harmless).
+ */
+function stripEscapeSequences(text: string): string {
+  return text
+    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "")
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001b[@-Z\\-_]/g, "")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
+}
+
+/**
+ * Sanitise text for the overlay: drop escape sequences, collapse whitespace.
+ */
+function sanitize(text: string): string {
+  return stripEscapeSequences(text).replace(/\s+/g, " ").trim();
+}
+
+/** Collapse a multi-line blob to one readable line of at most `max` columns. */
+function oneLine(text: string, max: number): string {
+  const flat = sanitize(text);
+  return visibleWidth(flat) <= max ? flat : truncateToWidth(flat, max, "...");
+}
+
 function entryToLines(entry: SessionEntry): string[] | null {
+  if (entry.type === "custom") {
+    // Plain custom entries are state/telemetry records (`type:"custom"`, no
+    // `role`), NOT conversation. Drop telemetry entirely; keep anything else
+    // as a single dim marker so genuinely interesting extension records stay
+    // discoverable.
+    const customType = String(
+      (entry as { customType?: unknown }).customType ?? "custom",
+    );
+    if (isTelemetryCustomType(customType)) return null;
+    return [`[CUSTOM ${customType}]`];
+  }
   if (entry.type === "custom_message") {
     if (entry.customType === "teammate/event") return null;
-    return [`[CUSTOM ${entry.customType}]`];
+    // Notification bodies are the teammate<->leader conversation; show the
+    // first line rather than only the type, so the view is actually readable.
+    const body = extractText(entry.content);
+    const head = oneLine(body, 100);
+    return [head.length > 0 ? `[CUSTOM ${entry.customType}] ${head}` : `[CUSTOM ${entry.customType}]`];
   }
   if (entry.type === "message") {
     const msg = entry.message as {
@@ -110,7 +222,7 @@ function entryToLines(entry: SessionEntry): string[] | null {
     };
     if (msg.role === "user") {
       const text = extractText(msg.content);
-      return [`[USER] ${text}`];
+      return [`[USER] ${oneLine(text, 200)}`];
     }
     if (msg.role === "assistant") {
       // assistant message may carry text / thinking / toolCall blocks
@@ -118,7 +230,9 @@ function entryToLines(entry: SessionEntry): string[] | null {
       const lines: string[] = [];
       for (const b of blocks as ReadonlyArray<Record<string, unknown>>) {
         if (b.type === "text" && typeof b.text === "string") {
-          lines.push(`[ASSISTANT] ${b.text}`);
+          // One line per text block: an assistant paragraph wrapped across the
+          // full width pushed every tool call off-screen.
+          lines.push(`[ASSISTANT] ${oneLine(b.text, 200)}`);
         } else if (b.type === "toolCall") {
           const name = String(b.name ?? "?");
           const args = (b.arguments as Record<string, unknown>) ?? {};
@@ -130,10 +244,14 @@ function entryToLines(entry: SessionEntry): string[] | null {
       return lines;
     }
     if (msg.role === "toolResult") {
+      // Multi-line tool output (JSON, file contents, diffs) must stay ONE row.
+      // `truncateToWidth` only clips columns, so embedded newlines previously
+      // expanded every one of hundreds of tool results into a full block.
       const text = extractText(msg.content);
-      const truncated =
-        visibleWidth(text) <= 80 ? text : truncateToWidth(text, 80, "...");
-      return [`[TOOL_RESULT] ${truncated}`];
+      const isError = (msg as { isError?: boolean }).isError === true;
+      const tag = isError ? "[TOOL_RESULT error]" : "[TOOL_RESULT]";
+      const flat = oneLine(text, 120);
+      return [flat.length > 0 ? `${tag} ${flat}` : tag];
     }
     return [`[${msg.role}]`];
   }

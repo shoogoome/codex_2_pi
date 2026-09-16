@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { buildTeamTaskCreateTool } from "./teamTaskCreate.js";
-import { attachTeammateHandle, type TeammateHandle } from "../../handle.js";
+import { attachTeammateHandle, type TeammateHandle, createApprovalRequestRegistry } from "../../handle.js";
 import { createTeamStore } from "../../teamStore.js";
 import { createMailbox } from "../../mailbox.js";
 import { createTeamTaskStore } from "../teamTaskStore.js";
@@ -23,7 +23,7 @@ describe("team_task_create tool", () => {
     const teamStore = createTeamStore();
     const teamTaskStore = createTeamTaskStore();
     const mailbox = createMailbox();
-    handle = { teamStore, mailbox, teamTaskStore };
+    handle = { teamStore, mailbox, teamTaskStore, approvalRequests: createApprovalRequestRegistry() };
     attachTeammateHandle(pi as never, handle);
     teamStore.createTeam("alpha", undefined, 1000);
   });

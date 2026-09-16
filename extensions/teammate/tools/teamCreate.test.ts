@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { buildTeamCreateTool } from "./teamCreate.js";
-import { attachTeammateHandle } from "../handle.js";
+import { attachTeammateHandle, createApprovalRequestRegistry } from "../handle.js";
 import { createTeamStore } from "../teamStore.js";
 import { createMailbox } from "../mailbox.js";
 import { createTeamTaskStore } from "../teamTasks/teamTaskStore.js";
@@ -23,6 +23,7 @@ describe("team_create tool", () => {
       teamStore,
       mailbox: createMailbox(),
       teamTaskStore: createTeamTaskStore(),
+      approvalRequests: createApprovalRequestRegistry(),
     });
   });
 

@@ -24,6 +24,7 @@ interface TeamCreateDetails {
 const DESCRIPTION =
   "Create a new team. Each team is a long-lived collection of in-process teammates that can communicate via send_message and shutdown gracefully via the protocol handshake.\n\n" +
   "After creating a team, use task_agent with team_name AND name parameters to spawn a long-lived teammate into the team. (Without those parameters, task_agent runs a one-shot sub-agent — the C-phase LocalAgent path.)\n\n" +
+  "Use team_roster to see the team's members and their exact `name@team` addresses before messaging them.\n\n" +
   "Returns the team configuration. Errors if team_name is empty or already exists.\n\n" +
   "## Automatic Message Delivery\n\n" +
   "**IMPORTANT**: Messages from teammates are AUTOMATICALLY DELIVERED to you as new conversation turns. You do NOT need to manually check via `task_status` / `task_list`. When a teammate completes work, sends a question, or goes idle after their turn, you'll receive a notification injected into your context.\n\n" +

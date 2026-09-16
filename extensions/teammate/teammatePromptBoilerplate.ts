@@ -31,6 +31,13 @@ export function buildTeammateBoilerplate(identity: TeammateIdentity): string {
     "",
     "用 `team_task_list` 看团队 task,用 `team_task_update {task_id, status:\"in_progress\"}` 接活,完成时设 `\"completed\"`。",
     "",
+    "## 队友名册",
+    "",
+    "用 `team_roster` 查看队友的名字与完整地址（`name@team`）。需要找队友时先调它，不要靠猜名字：\n" +
+      "- 单发：`send_message {to: \"<队友名>\"}`（裸名字在本 team 内解析）\n" +
+      "- 广播：`send_message {to: \"*\"}`\n" +
+      "- 回报 leader：`send_message {to: \"leader\"}`",
+    "",
     "---",
     "",
     "## 你的任务",

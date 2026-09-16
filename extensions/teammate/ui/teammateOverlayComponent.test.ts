@@ -120,13 +120,31 @@ describe("buildTeammateOverlayComponent", () => {
   it("getHeight callback takes precedence over defaultHeight, called every render", () => {
     const getHeight = vi
       .fn<() => number>()
-      .mockReturnValueOnce(8)
-      .mockReturnValueOnce(15);
+      .mockReturnValueOnce(60)
+      .mockReturnValueOnce(80);
     const { deps } = buildDeps({ defaultHeight: 100, getHeight });
     const c = buildTeammateOverlayComponent(deps);
-    expect(c.render(80).length).toBe(8);
-    expect(c.render(80).length).toBe(15);
+    // getHeight reports the TERMINAL height; the view reserves the input dock,
+    // so the rendered row count is strictly smaller and tracks the terminal.
+    const first = c.render(80).length;
+    const second = c.render(80).length;
+    expect(first).toBeLessThan(60);
+    expect(second).toBeLessThan(80);
+    expect(second).toBeGreaterThan(first);
     expect(getHeight).toHaveBeenCalledTimes(2);
+  });
+
+  it("sizes the view to reserve the input dock", () => {
+    // The overlay is composited from the TOP of the frame while the editor dock
+    // sits at the BOTTOM of the same frame, so a full-height overlay painted
+    // over the input box — the user's typing went into an invisible editor.
+    // Regression guard: a 45-row terminal must NOT yield a 45-row view.
+    const { deps } = buildDeps({ getHeight: () => 45 });
+    const c = buildTeammateOverlayComponent(deps);
+    const lines = c.render(200);
+
+    expect(lines.length).toBeLessThan(45);
+    expect(lines.length).toBeGreaterThan(6);
   });
 
   it("forwards theme.fg into renderTeammateOverlay so output carries colour tokens", () => {
@@ -136,7 +154,9 @@ describe("buildTeammateOverlayComponent", () => {
       },
     });
     const c = buildTeammateOverlayComponent(deps);
-    const lines = c.render(80);
+    // Wide enough that the header's left/right split still fits; a narrower
+    // terminal takes the single-colour truncate path by design.
+    const lines = c.render(200);
     // Header label is painted accent.
     expect(lines[0]).toContain("<accent>▶ teammate:</accent>");
     // Body row [USER] uses accent colour.

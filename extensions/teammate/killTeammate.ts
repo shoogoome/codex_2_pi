@@ -23,7 +23,7 @@ import type { TaskStore } from "../tasks/taskStore.js";
 import { updateTaskState } from "../tasks/framework.js";
 import { evictTaskOutput } from "../tasks/diskOutput.js";
 import { logError } from "../tasks/logging.js";
-import type { TeammateHandle } from "./handle.js";
+import { retireTeammate, type TeammateHandle } from "./handle.js";
 import { getTeammateHandle } from "./handle.js";
 import { emitTeammateEvent } from "./eventEmit.js";
 import type { InProcessTeammateTaskState } from "./types.js";
@@ -96,13 +96,13 @@ export async function killTeammate(
     status: "killed",
   });
 
-  // Step 4: remove from team.
-  handle.teamStore.removeMember(task.identity.teamName, task.identity.agentId);
+  // Step 4: remove from team + drop any in-flight approval request so
+  // team_plan_approve can no longer answer a teammate that is gone.
+  retireTeammate(handle, task.identity, task.sessionFile);
 
   // Release cross-session resources eagerly. The loop's terminal callback is
   // idempotent and may run later after session.abort settles.
   task.agentResidentLease?.release();
-  unregisterApprovalSession(task.sessionFile);
 
   // Step 5: wake any capacity waiter, then abort an active prompt so the
   // loop's finally block can release its execution lease.

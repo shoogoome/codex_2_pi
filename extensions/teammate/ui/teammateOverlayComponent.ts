@@ -13,17 +13,30 @@
 //
 // Pi TUI's Component.render signature is `render(width: number) => string[]`
 // — height is NOT passed in directly. The render layer ALWAYS pads its
-// output to exactly `height` rows so the overlay paints over the full
-// viewport (otherwise teammates with short timelines would leak the
-// leader's main chat through underneath). We pick a generous default
-// (200) that covers any reasonable terminal; callers wanting tighter
-// fit can inject `getHeight` to return the live terminal row count.
+// output to the full body height so the overlay paints over the viewport
+// (otherwise teammates with short timelines would leak the leader's main
+// chat through underneath).
+//
+// Height resolution order — first available wins:
+//   1. `getHeight()` — live terminal rows, injected by the caller
+//   2. `defaultHeight`
+//   3. `FALLBACK_HEIGHT`
+//
+// The fallback is a safety net only. A caller that can see the terminal must
+// inject `getHeight`: `renderTeammateOverlay` slices the body to the LAST
+// `height - 2` rows and pads short bodies to `height`. With an overstated
+// height the newest line sits at the bottom of an oversized buffer, and the
+// host clips the overflow from the TOP — so the visible window shows stale
+// rows with the newest teammate message cut off below instead of scrolled into
+// view. Passing the real row count keeps the last line flush with the
+// viewport bottom.
 
 import type { Component } from "@earendil-works/pi-tui";
 import type { SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { TeammateIdentity } from "../types.js";
 import {
   renderTeammateOverlay,
+  teammateViewHeight,
   type TeammateOverlayHeader,
   type TeammateOverlayRenderTheme,
 } from "./teammateOverlayRender.js";
@@ -89,14 +102,22 @@ export function buildTeammateOverlayComponent(
 
   return {
     render(width: number): string[] {
-      const h = deps.getHeight?.() ?? deps.defaultHeight ?? FALLBACK_HEIGHT;
+      // `getHeight` reports the TERMINAL's row count, not how many rows this
+      // overlay may use: the input dock occupies the bottom of the same frame
+      // the overlay composites onto, so claiming every row painted over the
+      // editor. `teammateViewHeight` subtracts the dock reserve.
+      const terminalRows = deps.getHeight?.();
+      const h =
+        terminalRows !== undefined
+          ? teammateViewHeight(terminalRows)
+          : (deps.defaultHeight ?? FALLBACK_HEIGHT);
       const entries = ensureSm().getEntries();
       const headerExtra = deps.getTaskHeader();
       const header: TeammateOverlayHeader = {
         identity: deps.identity,
         taskCount: headerExtra.taskCount,
         isIdle: headerExtra.isIdle,
-        exitHint: "Esc to exit teammate view",
+        exitHint: "type + Enter to send · Esc to exit",
       };
       return renderTeammateOverlay(header, entries, width, h, {
         theme: deps.theme,

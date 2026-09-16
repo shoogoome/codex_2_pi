@@ -47,3 +47,53 @@ export function getTasksHandle(pi: ExtensionAPI): TasksHandle {
   setDefaultTaskStore(handle.store);
   return handle;
 }
+
+/**
+ * A `TaskStore` that re-resolves the real store on every property access.
+ *
+ * Some extensions must register their tools before they can be sure the tasks
+ * extension has attached its handle (tool registration happens in
+ * `session_start`, and a throw before `registerTool` would silently remove the
+ * tool for the whole session). A lazy store lets registration succeed
+ * unconditionally while every actual read/write still goes to the one real
+ * store — and still fails loudly if the handle really is absent at use time.
+ */
+export function lazyTaskStore(pi: ExtensionAPI): TaskStore {
+  const resolve = (): TaskStore => getTasksHandle(pi).store;
+  return new Proxy({} as TaskStore, {
+    get(_target, prop) {
+      const store = resolve();
+      const value = Reflect.get(store as object, prop, store);
+      return typeof value === "function" ? value.bind(store) : value;
+    },
+    has(_target, prop) {
+      return prop in resolve();
+    },
+    ownKeys() {
+      return Reflect.ownKeys(resolve() as object);
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+      return Reflect.getOwnPropertyDescriptor(resolve() as object, prop);
+    },
+  });
+}
+
+/**
+ * A `TasksHandle` whose members re-resolve on every access.
+ *
+ * Same rationale as `lazyTaskStore`: a consumer can hold this from extension
+ * load time and never risk a construction-time throw, while a genuinely
+ * missing tasks extension still surfaces as an error the moment a real method
+ * is invoked.
+ */
+export function lazyTasksHandle(pi: ExtensionAPI): TasksHandle {
+  const resolve = (): TasksHandle => getTasksHandle(pi);
+  return {
+    get store() {
+      return resolve().store;
+    },
+    registerTaskType: (type, task) => resolve().registerTaskType(type, task),
+    getTaskType: (type) => resolve().getTaskType(type),
+    unregisterTaskType: (type) => resolve().unregisterTaskType(type),
+  };
+}

@@ -254,6 +254,12 @@ describe("teammateExtension entrypoint", () => {
     };
     await handlers.get("session_start")!({}, fakeCtx);
 
+    // A live teammate must be a real team member: postLeaderNotification drops
+    // notifications from retired members (see leaderNotification.ts).
+    const handle = getTeammateHandle(pi as never);
+    handle.teamStore.createTeam("t1", undefined, Date.now());
+    handle.teamStore.addMember("t1", "alice@t1");
+
     const channel = getLeaderChannel();
     expect(channel).toBeDefined();
 
@@ -271,6 +277,42 @@ describe("teammateExtension entrypoint", () => {
 
     await handlers.get("session_shutdown")!({}, fakeCtx);
     expect(getLeaderChannel()).toBeUndefined();
+  });
+
+  it("session_start registers the leader tools even when the tasks handle is missing", async () => {
+    // Regression: previously `getTasksHandle(pi)` ran BEFORE the leader tool
+    // registration, so a missing/never-attached tasks handle silently removed
+    // team_create/task_agent from the leader — the exact symptom observed in a
+    // real session (factory-level send_message + team_task_* present, but no
+    // team_create). Tool registration must not depend on the handle.
+    const handlers = new Map<
+      string,
+      (event: unknown, ctx: unknown) => unknown
+    >();
+    const registered: string[] = [];
+    const pi = {
+      on: vi.fn((evt: string, handler: (e: unknown, c: unknown) => unknown) => {
+        handlers.set(evt, handler);
+      }),
+      // Deliberately EMPTY events: no __pi_tasks_handle__ means getTasksHandle
+      // throws.
+      events: {},
+      registerTool: vi.fn((tool: { name: string }) => registered.push(tool.name)),
+      sendMessage: vi.fn(),
+      getAllTools: vi.fn().mockReturnValue([]),
+    };
+
+    teammateExtension(pi as never);
+
+    await handlers.get("session_start")!({}, {
+      cwd: "/tmp",
+      hasUI: false,
+      sessionManager: { getSessionId: () => "s1", getEntries: () => [] },
+    });
+
+    expect(registered).toEqual(
+      expect.arrayContaining(["team_create", "team_delete", "team_plan_approve"]),
+    );
   });
 
   it("session_start hydrates teammates from session jsonl entries", async () => {
@@ -1075,6 +1117,13 @@ describe("teammateExtension entrypoint", () => {
   // D2 enhancement (Path Y) — full-screen overlay view-swap tests
   // ──────────────────────────────────────────────────────────────────────
 
+  /**
+   * Minimal TUI stand-in. `terminal.rows` matters: the overlay reads it to size
+   * its rendered buffer. An overstated height makes the host clip the newest
+   * teammate lines off the bottom instead of scrolling them into view.
+   */
+  const FAKE_TUI = { terminal: { rows: 45, columns: 210 } };
+
   function buildPathYHarness(): {
     pi: ExtensionAPI;
     handlers: Map<string, (event: unknown, ctx: unknown) => unknown>;
@@ -1128,7 +1177,7 @@ describe("teammateExtension entrypoint", () => {
           resolveFn?.();
         };
         overlayDoneRef.current = realDone;
-        factory({}, {}, {}, realDone);
+        factory(FAKE_TUI, {}, {}, realDone);
         opts?.onHandle?.(overlayHandle);
         return promise;
       },
@@ -1236,6 +1285,38 @@ describe("teammateExtension entrypoint", () => {
     // making the editor appear unresponsive. See teammateOverlay nonCapturing
     // commit for the user-visible regression.
     expect(oo.nonCapturing).toBe(true);
+
+    await h.handlers.get("session_shutdown")!({}, h.fakeCtx);
+  });
+
+  it("regression: the teammate overlay is sized to the live terminal height", async () => {
+    // Two bugs lived here. (1) The overlay was built without getHeight, so it
+    // fell back to FALLBACK_HEIGHT (200) and rendered a 200-row buffer; the
+    // host clips from the TOP, so the newest message was cut off below instead
+    // of scrolled into view. (2) Sizing it to the FULL terminal height then
+    // painted over the input dock, so the editor was invisible. The view must
+    // track the real terminal height while reserving room for the dock.
+    const h = buildPathYHarness();
+    await h.handlers.get("session_start")!({}, h.fakeCtx);
+    const handle = getTeammateHandle(h.pi);
+    handle.teamStore.createTeam("t1", undefined, 1);
+    h.seedTeammate(aliceState());
+    handle.teamStore.addMember("t1", "alice@t1");
+
+    h.capturedHandlerRef.current!("\x07"); // Ctrl+G focus
+    h.capturedHandlerRef.current!("\x1b[B"); // ↓ select alice
+    h.capturedHandlerRef.current!("\r"); // Enter — open teammate view
+
+    const factory = h.customMock.mock.calls[0]![0] as (...args: unknown[]) => {
+      render(width: number): string[];
+    };
+    const component = factory(FAKE_TUI, {}, {}, () => {});
+    const rows = component.render(210);
+
+    // Not the 200-row fallback…
+    expect(rows.length).toBeLessThan(FAKE_TUI.terminal.rows);
+    // …and not a full-height overlay either: the dock must stay visible.
+    expect(rows.length).toBeGreaterThan(6);
 
     await h.handlers.get("session_shutdown")!({}, h.fakeCtx);
   });

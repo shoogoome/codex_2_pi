@@ -37,6 +37,9 @@ interface SendMessageDetails {
 
 const DESCRIPTION =
   "Send a message to one teammate by name/full agentId, or broadcast to peers in one team.\n\n" +
+  "## Finding the recipient\n" +
+  "Use `team_roster` to list who is in your team and get their exact `name@team` " +
+  "address. Do not guess names — check the roster first.\n\n" +
   "## Identity resolution\n" +
   "- Teammate senders are bound to their own team; a bare name resolves only there and cross-team agentIds are rejected.\n" +
   "- Leader senders should prefer a full agentId (`name@team`). A bare name works only when unique across teams; ambiguity is an error.\n" +

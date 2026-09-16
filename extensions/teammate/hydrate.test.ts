@@ -17,7 +17,7 @@ import { _clearOutputsForTest } from "../tasks/diskOutput.js";
 import { createTeamStore } from "./teamStore.js";
 import { createMailbox } from "./mailbox.js";
 import { createTeamTaskStore } from "./teamTasks/teamTaskStore.js";
-import type { TeammateHandle } from "./handle.js";
+import { createApprovalRequestRegistry, type TeammateHandle } from "./handle.js";
 import type { ReplayedState } from "./jsonlEvents.js";
 import type { TeamTask } from "./teamTasks/types.js";
 import { getAgentCapacity } from "../tasks/agentCapacityHandle.js";
@@ -236,6 +236,7 @@ describe("respawnTeammates", () => {
       teamStore: createTeamStore(),
       mailbox: createMailbox(),
       teamTaskStore: createTeamTaskStore(),
+      approvalRequests: createApprovalRequestRegistry(),
     };
     const result = await respawnTeammates(state, {
       pi: buildPi() as never,
@@ -322,6 +323,7 @@ describe("respawnTeammates", () => {
         teamStore: createTeamStore(),
         mailbox: createMailbox(),
         teamTaskStore: createTeamTaskStore(),
+        approvalRequests: createApprovalRequestRegistry(),
       },
       cwd: "/tmp",
       parentRuntime: {
@@ -400,6 +402,7 @@ describe("respawnTeammates", () => {
         teamStore: createTeamStore(),
         mailbox: createMailbox(),
         teamTaskStore: createTeamTaskStore(),
+        approvalRequests: createApprovalRequestRegistry(),
       },
       cwd: "/tmp",
       parentRuntime: {
@@ -597,6 +600,7 @@ describe("respawnTeammates", () => {
       teamStore: createTeamStore(),
       mailbox: createMailbox(),
       teamTaskStore: createTeamTaskStore(),
+      approvalRequests: createApprovalRequestRegistry(),
     };
     await respawnTeammates(state, {
       pi: buildPi() as never,
@@ -695,6 +699,7 @@ describe("respawnTeammates", () => {
       teamStore: createTeamStore(),
       mailbox: createMailbox(),
       teamTaskStore: createTeamTaskStore(),
+      approvalRequests: createApprovalRequestRegistry(),
     };
     const promise = respawnTeammates(state, {
       pi: buildPi() as never,
@@ -760,6 +765,7 @@ describe("respawnTeammates", () => {
       teamStore: createTeamStore(),
       mailbox: createMailbox(),
       teamTaskStore: createTeamTaskStore(),
+      approvalRequests: createApprovalRequestRegistry(),
     };
     const pi = buildPi();
     await respawnTeammates(state, {
@@ -906,6 +912,7 @@ describe("respawnTeammates", () => {
       teamStore: createTeamStore(),
       mailbox: createMailbox(),
       teamTaskStore: createTeamTaskStore(),
+      approvalRequests: createApprovalRequestRegistry(),
     };
     const pi = buildPi();
     await respawnTeammates(state, {
@@ -950,6 +957,7 @@ function buildHandle(): TeammateHandle {
     teamStore: createTeamStore(),
     mailbox: createMailbox(),
     teamTaskStore: createTeamTaskStore(),
+    approvalRequests: createApprovalRequestRegistry(),
   };
 }
 

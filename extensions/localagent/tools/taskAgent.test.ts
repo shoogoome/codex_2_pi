@@ -5,7 +5,7 @@ import {
   _setTeammateSpawnerForTest,
 } from "./taskAgent.js";
 import { createTaskStore } from "../../tasks/taskStore.js";
-import { attachTeammateHandle } from "../../teammate/handle.js";
+import { attachTeammateHandle, createApprovalRequestRegistry } from "../../teammate/handle.js";
 import { createTeamStore } from "../../teammate/teamStore.js";
 import { createMailbox } from "../../teammate/mailbox.js";
 import { createTeamTaskStore } from "../../teammate/teamTasks/teamTaskStore.js";
@@ -43,6 +43,7 @@ function attachFakeTeammateHandle(pi: any): void {
     teamStore: createTeamStore(),
     mailbox: createMailbox(),
     teamTaskStore: createTeamTaskStore(),
+    approvalRequests: createApprovalRequestRegistry(),
   });
 }
 

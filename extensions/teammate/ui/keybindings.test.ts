@@ -17,7 +17,7 @@ import { createTeamStore } from "../teamStore.js";
 import { createMailbox } from "../mailbox.js";
 import { createTeamTaskStore } from "../teamTasks/teamTaskStore.js";
 import { _resetTeammatePiBindingForTest } from "../killTeammate.js";
-import type { TeammateHandle } from "../handle.js";
+import { createApprovalRequestRegistry, type TeammateHandle } from "../handle.js";
 import type { InProcessTeammateTaskState } from "../types.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -30,6 +30,7 @@ function buildHandle(teamName?: string): TeammateHandle {
     teamStore: ts,
     mailbox: createMailbox(),
     teamTaskStore: createTeamTaskStore(),
+    approvalRequests: createApprovalRequestRegistry(),
   };
 }
 

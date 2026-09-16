@@ -7,6 +7,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
   renderTeammateOverlay,
+  teammateViewHeight,
   type TeammateOverlayHeader,
 } from "./teammateOverlayRender.js";
 
@@ -116,6 +117,18 @@ function teammateEventEntry(id = "ev1"): SessionEntry {
     customType: "teammate/event",
     content: "ignored",
     display: false,
+  } as never;
+}
+
+/** A plain `type:"custom"` state/telemetry record (NOT a custom_message). */
+function customEntry(customType: string, id = `c-${customType}`): SessionEntry {
+  return {
+    type: "custom",
+    id,
+    parentId: null,
+    timestamp: "2026-06-04T00:00:00Z",
+    customType,
+    data: { bytes: 1 },
   } as never;
 }
 
@@ -336,5 +349,73 @@ describe("renderTeammateOverlay", () => {
         expect(visibleWidth(line)).toBeLessThanOrEqual(width);
       }
     }
+  });
+
+  it("drops telemetry custom entries instead of emitting [custom] noise", () => {
+    // A real teammate session held 2013 `custom` entries (cost-usage/
+    // token-speed/monitor snapshots) against 1133 messages. Rendering one
+    // `[custom]` placeholder each buried the conversation under a wall of
+    // them — the reported "完全就是一个不可看的样子".
+    const telemetry: SessionEntry[] = [
+      customEntry("cost-usage/snapshot"),
+      customEntry("token-speed/snapshot"),
+      customEntry("monitor/metric"),
+      customEntry("session-summary"),
+    ];
+    const lines = renderTeammateOverlay(HEADER, telemetry, 80, 6);
+    const body = lines.slice(2).join("\n");
+    expect(body).not.toContain("[custom]");
+    expect(body).not.toContain("cost-usage");
+  });
+
+  it("keeps a non-telemetry custom entry as a single marker", () => {
+    const lines = renderTeammateOverlay(HEADER, [customEntry("my-ext/state")], 80, 6);
+    expect(lines.join("\n")).toContain("[CUSTOM my-ext/state]");
+  });
+
+  it("collapses a multi-line tool result to exactly one row", () => {
+    // truncateToWidth only clips columns, so embedded newlines used to expand
+    // every one of hundreds of tool results into a full block.
+    const json = '{\n  "a": 1,\n  "b": {\n    "c": 2\n  }\n}';
+    const lines = renderTeammateOverlay(HEADER, [toolResultEntry(json)], 80, 8);
+    const bodyRows = lines.slice(2).filter((l) => l.trim().length > 0);
+    expect(bodyRows).toHaveLength(1);
+    expect(bodyRows[0]).toContain("[TOOL_RESULT]");
+  });
+
+  it("strips real ANSI escapes from tool output and arguments", () => {
+    const entries: SessionEntry[] = [
+      {
+        type: "message",
+        id: "r-ansi",
+        parentId: null,
+        timestamp: "2026-06-04T00:00:00Z",
+        message: {
+          role: "toolResult",
+          toolName: "bash",
+          content: [{ type: "text", text: "\u001b[0;36mCOLOURED\u001b[0m done" }],
+        },
+      } as never,
+      toolUseEntry("bash", { command: 'echo "\u001b[31mRED\u001b[0m"' }),
+    ];
+    const out = renderTeammateOverlay(HEADER, entries, 120, 8).join("\n");
+    // The overlay owns colour in this view: no raw escape may survive.
+    expect(out).not.toContain("\u001b");
+    expect(out).not.toContain("[0;36m");
+    expect(out).toContain("COLOURED");
+  });
+
+  it("reserves the input dock instead of claiming the whole terminal", () => {
+    expect(teammateViewHeight(45)).toBeLessThan(45);
+    expect(teammateViewHeight(45)).toBeGreaterThan(6);
+    // A tiny terminal must not yield a zero/negative view.
+    expect(teammateViewHeight(8)).toBeGreaterThanOrEqual(6);
+    expect(teammateViewHeight(3)).toBeGreaterThanOrEqual(6);
+  });
+
+  it("honours the dock-reserve override", () => {
+    expect(teammateViewHeight(60, 20)).toBe(40);
+    // An absurd reserve is clamped so the view stays usable.
+    expect(teammateViewHeight(60, 999)).toBe(6);
   });
 });

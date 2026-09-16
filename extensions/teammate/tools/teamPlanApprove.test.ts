@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { buildTeamPlanApproveTool } from "./teamPlanApprove.js";
-import { attachTeammateHandle } from "../handle.js";
+import { attachTeammateHandle, createApprovalRequestRegistry } from "../handle.js";
 import { createTeamStore } from "../teamStore.js";
 import { createMailbox, type Mailbox } from "../mailbox.js";
 import { createTeamTaskStore } from "../teamTasks/teamTaskStore.js";
 import { parsePlanApprovalResponse } from "../protocol.js";
+import type { PendingEntry } from "./requestPlanApproval.js";
 import type { MailboxMessage } from "../types.js";
 
 function buildPi(): {
@@ -21,15 +22,35 @@ interface CapturedSend {
 function attachWithReceiver(
   pi: ReturnType<typeof buildPi>,
   agentName: string,
+  pendingIds: string[] = [],
 ): { mailbox: Mailbox; captured: CapturedSend } {
   const mailbox = createMailbox();
+  const approvalRequests = createApprovalRequestRegistry();
+  const agentId = `${agentName}@team1`;
+  // Register a pending request set so team_plan_approve's existence check can
+  // pass. It now rejects an id that no teammate is actually waiting on.
+  const store = new Map<string, PendingEntry>();
+  for (const id of pendingIds) {
+    store.set(id, { resolve: () => {}, reject: () => {} });
+  }
+  approvalRequests.register(agentId, {
+    set: (id, entry) => {
+      store.set(id, entry);
+    },
+    get: (id) => store.get(id),
+    delete: (id) => {
+      store.delete(id);
+    },
+    ids: () => [...store.keys()].sort(),
+  });
   attachTeammateHandle(pi as never, {
     teamStore: createTeamStore(),
     mailbox,
     teamTaskStore: createTeamTaskStore(),
+    approvalRequests,
   });
   const captured: CapturedSend = { msgs: [] };
-  mailbox.registerReceiver(`${agentName}@team1`, (m) => {
+  mailbox.registerReceiver(agentId, (m) => {
     captured.msgs.push(m);
   });
   return { mailbox, captured };
@@ -43,7 +64,7 @@ describe("team_plan_approve tool", () => {
   });
 
   it("happy approve: posts a valid plan_approval_response with approve=true to teammate's mailbox", async () => {
-    const { captured } = attachWithReceiver(pi, "researcher");
+    const { captured } = attachWithReceiver(pi, "researcher", ["pa-deadbeef0001"]);
     const tool = buildTeamPlanApproveTool(pi as never);
     expect(tool.name).toBe("team_plan_approve");
 
@@ -97,7 +118,7 @@ describe("team_plan_approve tool", () => {
   });
 
   it("happy reject + feedback: posts approve=false with feedback string", async () => {
-    const { captured } = attachWithReceiver(pi, "researcher");
+    const { captured } = attachWithReceiver(pi, "researcher", ["pa-cafebabe0002"]);
     const tool = buildTeamPlanApproveTool(pi as never);
 
     const result = await tool.execute(
@@ -180,6 +201,88 @@ describe("team_plan_approve tool", () => {
     expect(captured.msgs).toHaveLength(0);
   });
 
+  it.each([
+    ["empty request_id", { teammate: "researcher", request_id: "" }],
+  ])("rejects %s", async (_label, params) => {
+    attachWithReceiver(pi, "researcher");
+    const tool = buildTeamPlanApproveTool(pi as never);
+    const result = await tool.execute(
+      "c-empty",
+      { ...params, approve: true } as never,
+      undefined as never,
+      undefined,
+      {} as never,
+    );
+    expect((result as { isError?: boolean }).isError).toBe(true);
+  });
+
+  it("rejects an unknown request_id and lists the pending ones", async () => {
+    // Regression: the tool used to accept ANY id and answer "Plan approval
+    // response sent ..." while teammateLoop dropped the response (its
+    // pendingApprovals lookup missed), leaving the teammate blocked. A real
+    // session guessed "pa-designer" from the tool description's example and
+    // got a success message for a request that did not exist.
+    const { captured } = attachWithReceiver(pi, "researcher", ["pa-real0001"]);
+    const tool = buildTeamPlanApproveTool(pi as never);
+
+    const result = await tool.execute(
+      "c-unknown",
+      { teammate: "researcher", request_id: "pa-designer", approve: true } as never,
+      undefined as never,
+      undefined,
+      {} as never,
+    );
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain('Unknown plan approval request_id "pa-designer"');
+    expect(text).toContain("pa-real0001");
+    expect(text).toMatch(/do not construct or guess/i);
+    // Nothing may be sent to the teammate for an id that does not exist.
+    expect(captured.msgs).toHaveLength(0);
+  });
+
+  it("reports when the teammate has no in-flight request at all", async () => {
+    // With the request registry present but empty, the teammate is registered
+    // yet waiting on nothing — the tool must still refuse (and list "(none)").
+    const { captured } = attachWithReceiver(pi, "researcher");
+    const tool = buildTeamPlanApproveTool(pi as never);
+
+    const result = await tool.execute(
+      "c-none",
+      { teammate: "researcher", request_id: "pa-whatever", approve: true } as never,
+      undefined as never,
+      undefined,
+      {} as never,
+    );
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toMatch(/Unknown plan approval request_id/);
+    expect(text).toContain("Pending: (none)");
+    expect(captured.msgs).toHaveLength(0);
+  });
+
+  it("reports when the teammate has no approval registry entry", async () => {
+    // A teammate the leader never spawned (or one already torn down) has no
+    // registry entry at all: pendingIds() returns undefined.
+    const { captured } = attachWithReceiver(pi, "researcher");
+    const tool = buildTeamPlanApproveTool(pi as never);
+
+    const result = await tool.execute(
+      "c-gone",
+      { teammate: "ghost@other", request_id: "pa-whatever", approve: true } as never,
+      undefined as never,
+      undefined,
+      {} as never,
+    );
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toMatch(/has no in-flight plan approval request/i);
+    expect(captured.msgs).toHaveLength(0);
+  });
+
   it("does not depend on ALS — leader realm direct mailbox.send works without identity scope", async () => {
     // No ALS scope is established here; the tool must NOT call getCurrentTeammate
     // / require any sender identity resolution. It should always send as
@@ -187,10 +290,27 @@ describe("team_plan_approve tool", () => {
     // and verify it lands when receiver registers later — proving the mailbox
     // path is exactly the real mailbox the teammate's loop reads from.
     const mailbox = createMailbox();
+    const approvalRequests = createApprovalRequestRegistry();
+    // The teammate has a real in-flight request; only its mailbox receiver is
+    // absent (the point of this test is that leader-side send does not depend
+    // on the receiver being online).
+    const store = new Map<string, PendingEntry>();
+    store.set("pa-offline01", { resolve: () => {}, reject: () => {} });
+    approvalRequests.register("offline-teammate@team1", {
+      set: (id, entry) => {
+        store.set(id, entry);
+      },
+      get: (id) => store.get(id),
+      delete: (id) => {
+        store.delete(id);
+      },
+      ids: () => [...store.keys()].sort(),
+    });
     attachTeammateHandle(pi as never, {
       teamStore: createTeamStore(),
       mailbox,
       teamTaskStore: createTeamTaskStore(),
+      approvalRequests,
     });
     const tool = buildTeamPlanApproveTool(pi as never);
 

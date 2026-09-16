@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runAsTeammate } from "../als.js";
-import { attachTeammateHandle } from "../handle.js";
+import { attachTeammateHandle, createApprovalRequestRegistry } from "../handle.js";
 import {
   _resetLeaderBridgeForTest,
   registerLeaderChannel,
@@ -31,7 +31,12 @@ function setup() {
   const teamStore = createTeamStore();
   const mailbox = createMailbox();
   const teamTaskStore = createTeamTaskStore();
-  attachTeammateHandle(pi as never, { teamStore, mailbox, teamTaskStore });
+  attachTeammateHandle(pi as never, {
+    teamStore,
+    mailbox,
+    teamTaskStore,
+    approvalRequests: createApprovalRequestRegistry(),
+  });
   return { pi, teamStore, mailbox };
 }
 

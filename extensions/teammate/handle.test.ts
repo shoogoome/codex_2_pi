@@ -1,5 +1,10 @@
 import { describe, it, expect, expectTypeOf } from "vitest";
-import { attachTeammateHandle, getTeammateHandle, type TeammateHandle } from "./handle.js";
+import {
+  attachTeammateHandle,
+  createApprovalRequestRegistry,
+  getTeammateHandle,
+  type TeammateHandle,
+} from "./handle.js";
 import { createTeamStore } from "./teamStore.js";
 import { createMailbox } from "./mailbox.js";
 import { createTeamTaskStore, type TeamTaskStore } from "./teamTasks/teamTaskStore.js";
@@ -13,6 +18,7 @@ function buildHandle(): TeammateHandle {
     teamStore: createTeamStore(),
     mailbox: createMailbox(),
     teamTaskStore: createTeamTaskStore(),
+    approvalRequests: createApprovalRequestRegistry(),
   };
 }
 

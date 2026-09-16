@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { buildTeamDeleteTool } from "./teamDelete.js";
-import { attachTeammateHandle, type TeammateHandle } from "../handle.js";
+import { attachTeammateHandle, createApprovalRequestRegistry, type TeammateHandle } from "../handle.js";
 import { createTeamStore } from "../teamStore.js";
 import { createMailbox } from "../mailbox.js";
 import { createTeamTaskStore } from "../teamTasks/teamTaskStore.js";
@@ -37,6 +37,7 @@ function buildHandle(): TeammateHandle {
     teamStore: createTeamStore(),
     mailbox: createMailbox(),
     teamTaskStore: createTeamTaskStore(),
+    approvalRequests: createApprovalRequestRegistry(),
   };
 }
 

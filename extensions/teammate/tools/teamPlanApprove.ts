@@ -54,6 +54,11 @@ const DESCRIPTION =
   "You'll see notifications like \"[from researcher@team-x] {plan_approval_request, request_id:pa-..., plan: '...'}\" in your context. Read the plan and decide:\n" +
   "- Approve straightforward plans matching the user's intent.\n" +
   "- Reject plans that risk data loss, miss the user's actual goal, or violate constraints. Provide feedback so teammate can revise.\n\n" +
+  "## request_id must be copied, never constructed\n" +
+  "`request_id` is an opaque per-request token (e.g. `pa-1a2b3c4d5e6f`). Copy it " +
+  "VERBATIM from the `plan_approval_request` body in the teammate's notification. " +
+  "Do not derive it from this description, from the teammate name, or from an " +
+  "earlier request — an unknown id is rejected with an error listing the valid ids.\n\n" +
   "## Equivalent to send_message\n" +
   "This tool is sugar over send_message {to:\"<name@team>\", message: '{\"type\":\"plan_approval_response\",\"request_id\":\"...\",\"approve\":...}'}. Use this for LLM ergonomics; the underlying protocol is identical.";
 
@@ -126,6 +131,58 @@ export function buildTeamPlanApproveTool(
         timestamp: Date.now(),
         isProtocol: true,
       };
+      // Verify the request actually exists BEFORE answering it.
+      //
+      // Without this the tool accepted any id: a guessed `request_id` (a real
+      // field case used the literal "pa-designer" taken from the tool
+      // description's example) returned "Plan approval response sent ..." while
+      // the teammate kept awaiting forever, because teammateLoop drops a
+      // response whose id is not in pendingApprovals. Reported success plus a
+      // silent no-op is the worst possible failure mode for an approval channel.
+      const pendingIds = handle.approvalRequests.pendingIds(resolved.agentId);
+      if (pendingIds === undefined) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                `${resolved.agentId} has no in-flight plan approval request. ` +
+                "It is not currently blocked on approval, so there is nothing to answer. " +
+                "Do NOT retry with a different id — read the teammate's " +
+                "`[from <agentId>] {plan_approval_request ...}` notification for the real request_id.",
+            },
+          ],
+          isError: true,
+          details: {
+            action: "team_plan_approve" as const,
+            teammate: resolved.agentId,
+            request_id: requestId,
+            approve,
+          },
+        };
+      }
+      if (!pendingIds.includes(requestId)) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                `Unknown plan approval request_id "${requestId}" for ${resolved.agentId}. ` +
+                `Pending: ${pendingIds.length > 0 ? pendingIds.join(", ") : "(none)"}. ` +
+                "Copy the request_id verbatim from the teammate's plan_approval_request " +
+                "notification — do not construct or guess it.",
+            },
+          ],
+          isError: true,
+          details: {
+            action: "team_plan_approve" as const,
+            teammate: resolved.agentId,
+            request_id: requestId,
+            approve,
+          },
+        };
+      }
+
       const sendResult = handle.mailbox.send(msg);
       if (!sendResult.ok) {
         return {

@@ -6,7 +6,7 @@ import { createTeamTaskStore } from "./teamTasks/teamTaskStore.js";
 import { createTaskStore, _setDefaultTaskStoreForTest } from "../tasks/taskStore.js";
 import { _resetTaskOutputDirForTest } from "../tasks/outputPath.js";
 import { _clearOutputsForTest } from "../tasks/diskOutput.js";
-import type { TeammateHandle } from "./handle.js";
+import { createApprovalRequestRegistry, type TeammateHandle } from "./handle.js";
 import type { InProcessTeammateTaskState } from "./types.js";
 import { createAgentCapacity } from "../tasks/agentCapacity.js";
 import { attachAgentCapacity } from "../tasks/agentCapacityHandle.js";
@@ -68,6 +68,7 @@ function buildHandle(): TeammateHandle {
     teamStore: createTeamStore(),
     mailbox: createMailbox(),
     teamTaskStore: createTeamTaskStore(),
+    approvalRequests: createApprovalRequestRegistry(),
   };
 }
 

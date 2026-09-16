@@ -430,6 +430,7 @@ describe("teammateLoop — plan_approval_response routing", () => {
       delete: (id) => {
         map.delete(id);
       },
+    ids: () => [...map.keys()].sort(),
     };
     return { pa, map };
   }

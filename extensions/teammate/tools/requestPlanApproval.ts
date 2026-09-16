@@ -18,7 +18,7 @@
 import { randomBytes } from "node:crypto";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { buildPlanApprovalRequest } from "../protocol.js";
+import { buildPlanApprovalRequest, planApprovalTimeoutMs } from "../protocol.js";
 import type { LeaderChannel } from "../leaderBridge.js";
 import type { TeammateIdentity } from "../types.js";
 
@@ -34,7 +34,7 @@ export interface PlanApprovalDecision {
   feedback?: string;
 }
 
-interface PendingEntry {
+export interface PendingEntry {
   resolve: (d: PlanApprovalDecision) => void;
   reject: (e: Error) => void;
 }
@@ -48,6 +48,32 @@ export interface PendingApprovals {
   set(requestId: string, entry: PendingEntry): void;
   get(requestId: string): PendingEntry | undefined;
   delete(requestId: string): void;
+  /**
+   * Currently pending request ids, ascending. Used by `team_plan_approve` to
+   * reject an unknown id instead of silently accepting it, and to list the
+   * valid ids in the error text.
+   */
+  ids(): string[];
+}
+
+/**
+ * Build a `PendingApprovals` backed by a fresh Map.
+ *
+ * The map MUST be allocated in the LEADER realm: the tool's resolve() runs
+ * there, and teammateLoop looks entries up from there when a response arrives.
+ */
+export function createPendingApprovals(): PendingApprovals {
+  const map = new Map<string, PendingEntry>();
+  return {
+    set: (id, entry) => {
+      map.set(id, entry);
+    },
+    get: (id) => map.get(id),
+    delete: (id) => {
+      map.delete(id);
+    },
+    ids: () => [...map.keys()].sort(),
+  };
 }
 
 export interface BuildRequestPlanApprovalDeps {
@@ -151,9 +177,25 @@ export function buildRequestPlanApprovalTool(
       if (signal) signal.addEventListener("abort", onAbort, { once: true });
 
       let decision: PlanApprovalDecision;
+      const timeoutMs = planApprovalTimeoutMs();
       try {
         decision = await new Promise<PlanApprovalDecision>((resolve, reject) => {
-          deps.pendingApprovals.set(requestId, { resolve, reject });
+          const timer = setTimeout(() => {
+            const entry = deps.pendingApprovals.get(requestId);
+            if (!entry) return; // already answered
+            deps.pendingApprovals.delete(requestId);
+            entry.reject(new Error("timeout waiting for leader approval"));
+          }, timeoutMs);
+          // The timer must not keep the process alive on its own.
+          timer.unref?.();
+          const settle = (fn: () => void): void => {
+            clearTimeout(timer);
+            fn();
+          };
+          deps.pendingApprovals.set(requestId, {
+            resolve: (d) => settle(() => resolve(d)),
+            reject: (e) => settle(() => reject(e)),
+          });
           const body = buildPlanApprovalRequest(requestId, plan);
           try {
             channel.deliver(
@@ -168,16 +210,32 @@ export function buildRequestPlanApprovalTool(
           } catch (err) {
             // If delivery throws synchronously, drop the pending entry and
             // surface the error so the awaiter never hangs.
-            deps.pendingApprovals.delete(requestId);
-            reject(err instanceof Error ? err : new Error(String(err)));
+            settle(() => {
+              deps.pendingApprovals.delete(requestId);
+              reject(err instanceof Error ? err : new Error(String(err)));
+            });
           }
         });
       } catch (err) {
         if (signal) signal.removeEventListener("abort", onAbort);
         const message = err instanceof Error ? err.message : String(err);
+        const timedOut = message.includes("timeout");
+        const hint = timedOut
+          ? `\n\nThe leader never answered request_id=${requestId}. ` +
+            "Do NOT just retry the same plan blindly — a retry produces a NEW id " +
+            "and will time out again if the channel is still not reaching the leader. " +
+            "Instead: report the blocker to the leader with " +
+            'send_message {to:"leader", message:"..."} and ask whether the plan ' +
+            "was received. If the leader answers that it never saw a request, that " +
+            "is the real problem to escalate. Callers can raise the budget with " +
+            "PI_TEAMMATE_APPROVAL_TIMEOUT_MS."
+          : "";
         return {
           content: [
-            { type: "text" as const, text: `request_plan_approval failed: ${message}` },
+            {
+              type: "text" as const,
+              text: `request_plan_approval failed: ${message}${hint}`,
+            },
           ],
           isError: true,
           details: { action: "request_plan_approval" as const, request_id: requestId },

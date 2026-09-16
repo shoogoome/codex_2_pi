@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { attachTeammateHandle, type TeammateHandle } from "./handle.js";
+import { attachTeammateHandle, createApprovalRequestRegistry, type TeammateHandle } from "./handle.js";
 import {
   _setHydrateSdkForTest,
   hydrateTeamTaskStore,
@@ -74,6 +74,7 @@ function buildHandle(pi: ExtensionAPI): TeammateHandle {
     teamStore: createTeamStore(),
     mailbox: createMailbox(),
     teamTaskStore: createTeamTaskStore(),
+    approvalRequests: createApprovalRequestRegistry(),
   };
   attachTeammateHandle(pi, handle);
   return handle;

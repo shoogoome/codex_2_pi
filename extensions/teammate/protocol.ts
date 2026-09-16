@@ -16,6 +16,19 @@ interface ProtocolBase {
   type: string;
 }
 
+/**
+ * How long a teammate waits for the leader to answer a plan approval request.
+ *
+ * Lives here (dependency-free) so both the requesting tool and the gate's
+ * block message can quote the same budget. A bounded wait is what turns a lost
+ * notification from an infinite hang into an actionable error; see
+ * leaderNotification.ts for how a request can be lost.
+ */
+export function planApprovalTimeoutMs(): number {
+  const raw = Number(process.env.PI_TEAMMATE_APPROVAL_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 5 * 60_000;
+}
+
 export interface ShutdownRequest extends ProtocolBase {
   type: "shutdown_request";
   request_id: string;
