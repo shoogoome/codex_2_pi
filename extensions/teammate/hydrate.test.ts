@@ -267,6 +267,158 @@ describe("respawnTeammates", () => {
     );
   });
 
+  it("resume 时把 leader 的 provider/model 传给子 session", async () => {
+    const open = vi.fn(() => ({
+      getSessionFile: () => "/tmp/alice.jsonl",
+      getSessionId: () => "s-1",
+      getEntries: () => [],
+      appendMessage: vi.fn(),
+      // No model recorded in the session file → must inherit the leader's.
+      buildSessionContext: () => ({ messages: [], thinkingLevel: "max", model: null }),
+    }));
+    const fakeSession = {
+      prompt: vi.fn().mockResolvedValue(undefined),
+      abort: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn(),
+      subscribe: vi.fn(() => () => {}),
+    };
+    const createSessionMock = vi.fn(async (_opts: unknown) => ({ session: fakeSession }));
+    _setHydrateSdkForTest({
+      createAgentSessionServices: vi.fn().mockResolvedValue({}),
+      SessionManagerOpen: open,
+      createAgentSessionFromServices: createSessionMock,
+    });
+
+    const state: ReplayedState = {
+      teams: {
+        t1: {
+          teamName: "t1",
+          description: "x",
+          createdAt: 1,
+          memberAgentIds: ["alice@t1"],
+        },
+      },
+      teammates: {
+        "alice@t1": {
+          identity: {
+            agentId: "alice@t1",
+            agentName: "alice",
+            teamName: "t1",
+            agentType: "general-purpose",
+          },
+          sessionFile: "/tmp/alice.jsonl",
+          initialPrompt: "go",
+          lastStatus: "running",
+        },
+      },
+      teamTasks: {},
+    };
+
+    const leaderModel = { provider: "codebuddy", id: "deepseek-v4-pro-ioa" };
+    await respawnTeammates(state, {
+      pi: buildPi() as never,
+      taskStore: createTaskStore(),
+      handle: {
+        teamStore: createTeamStore(),
+        mailbox: createMailbox(),
+        teamTaskStore: createTeamTaskStore(),
+      },
+      cwd: "/tmp",
+      parentRuntime: {
+        model: leaderModel as never,
+        modelRegistry: {
+          find: () => undefined,
+          hasConfiguredAuth: () => false,
+        },
+        thinkingLevel: "max" as never,
+      },
+    });
+
+    const opts = createSessionMock.mock.calls[0]![0] as {
+      model?: unknown;
+      thinkingLevel?: unknown;
+    };
+    expect(opts.model).toBe(leaderModel);
+    expect(opts.thinkingLevel).toBe("max");
+  });
+
+  it("resume 优先恢复子 session 自己记录的 provider/model", async () => {
+    const open = vi.fn(() => ({
+      getSessionFile: () => "/tmp/alice.jsonl",
+      getSessionId: () => "s-1",
+      getEntries: () => [],
+      appendMessage: vi.fn(),
+      buildSessionContext: () => ({
+        messages: [],
+        thinkingLevel: "max",
+        model: { provider: "codebuddy", modelId: "deepseek-v4.1-flash" },
+      }),
+    }));
+    const fakeSession = {
+      prompt: vi.fn().mockResolvedValue(undefined),
+      abort: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn(),
+      subscribe: vi.fn(() => () => {}),
+    };
+    const createSessionMock = vi.fn(async (_opts: unknown) => ({ session: fakeSession }));
+    _setHydrateSdkForTest({
+      createAgentSessionServices: vi.fn().mockResolvedValue({}),
+      SessionManagerOpen: open,
+      createAgentSessionFromServices: createSessionMock,
+    });
+
+    const recorded = { provider: "codebuddy", id: "deepseek-v4.1-flash" };
+    const state: ReplayedState = {
+      teams: {
+        t1: {
+          teamName: "t1",
+          description: "x",
+          createdAt: 1,
+          memberAgentIds: ["alice@t1"],
+        },
+      },
+      teammates: {
+        "alice@t1": {
+          identity: {
+            agentId: "alice@t1",
+            agentName: "alice",
+            teamName: "t1",
+            agentType: "general-purpose",
+          },
+          sessionFile: "/tmp/alice.jsonl",
+          initialPrompt: "go",
+          lastStatus: "running",
+        },
+      },
+      teamTasks: {},
+    };
+
+    await respawnTeammates(state, {
+      pi: buildPi() as never,
+      taskStore: createTaskStore(),
+      handle: {
+        teamStore: createTeamStore(),
+        mailbox: createMailbox(),
+        teamTaskStore: createTeamTaskStore(),
+      },
+      cwd: "/tmp",
+      parentRuntime: {
+        model: { provider: "game-studio", id: "gpt-5.6-sol" } as never,
+        modelRegistry: {
+          find: (provider: string, modelId: string) =>
+            provider === "codebuddy" && modelId === "deepseek-v4.1-flash"
+              ? (recorded as never)
+              : undefined,
+          hasConfiguredAuth: () => true,
+        },
+        thinkingLevel: "max" as never,
+      },
+    });
+
+    const opts = createSessionMock.mock.calls[0]![0] as { model?: unknown };
+    expect(opts.model).toBe(recorded);
+  });
+
   it.each([
     ["missing-role", undefined, "no longer exists"],
     ["general-purpose", "stale-fingerprint", "changed since spawn"],

@@ -364,6 +364,95 @@ describe("teammateExtension entrypoint", () => {
     _setHydrateSdkForTest({});
   });
 
+  it("session_start hands the leader's provider/model/thinking to resumed teammates", async () => {
+    const handlers = new Map<
+      string,
+      (event: unknown, ctx: unknown) => unknown
+    >();
+    const fakeTasksHandle = {
+      store: createTaskStore(),
+      registerTaskType: vi.fn(),
+      getTaskType: () => undefined,
+      unregisterTaskType: vi.fn(),
+    };
+    const pi = {
+      on: vi.fn((evt: string, handler: (e: unknown, c: unknown) => unknown) => {
+        handlers.set(evt, handler);
+      }),
+      events: { __pi_tasks_handle__: fakeTasksHandle },
+      registerTool: vi.fn(),
+      sendMessage: vi.fn(),
+      getActiveTools: vi.fn().mockReturnValue(["read", "send_message"]),
+      getAllTools: vi.fn().mockReturnValue([{ name: "read" }, { name: "send_message" }]),
+      getThinkingLevel: vi.fn().mockReturnValue("max"),
+    };
+
+    teammateExtension(pi as never);
+
+    const createSession = vi.fn(
+      async (_opts: { model?: unknown; thinkingLevel?: unknown }) => ({
+        session: {
+          prompt: vi.fn().mockResolvedValue(undefined),
+          abort: vi.fn().mockResolvedValue(undefined),
+          dispose: vi.fn(),
+          subscribe: vi.fn(() => () => {}),
+        },
+      }),
+    );
+    _setHydrateSdkForTest({
+      createAgentSessionServices: vi.fn().mockResolvedValue({}),
+      SessionManagerOpen: vi.fn(() => ({
+        getSessionFile: () => "/tmp/alice.jsonl",
+        getSessionId: () => "s",
+        getEntries: () => [],
+        appendMessage: vi.fn(),
+        buildSessionContext: () => ({ messages: [], thinkingLevel: "max", model: null }),
+      })),
+      createAgentSessionFromServices: createSession,
+    });
+
+    const leaderModel = { provider: "codebuddy", id: "deepseek-v4-pro-ioa" };
+    const fakeCtx = {
+      cwd: "/tmp",
+      model: leaderModel,
+      modelRegistry: { find: () => undefined, hasConfiguredAuth: () => false },
+      sessionManager: {
+        getSessionId: () => "s1",
+        getEntries: () => [
+          {
+            type: "custom_message",
+            customType: TEAMMATE_EVENT_CUSTOM_TYPE,
+            details: { kind: "team_create", teamName: "t1", createdAt: 1 },
+          },
+          {
+            type: "custom_message",
+            customType: TEAMMATE_EVENT_CUSTOM_TYPE,
+            details: {
+              kind: "teammate_spawn",
+              identity: {
+                agentId: "alice@t1",
+                agentName: "alice",
+                teamName: "t1",
+                agentType: "general-purpose",
+              },
+              sessionFile: "/tmp/alice.jsonl",
+              initialPrompt: "go",
+            },
+          },
+        ],
+      },
+    };
+
+    await handlers.get("session_start")!({}, fakeCtx);
+
+    expect(createSession).toHaveBeenCalled();
+    const opts = createSession.mock.calls[0]![0];
+    expect(opts.model).toBe(leaderModel);
+    expect(opts.thinkingLevel).toBe("max");
+
+    _setHydrateSdkForTest({});
+  });
+
   it("session_start hydrates team_task_* events into the teamTaskStore", async () => {
     const handlers = new Map<
       string,

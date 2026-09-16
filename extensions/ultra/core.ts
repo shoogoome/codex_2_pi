@@ -35,7 +35,7 @@ export const ULTRA_WORKFLOW_PROMPT = [
   "<ultra_multi_agent_workflow>",
   "The Ultra multi-agent workflow is active.",
   "For a non-trivial task with at least two independent workstreams, issue multiple task_agent calls in parallel in a single assistant message. Each call forks the current session, inherits its provider/model configuration, and runs in background automatically. Keep advancing independent main-agent work while they run, then synthesize their results after automatic completion notifications arrive.",
-  "Do not parallelize simple tasks or work with strong sequential dependencies merely for the sake of parallelism. Do not poll forked agents for status; use their automatic notifications.",
+  "Do not parallelize simple tasks or work with strong sequential dependencies merely for the sake of parallelism. Do not poll forked agents or teammates for status; use their automatic notifications.",
   "</ultra_multi_agent_workflow>",
 ].join("\n");
 

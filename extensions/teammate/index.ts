@@ -23,6 +23,8 @@ import { buildTeamTaskUpdateTool } from "./teamTasks/tools/teamTaskUpdate.js";
 import { buildTeamTaskListTool } from "./teamTasks/tools/teamTaskList.js";
 import { buildTeamTaskGetTool } from "./teamTasks/tools/teamTaskGet.js";
 import { hydrateTeammateState, hydrateTeamTaskStore, respawnTeammates } from "./hydrate.js";
+import type { RespawnContext } from "./hydrate.js";
+import type { AgentThinkingLevel } from "../localagent/model.js";
 import { logError } from "../tasks/logging.js";
 import { buildTeamWidget } from "./ui/teamWidget.js";
 import { createViewStateStore } from "./ui/viewState.js";
@@ -143,11 +145,33 @@ export default function teammateExtension(pi: ExtensionAPI): void {
       const entries = ctx.sessionManager.getEntries();
       const state = hydrateTeammateState(entries as never);
       hydrateTeamTaskStore(state, handle);
+      // Capture the leader's live runtime when the host exposes it. Both reads
+      // are optional so hydration still works on hosts that predate them — the
+      // resume path then degrades to the SDK's session-file restore.
+      const modelRegistry = (
+        ctx as { modelRegistry?: NonNullable<RespawnContext["parentRuntime"]>["modelRegistry"] }
+      ).modelRegistry;
+      const thinkingLevel = (
+        pi as { getThinkingLevel?: () => unknown }
+      ).getThinkingLevel;
       await respawnTeammates(state, {
         pi,
         taskStore: tasksHandle.store,
         handle,
         cwd: ctx.cwd,
+        // The leader's live runtime is the only correct source of truth for a
+        // resumed teammate's provider. Without it the SDK would fall back to
+        // the settings default and could silently move a teammate off the
+        // leader's provider. `modelRegistry` lives on the context, not on the
+        // session-scoped `pi` handle, so capture it here.
+        parentRuntime:
+          modelRegistry && typeof thinkingLevel === "function"
+            ? {
+                model: ctx.model,
+                modelRegistry,
+                thinkingLevel: thinkingLevel.call(pi) as AgentThinkingLevel,
+              }
+            : undefined,
       });
     } catch (e) {
       logError(e, "teammate hydrate");

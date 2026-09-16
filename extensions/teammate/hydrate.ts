@@ -25,6 +25,7 @@ import { loadAgentsFromDir } from "../localagent/agentDefinitions/loadFromDisk.j
 import { getAgentDefinition, mergeAgentDefinitions } from "../localagent/agentDefinitions/resolve.js";
 import { resolveSubAgentTools } from "../localagent/toolPool.js";
 import type { AgentDefinition } from "../localagent/types.js";
+import type { AgentModel, AgentThinkingLevel } from "../localagent/model.js";
 import { registerTask, updateTaskState } from "../tasks/framework.js";
 import { evictTaskOutput, initTaskOutput } from "../tasks/diskOutput.js";
 import { getTaskOutputPath } from "../tasks/outputPath.js";
@@ -99,6 +100,8 @@ export interface HydrateSdkBindings {
     sessionManager: unknown;
     tools: readonly string[];
     customTools?: readonly unknown[];
+    model?: AgentModel;
+    thinkingLevel?: AgentThinkingLevel;
   }) => Promise<{ session: unknown }>;
 }
 
@@ -120,6 +123,8 @@ const _hydrateSdkDefaults: HydrateSdkBindings = {
       sessionManager: opts.sessionManager as never,
       tools: opts.tools as never,
       customTools: opts.customTools as never,
+      model: opts.model,
+      thinkingLevel: opts.thinkingLevel,
     }) as unknown as Promise<{ session: unknown }>;
   },
 };
@@ -141,6 +146,94 @@ export interface RespawnContext {
   taskStore: TaskStore;
   handle: TeammateHandle;
   cwd: string;
+  /**
+   * The leader's live provider/model at resume time. Passed from session_start
+   * (the only place with an ExtensionContext) so a resumed teammate can inherit
+   * the leader's provider instead of falling back to a settings default.
+   * `model` may be undefined when the leader has no active model yet.
+   */
+  parentRuntime?: {
+    model: AgentModel | undefined;
+    modelRegistry: {
+      find(provider: string, modelId: string): AgentModel | undefined;
+      hasConfiguredAuth(model: AgentModel): boolean;
+    };
+    thinkingLevel: AgentThinkingLevel;
+  };
+}
+
+/**
+ * Resolve the runtime a resumed teammate should run on.
+ *
+ * On resume we deliberately do NOT let the SDK pick: its fallback chain is
+ * (session file model -> settings default -> provider default), so any failure
+ * to restore would silently move the teammate to a different provider than the
+ * leader. We resolve explicitly and pin the provider:
+ *
+ *   1. the model recorded in the teammate's own session file, but only if that
+ *      provider still has auth;
+ *   2. otherwise the leader's current model (a team shares one auth context).
+ *
+ * Either way the resumed teammate stays on the leader's provider whenever the
+ * leader has one — it never crosses providers on its own.
+ */
+function resolveResumedRuntime(
+  ctx: RespawnContext,
+  sessionModel: { provider: string; modelId: string } | null,
+): { model: AgentModel | undefined; thinkingLevel: AgentThinkingLevel | undefined } {
+  const parent = ctx.parentRuntime;
+  if (!parent) {
+    // No leader runtime available (older callers / tests): let the SDK restore
+    // from the session file exactly as before.
+    return { model: undefined, thinkingLevel: undefined };
+  }
+
+  if (sessionModel) {
+    const recorded = parent.modelRegistry.find(sessionModel.provider, sessionModel.modelId);
+    if (recorded && parent.modelRegistry.hasConfiguredAuth(recorded)) {
+      return { model: recorded, thinkingLevel: parent.thinkingLevel };
+    }
+  }
+
+  // No usable recorded model: inherit the leader's live model rather than a
+  // settings default, so a resumed teammate cannot drift to another provider.
+  if (parent.model) {
+    return { model: parent.model, thinkingLevel: parent.thinkingLevel };
+  }
+
+  // Last resort: let the SDK resolve. Only reachable when the leader itself has
+  // no active model, in which case there is nothing to inherit.
+  return { model: undefined, thinkingLevel: undefined };
+}
+
+/**
+ * Read the provider/model the teammate session was last running on.
+ *
+ * `SessionManager.buildSessionContext()` already folds `model_change` entries
+ * and the last assistant message's provider/model into a single value, so we
+ * reuse it rather than re-walking the branch ourselves. Returns null when the
+ * session has no recorded model (e.g. a teammate spawned but never prompted).
+ */
+function readSessionModel(
+  sm: unknown,
+): { provider: string; modelId: string } | null {
+  try {
+    const ctx = (sm as { buildSessionContext?: () => { model?: unknown } })
+      .buildSessionContext?.();
+    const m = ctx?.model as { provider?: unknown; modelId?: unknown } | null | undefined;
+    if (
+      m &&
+      typeof m.provider === "string" &&
+      typeof m.modelId === "string" &&
+      m.provider.length > 0 &&
+      m.modelId.length > 0
+    ) {
+      return { provider: m.provider, modelId: m.modelId };
+    }
+  } catch {
+    // Malformed/legacy session: fall through to inheriting the leader model.
+  }
+  return null;
 }
 
 async function createResumedAgentSession(
@@ -180,6 +273,7 @@ async function createResumedAgentSession(
     services,
     sessionManager: sm,
     tools,
+    ...resolveResumedRuntime(ctx, readSessionModel(sm)),
     customTools: [
       buildTeammateSendMessageTool(replayed.identity, {
         mailbox: ctx.handle.mailbox,

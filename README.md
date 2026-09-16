@@ -23,9 +23,10 @@
 | `extensions/compact-ui` | Codex 风格紧凑 UI:消息前缀化 + 常见内置工具短渲染（与 claude-ui 互斥）。 | （`--claude-ui=false` 回退到此皮肤） |
 | `extensions/pets` | Codex 风格终端宠物 widget，依 agent 状态切换动画，Kitty graphics/tmux passthrough 可选，其余回退 block-art。 | （无命令，自动 widget） |
 | `extensions/goal` | Codex 风格 thread goal:持久目标 + 预算消耗 + 续跑提示，随 session 保存。 | `get_goal` / `create_goal` / `update_goal` · `/goal <objective>` · `/goal resume` |
-| `extensions/localagent` | 注册 fork-only 的 `task_agent` + `local_agent` 任务类型：从当前持久会话完整分叉，固定后台运行，并精确继承主会话 provider/model/thinking。 | `task_agent` |
+| `extensions/localagent` | 注册 `task_agent` + `local_agent` 任务类型：默认从当前持久会话完整 fork 后台子 agent（精确继承 provider/model/thinking），传 `team_name`+`name` 可改为创建长生命周期 teammate。 | `task_agent` |
 | `extensions/localshell` | 注册 `task_bash` 工具 + LocalShellTask：前台完成只保留一条 Bash 工具结果，超时转后台；后台终态默认在空闲时即时、忙时于 agent_end 安全边界更新 TUI，不打断/注入 LLM，调用头、输出 gutter、颜色和折叠与 Claude UI 的 `Bash` 一致。 | `task_bash` · `task_status` / `task_kill` · `PI_TASK_BASH_TIMEOUT_MS` 调默认超时 · `PI_TASKS_WAKE_ON_BACKGROUND=1` 可恢复 Claude 式主动唤醒 |
 | `extensions/tasks` | 任务框架底座:default TaskStore + 背景 agents panel（Ctrl+Y 焦点 / Enter overlay）+ 任务查询管理工具。 | `task_status` / `task_kill` / `task_list` |
+| `extensions/teammate` | 长生命周期多 agent 团队协作：完整 `name@team` 隔离、自动结果回传、持久消息重放、硬写审批、共享任务看板与安全 resume。 | `team_create` / `task_agent(team_name+name)` / `send_message` / `request_plan_approval` / `team_delete` / `team_plan_approve` |
 
 ### 新增扩展（Codex + Claude Code 能力移植）
 
@@ -105,15 +106,20 @@ curl "http://<机器IP>:4317/v1/messages" \
 
 ## 多 Agent 工具
 
-当前多 Agent 实现由 `extensions/localagent` 和 `extensions/tasks` 提供；旧的 RPC `extensions/subagents`、角色型一次性 agent 和 teammate 路径已经移除。
+当前多 Agent 实现统一由 `extensions/localagent`、`extensions/tasks` 和 `extensions/teammate` 提供；旧的 RPC `extensions/subagents` 链路已经移除。
 
-### `task_agent`
+### `task_agent`、fork 与 teammate
 
-`extensions/localagent` 的 `task_agent` 只支持一种模式：从当前有效的持久 Pi session 完整 fork，并固定在后台运行。调用参数只有 `description`、`prompt` 和可选 `cwd`；不再接受 `subagent_type`、`model`、`run_in_background`、`team_name`/`name` 或 `isolation`。
+`extensions/localagent` 的 `task_agent` 有两条路径：
 
-子会话精确继承主会话当前的 provider、model 对象和 thinking level，不做别名查找，也不允许显式覆盖。它继承当前活动工具并始终剔除 `task_agent` 以禁止递归 fork。任务结束后，有界最终回答随终态通知自动送回主会话，完整轨迹保存在 `output_file`。
+- **fork（默认）**：省略 `team_name`/`name`，从当前有效的持久 Pi session 完整 fork，并固定在后台运行。参数只有 `description`、`prompt` 和可选 `cwd`。
+- **长生命周期 teammate**：同时传 `team_name` 和 `name`，把成员加入已有 team（需先 `team_create`）。此时可用 `subagent_type` 选择 role（默认 `general-purpose`）。两个参数必须成对出现，只传其一会明确报错而非静默 fork。
 
-根会话容量控制默认最多 6 个驻留线程、4 个同时执行线程（都包含 leader，即最多 5 个驻留/3 个执行中的子 Agent）；可通过 `PI_AGENT_MAX_THREADS` 和 `PI_AGENT_MAX_CONCURRENT` 调整。超过执行上限的 fork 按 FIFO 等待，完成、失败、kill 和 session 切换都会释放或重置配额。详见 [多 Agent 说明](docs/extensions/multi-agent.md)。
+fork 子会话精确继承主会话当前的 provider、model 对象和 thinking level，不做别名查找，也不允许显式覆盖。它继承当前活动工具并始终剔除 `task_agent` 以禁止递归 fork。任务结束后，有界最终回答随终态通知自动送回主会话，完整轨迹保存在 `output_file`。
+
+teammate 成员拥有独立持久 session，可在多轮消息间 idle，并在根 session 恢复时重建。成员用完整 `name@team` 路由：裸名称只有在 team 内（leader 侧则要求跨 team 唯一）才解析，广播也不会越 team。每轮最终回答和错误会自动注入 leader；成员间消息以 `message_sent → message_ack` 持久化，未 ACK 消息在 resume 后按序重放。写文件、变更 shell 和 MCP 调用由运行时硬门禁拦截，只有 `request_plan_approval` 获批后才在当前 turn 开放；恢复时若原 role 被删除或定义指纹变化则 fail-closed。`session_shutdown` 会挂起成员供下一会话重建；显式 `team_delete` 才执行 shutdown handshake 和超时强制清理。详见 [多 Agent 说明](docs/extensions/multi-agent.md)。
+
+根会话容量由 localagent 与 teammate 共用：默认最多 6 个驻留线程、4 个同时执行线程（都包含 leader，即最多 5 个驻留/3 个执行中的子 Agent）；可通过 `PI_AGENT_MAX_THREADS` 和 `PI_AGENT_MAX_CONCURRENT` 调整。teammate 仅在实际 turn 占执行槽，idle 时只占驻留槽；超过执行上限的工作按 FIFO 等待，完成、失败、kill 和 session 切换都会释放或重置配额。
 
 ## `/effort` 与 Codex Ultra
 
@@ -231,4 +237,4 @@ npm run typecheck
 
 `/side` 现在作为 extension-only 版本提供：它使用独立模型请求和 Pi overlay 复刻 Codex 的临时 side conversation。它不依赖 Pi 核心线程切换，因此 UI 行为不完全等同 Codex 原生实现，但关闭 overlay 即关闭 side 会话。
 
-`task_agent` 已支持基于 Pi session 的完整上下文后台 fork、主会话 provider/model/thinking 精确继承和共享并发边界。选择性继承最近 N 轮上下文、根会话级 token/费用硬预算和嵌套 Agent 仍暂缓；递归 spawn 继续关闭。
+`task_agent` 已支持基于 Pi session 的完整上下文后台 fork、主会话 provider/model/thinking 精确继承、长生命周期 teammate（跨会话安全 resume）和共享并发边界。选择性继承最近 N 轮上下文、根会话级 token/费用硬预算和嵌套 Agent 仍暂缓；递归 spawn 继续关闭。

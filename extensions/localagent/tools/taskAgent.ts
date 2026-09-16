@@ -17,7 +17,18 @@ import {
   type SpawnLocalAgentResult,
   type SpawnLocalAgentTimelineEntry,
 } from "../spawnLocalAgent.js";
-import { inheritParentRuntime } from "../model.js";
+import { inheritParentRuntime, resolveAgentRuntime } from "../model.js";
+import { getBuiltInAgents, FORK_AGENT } from "../agentDefinitions/builtIn.js";
+import { mergeAgentDefinitions, getAgentDefinition } from "../agentDefinitions/resolve.js";
+import { loadAgentsFromDir } from "../agentDefinitions/loadFromDisk.js";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { getTeammateHandle, type TeammateHandle } from "../../teammate/handle.js";
+import {
+  spawnTeammate as _realSpawnTeammate,
+  type SpawnTeammateOptions,
+  type SpawnTeammateResult,
+} from "../../teammate/spawnTeammate.js";
 
 type Spawner = (
   pi: ExtensionAPI,
@@ -29,17 +40,60 @@ export function _setSpawnerForTest(s: Spawner | undefined): void {
   _spawner = s ?? _spawn;
 }
 
+type TeammateSpawner = (
+  pi: ExtensionAPI,
+  taskStore: TaskStore,
+  handle: TeammateHandle,
+  opts: SpawnTeammateOptions,
+) => Promise<SpawnTeammateResult>;
+
+// Resolved lazily, never captured at module-eval time: localagent and teammate
+// import each other, and pi loads each extension under its own jiti realm. A
+// top-level `let x = _realSpawnTeammate` would be a load-order landmine (TDZ /
+// undefined depending on which extension's realm evaluates first).
+let _teammateSpawnerOverride: TeammateSpawner | undefined;
+export function _setTeammateSpawnerForTest(s: TeammateSpawner | undefined): void {
+  _teammateSpawnerOverride = s;
+}
+
+function resolveTeammateSpawner(): TeammateSpawner {
+  return _teammateSpawnerOverride ?? _realSpawnTeammate;
+}
+
 const TaskAgentParams = Type.Object(
   {
     description: Type.String({ description: "Short (3-5 word) task description for status displays." }),
     prompt: Type.String({ description: "The task for the forked agent to perform." }),
     cwd: Type.Optional(Type.String({ description: "Override working directory for the forked agent." })),
+    subagent_type: Type.Optional(
+      Type.String({
+        description:
+          "Long-lived teammate mode only: role name ('general-purpose' | 'explore' or any " +
+          "user/project role loaded from ~/.pi/agents/*.md or <cwd>/.pi/agents/*.md).",
+      }),
+    ),
+    team_name: Type.Optional(
+      Type.String({
+        description:
+          "If provided together with `name`, spawn a long-lived teammate joining this team " +
+          "(call team_create first). Otherwise omit for the default fork path.",
+      }),
+    ),
+    name: Type.Optional(
+      Type.String({
+        description:
+          "Required when team_name is provided. Human-readable agent name (used as identity " +
+          "for send_message and TUI display). Must be unique within the team.",
+      }),
+    ),
   },
   { additionalProperties: false },
 );
 
 interface TaskAgentDetails {
   action: "task_agent";
+  /** Distinguishes the fork path from the long-lived teammate path. */
+  mode?: "one_shot" | "teammate";
   taskId?: string;
   agentType?: string;
   status?: string;
@@ -55,6 +109,10 @@ interface TaskAgentDetails {
   description?: string;
   /** End-of-run wall-clock duration when available. */
   durationMs?: number;
+  /** teammate-mode only: stable agent identity (`<name>@<team>`). */
+  agentId?: string;
+  /** teammate-mode only: persisted JSONL session file for the teammate. */
+  sessionFile?: string;
 }
 
 export function buildTaskAgentTool(
@@ -62,12 +120,15 @@ export function buildTaskAgentTool(
   store: TaskStore,
 ): ToolDefinition<typeof TaskAgentParams, TaskAgentDetails> {
   const description =
-    "Fork the current persisted Pi session into a background LocalAgent. The child inherits " +
+    "Fork the current persisted Pi session into a background LocalAgent, or — when " +
+    "`team_name` + `name` are given — spawn a long-lived teammate.\n" +
+    "\n" +
+    "In fork mode the child inherits " +
     "the full active conversation plus the exact parent provider, model, and thinking level; " +
-    "these cannot be overridden. LocalAgent supports fork mode only.\n" +
+    "these cannot be overridden.\n" +
     "\n" +
     "Use task_agent for independent, non-trivial work that benefits from a separate context. " +
-    "Each call returns immediately after backgrounding; the final answer arrives automatically.\n" +
+    "Each fork call returns immediately after backgrounding; the final answer arrives automatically.\n" +
     "\n" +
     "## Usage notes\n" +
     "\n" +
@@ -87,7 +148,22 @@ export function buildTaskAgentTool(
     "<example>\n" +
     "task_agent({ description: \"Map oldAuth callers\", prompt: \"Find every oldAuth() call " +
     "in src/, list file:line, and report migration risks under 200 words.\" })\n" +
-    "</example>";
+    "</example>\n" +
+    "\n" +
+    "## Long-lived teammate mode\n" +
+    "\n" +
+    "Pass BOTH `team_name` AND `name` (call `team_create` first) to spawn a long-lived " +
+    "teammate instead of a fork. The teammate runs the initial prompt, then stays resident " +
+    "and idle, waiting for messages. `subagent_type` selects its role (defaults to " +
+    "'general-purpose').\n" +
+    "\n" +
+    "- Messages from teammates arrive AUTOMATICALLY in your context as new turns. You " +
+    "do not need to poll `task_status`.\n" +
+    "- After spawning a teammate or sending a message, continue with other work or wait. " +
+    "Do not immediately call `task_status` to check teammate progress.\n" +
+    "- A teammate going idle is the normal end-of-turn state, not a failure.\n" +
+    "- Message it with `send_message {to: \"<name>\", message: \"...\"}`; shut it down with " +
+    "a shutdown_request body or `team_delete` to cascade-kill the whole team.";
 
   return {
     name: "task_agent",
@@ -102,21 +178,82 @@ export function buildTaskAgentTool(
         description: string;
         prompt: string;
         cwd?: string;
+        subagent_type?: string;
+        team_name?: string;
+        name?: string;
       } & Record<string, unknown>;
 
       const legacyKeys = [
-        "subagent_type",
         "model",
         "run_in_background",
         "isolation",
-        "team_name",
-        "name",
       ].filter((key) => Object.prototype.hasOwnProperty.call(params, key));
       if (legacyKeys.length > 0) {
         return errResult(
           `Unsupported task_agent parameter(s): ${legacyKeys.join(", ")}. ` +
-          "LocalAgent supports fork mode only and always inherits the parent provider/model.",
+          "The fork path inherits the parent provider/model, and forks always run in the background.",
         );
+      }
+
+      const cwd = params.cwd ?? ctx.cwd;
+
+      // Route to the long-lived teammate path when team_name / name are present.
+      // Both must be set; any presence of either opts into that route so a
+      // missing partner becomes a clear error instead of silently forking.
+      const teamName = params.team_name?.trim();
+      const agentName = params.name?.trim();
+      if (params.team_name !== undefined || params.name !== undefined) {
+        if (!teamName || !agentName) {
+          return errResult("team_name and name must both be provided to spawn a teammate");
+        }
+        let teammateHandle: TeammateHandle;
+        try {
+          teammateHandle = getTeammateHandle(pi);
+        } catch {
+          return errResult("teammate extension not loaded");
+        }
+        const userDefs = await loadAgentsFromDir(join(homedir(), ".pi", "agents"), "user");
+        const projDefs = await loadAgentsFromDir(join(cwd, ".pi", "agents"), "project");
+        const allDefs = mergeAgentDefinitions(getBuiltInAgents(), userDefs, projDefs);
+        const teammateAgentType = params.subagent_type ?? "general-purpose";
+        const teammateAgentDef = getAgentDefinition(allDefs, teammateAgentType);
+        if (!teammateAgentDef) {
+          const available = allDefs.map((d) => d.agentType).sort().join(", ");
+          return errResult(
+            `Unknown subagent_type "${teammateAgentType}". Available: ${available}`,
+          );
+        }
+        try {
+          const runtime = resolveAgentRuntime(pi, ctx, undefined, teammateAgentDef.model);
+          const result = await resolveTeammateSpawner()(pi, store, teammateHandle, {
+            teamName,
+            agentName,
+            agentDef: teammateAgentDef,
+            prompt: params.prompt,
+            model: runtime.model,
+            thinkingLevel: runtime.thinkingLevel,
+            cwd,
+          });
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  `Teammate ${result.agentId} spawned (taskId=${result.taskId}). ` +
+                  `Use send_message to communicate.`,
+              },
+            ],
+            details: {
+              action: "task_agent" as const,
+              mode: "teammate" as const,
+              taskId: result.taskId,
+              agentId: result.agentId,
+              sessionFile: result.sessionFile,
+            },
+          };
+        } catch (e) {
+          return errResult(`task_agent failed: ${(e as Error).message ?? String(e)}`);
+        }
       }
 
       const parentSessionFile = ctx.sessionManager.getSessionFile();
@@ -125,7 +262,6 @@ export function buildTaskAgentTool(
           "Fork requires a persisted parent session. Run pi without --no-session.",
         );
       }
-      const cwd = params.cwd ?? ctx.cwd;
 
       // Stream sub-agent progress to the tool's caller via onUpdate. Each call
       // emits a full snapshot of the timeline as a multi-line text block. The

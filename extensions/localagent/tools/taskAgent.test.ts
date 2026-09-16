@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildTaskAgentTool, _setSpawnerForTest } from "./taskAgent.js";
+import {
+  buildTaskAgentTool,
+  _setSpawnerForTest,
+  _setTeammateSpawnerForTest,
+} from "./taskAgent.js";
 import { createTaskStore } from "../../tasks/taskStore.js";
+import { attachTeammateHandle } from "../../teammate/handle.js";
+import { createTeamStore } from "../../teammate/teamStore.js";
+import { createMailbox } from "../../teammate/mailbox.js";
+import { createTeamTaskStore } from "../../teammate/teamTasks/teamTaskStore.js";
 
 const parentModel = {
   id: "custom-model",
@@ -26,7 +34,27 @@ const fakeCtx: any = {
 beforeEach(() => {
   fakePi.sendMessage.mockClear();
   _setSpawnerForTest(undefined);
+  _setTeammateSpawnerForTest(undefined);
 });
+
+/** Register a teammate handle so the teammate route resolves. */
+function attachFakeTeammateHandle(pi: any): void {
+  attachTeammateHandle(pi, {
+    teamStore: createTeamStore(),
+    mailbox: createMailbox(),
+    teamTaskStore: createTeamTaskStore(),
+  });
+}
+
+/**
+ * A pi stub with a private `events` object.
+ *
+ * Session handles live on `pi.events`, so sharing the shared `fakePi.events`
+ * object across tests would leak one test's attached handle into the next.
+ */
+function freshPi(): any {
+  return { ...fakePi, events: {} };
+}
 
 async function callTool(
   tool: ReturnType<typeof buildTaskAgentTool>,
@@ -42,29 +70,33 @@ async function callTool(
   );
 }
 
-describe("task_agent fork-only contract", () => {
-  it("schema 只公开 description、prompt 和 cwd", () => {
+describe("task_agent fork contract", () => {
+  it("schema 公开 description、prompt、cwd，以及 teammate 模式的 team_name/name/subagent_type", () => {
     const tool = buildTaskAgentTool(fakePi, createTaskStore());
     expect(tool.name).toBe("task_agent");
     expect(Object.keys((tool.parameters as any).properties).sort()).toEqual([
       "cwd",
       "description",
+      "name",
       "prompt",
+      "subagent_type",
+      "team_name",
     ]);
     expect((tool.parameters as any).additionalProperties).toBe(false);
   });
 
-  it("description 明确 fork-only、后台执行和 provider/model 精确继承", () => {
+  it("description 说明 fork 继承、后台执行，以及 teammate 模式", () => {
     const description = buildTaskAgentTool(fakePi, createTaskStore()).description ?? "";
-    expect(description).toMatch(/fork mode only/i);
     expect(description).toMatch(/background/i);
     expect(description).toMatch(/exact parent provider, model/i);
     expect(description).toMatch(/single assistant message/i);
     expect(description).toMatch(/automatic terminal notification/i);
+    expect(description).toMatch(/team_name/);
+    expect(description).toMatch(/long-lived teammate/i);
   });
 
-  it.each(["subagent_type", "model", "run_in_background", "team_name", "name", "isolation"])(
-    "拒绝旧参数 %s",
+  it.each(["model", "run_in_background", "isolation"])(
+    "拒绝 fork 路径的旧参数 %s",
     async (key) => {
       const tool = buildTaskAgentTool(fakePi, createTaskStore());
       const result = await callTool(tool, {
@@ -74,9 +106,23 @@ describe("task_agent fork-only contract", () => {
       });
       expect((result as { isError?: boolean }).isError).toBe(true);
       expect((result.content[0] as { text: string }).text).toContain(key);
-      expect((result.content[0] as { text: string }).text).toMatch(/fork mode only/i);
+      expect((result.content[0] as { text: string }).text).toMatch(/inherit/i);
     },
   );
+
+  it("只给 team_name 或缺 name 时明确报错，不静默走 fork", async () => {
+    const tool = buildTaskAgentTool(fakePi, createTaskStore());
+    for (const params of [
+      { description: "x", prompt: "y", team_name: "alpha" },
+      { description: "x", prompt: "y", name: "bob" },
+    ]) {
+      const result = await callTool(tool, params);
+      expect((result as { isError?: boolean }).isError).toBe(true);
+      expect((result.content[0] as { text: string }).text).toMatch(
+        /team_name and name must both be provided/i,
+      );
+    }
+  });
 
   it("没有持久父 session 时明确失败", async () => {
     const tool = buildTaskAgentTool(fakePi, createTaskStore());
@@ -172,6 +218,128 @@ describe("task_agent fork-only contract", () => {
     expect((result as { isError?: boolean }).isError).toBe(true);
     expect((result.content[0] as { text: string }).text).toMatch(/aborted/i);
     expect(spawner).not.toHaveBeenCalled();
+  });
+});
+
+describe("task_agent teammate route", () => {
+  it("team_name + name → 调用 spawnTeammate 并返回 teammate-mode details", async () => {
+    const pi = freshPi();
+    attachFakeTeammateHandle(pi);
+    const spawner = vi.fn().mockResolvedValue({
+      taskId: "t1",
+      agentId: "bob@alpha",
+      sessionFile: "/tmp/bob.jsonl",
+    });
+    _setTeammateSpawnerForTest(spawner);
+    const tool = buildTaskAgentTool(pi, createTaskStore());
+
+    const result = await callTool(tool, {
+      description: "spawn bob",
+      prompt: "audit the parser",
+      team_name: "alpha",
+      name: "bob",
+    });
+
+    expect((result as { isError?: boolean }).isError).toBeFalsy();
+    expect(result.details).toMatchObject({
+      action: "task_agent",
+      mode: "teammate",
+      taskId: "t1",
+      agentId: "bob@alpha",
+      sessionFile: "/tmp/bob.jsonl",
+    });
+    expect((result.content[0] as { text: string }).text).toContain("bob@alpha");
+
+    const opts = spawner.mock.calls[0]![3];
+    expect(opts).toMatchObject({
+      teamName: "alpha",
+      agentName: "bob",
+      prompt: "audit the parser",
+      cwd: "/tmp",
+      model: parentModel,
+      thinkingLevel: "max",
+    });
+    // Defaults to the built-in general-purpose role.
+    expect(opts.agentDef.agentType).toBe("general-purpose");
+  });
+
+  it("subagent_type 选择 role，并把 role system prompt 交给 spawner", async () => {
+    const pi = freshPi();
+    attachFakeTeammateHandle(pi);
+    const spawner = vi.fn().mockResolvedValue({
+      taskId: "t2",
+      agentId: "eve@alpha",
+      sessionFile: "/tmp/eve.jsonl",
+    });
+    _setTeammateSpawnerForTest(spawner);
+    const tool = buildTaskAgentTool(pi, createTaskStore());
+
+    await callTool(tool, {
+      description: "spawn explorer",
+      prompt: "map the repo",
+      team_name: "alpha",
+      name: "eve",
+      subagent_type: "explore",
+    });
+
+    const opts = spawner.mock.calls[0]![3];
+    expect(opts.agentDef.agentType).toBe("explore");
+    expect(opts.agentDef.tools).toEqual(["read", "grep", "find", "ls"]);
+  });
+
+  it("未知 subagent_type 报错并列出可选 role", async () => {
+    const pi = freshPi();
+    attachFakeTeammateHandle(pi);
+    _setTeammateSpawnerForTest(vi.fn());
+    const tool = buildTaskAgentTool(pi, createTaskStore());
+
+    const result = await callTool(tool, {
+      description: "x",
+      prompt: "y",
+      team_name: "alpha",
+      name: "bob",
+      subagent_type: "nope",
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain('Unknown subagent_type "nope"');
+    expect(text).toContain("general-purpose");
+    expect(text).toContain("explore");
+  });
+
+  it("teammate handle 未加载时报错且不调用 spawner", async () => {
+    const spawner = vi.fn();
+    _setTeammateSpawnerForTest(spawner);
+    const tool = buildTaskAgentTool(freshPi(), createTaskStore());
+
+    const result = await callTool(tool, {
+      description: "x",
+      prompt: "y",
+      team_name: "alpha",
+      name: "bob",
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toMatch(/teammate extension not loaded/i);
+    expect(spawner).not.toHaveBeenCalled();
+  });
+
+  it("spawnTeammate 抛错时转为 tool error", async () => {
+    const pi = freshPi();
+    attachFakeTeammateHandle(pi);
+    _setTeammateSpawnerForTest(vi.fn().mockRejectedValue(new Error("team 'alpha' does not exist")));
+    const tool = buildTaskAgentTool(pi, createTaskStore());
+
+    const result = await callTool(tool, {
+      description: "x",
+      prompt: "y",
+      team_name: "alpha",
+      name: "bob",
+    });
+
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toContain("team 'alpha' does not exist");
   });
 });
 
