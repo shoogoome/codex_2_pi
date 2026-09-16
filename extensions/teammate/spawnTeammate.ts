@@ -31,7 +31,7 @@ import { resolveSubAgentTools } from "../localagent/toolPool.js";
 import { registerTask, updateTaskState } from "../tasks/framework.js";
 import { evictTaskOutput, initTaskOutput } from "../tasks/diskOutput.js";
 import { getTaskOutputPath } from "../tasks/outputPath.js";
-import { createTaskStateBase, generateTaskId } from "../tasks/Task.js";
+import { createTaskStateBase, generateTaskId, isTerminalTaskStatus } from "../tasks/Task.js";
 import { logError } from "../tasks/logging.js";
 import { getAgentCapacity } from "../tasks/agentCapacityHandle.js";
 import type {
@@ -39,10 +39,12 @@ import type {
   AgentCapacityLease,
 } from "../tasks/agentCapacity.js";
 
-import type { TeammateHandle } from "./handle.js";
+import { retireTeammate, type TeammateHandle } from "./handle.js";
 import type { InProcessTeammateTaskState, TeammateIdentity } from "./types.js";
 import { isInProcessTeammateTask } from "./types.js";
 import { emitTeammateEvent } from "./eventEmit.js";
+import { getLeaderChannel } from "./leaderBridge.js";
+import type { LeaderIdleProbe } from "./leaderNotification.js";
 import { postLeaderNotification } from "./leaderNotification.js";
 import {
   grantApproval,
@@ -57,6 +59,7 @@ import { prependBoilerplate } from "./teammatePromptBoilerplate.js";
 import { subscribeTeammateProgress } from "./sessionProgress.js";
 import { buildTeammateTeamTaskTools } from "./teamTasks/tools/teammateTeamTaskTools.js";
 import { buildTeammateSendMessageTool } from "./tools/teammateSendMessage.js";
+import { buildTeamRosterTool } from "./tools/teamRoster.js";
 import {
   buildRequestPlanApprovalTool,
   type PendingApprovals,
@@ -242,6 +245,7 @@ async function spawnTeammateWithLease(
   const roleTools = resolveSubAgentTools(agentDef, allToolNames);
   const collaborationTools = [
     "send_message",
+    "team_roster",
     "request_plan_approval",
     "team_task_create",
     "team_task_update",
@@ -266,6 +270,36 @@ async function spawnTeammateWithLease(
     delete: (id) => {
       pendingApprovalsMap.delete(id);
     },
+    ids: () => [...pendingApprovalsMap.keys()].sort(),
+  };
+  // Expose on the handle so team_plan_approve can verify a request_id exists
+  // before answering it (see handle.ts). Cleaned up on terminal paths.
+  handle.approvalRequests.register(identity.agentId, pendingApprovals);
+
+  // Teammate sub-sessions live in their own module realm, so they cannot reach
+  // the leader's `pi`/`ctx` directly — every leader-bound delivery goes through
+  // the process-global leaderBridge. Resolve the leader channel once here and
+  // route ALL leader notifications through it, so the `isLeaderIdle` probe
+  // (registered by the leader in session_start) stays authoritative.
+  const leaderChannel = getLeaderChannel();
+  const isLeaderIdle: LeaderIdleProbe = () => {
+    try {
+      return leaderChannel?.isLeaderIdle?.() === true;
+    } catch {
+      return false;
+    }
+  };
+  const deliverToLeader = (
+    details: Parameters<typeof postLeaderNotification>[1],
+    triggerTurn: boolean,
+  ): void => {
+    if (leaderChannel) {
+      leaderChannel.deliver(details, triggerTurn);
+      return;
+    }
+    // Offline / standalone (no leader channel yet): still persist + show
+    // locally so the notification is never silently dropped.
+    postLeaderNotification(pi, details, triggerTurn, isLeaderIdle);
   };
 
   const { session: sessionUnknown } = await _sdk.createAgentSessionFromServices({
@@ -276,9 +310,7 @@ async function spawnTeammateWithLease(
       buildTeammateSendMessageTool(identity, {
         mailbox: handle.mailbox,
         teamStore: handle.teamStore,
-        deliverToLeader: (details, triggerTurn) => {
-          postLeaderNotification(pi, details, triggerTurn);
-        },
+        deliverToLeader,
         persistEvent: (event) => {
           emitTeammateEvent(pi, event);
         },
@@ -287,13 +319,12 @@ async function spawnTeammateWithLease(
         identity,
         pendingApprovals,
         getLeaderChannel: () => ({
-          deliver: (details, triggerTurn) => {
-            postLeaderNotification(pi, details, triggerTurn);
-          },
+          deliver: deliverToLeader,
         }),
         onApproved: () => grantApproval(sessionFile),
       }),
       ...buildTeammateTeamTaskTools(pi, handle, identity),
+      buildTeamRosterTool(pi, { handle, identity }),
     ],
     model: resolvedModel,
     thinkingLevel: opts.thinkingLevel,
@@ -383,6 +414,18 @@ async function spawnTeammateWithLease(
   const augmentedPrompt = prependBoilerplate(opts.prompt, identity);
 
   registerApprovalSession(sessionFile, identity);
+
+  // A teammate that the leader has already torn down (team_delete / task_kill)
+  // must never surface further turns to the leader. Without this guard an
+  // in-flight prompt() still resolves AFTER the forced kill, and its
+  // result/idle callbacks injected notifications for a deleted team — observed
+  // in practice: team_delete at 08:08:05, then stray "result" notifications at
+  // 08:08:15 and 08:08:23 for members of that deleted team.
+  const isTaskTerminal = (): boolean => {
+    const current = taskStore.getTask(taskId);
+    return !current || isTerminalTaskStatus(current.status);
+  };
+
   startTeammateLoop({
     identity,
     initialPrompt: augmentedPrompt,
@@ -409,6 +452,7 @@ async function spawnTeammateWithLease(
     },
     onTurnResult: (text) => {
       if (!text.trim()) return;
+      if (isTaskTerminal()) return;
       postLeaderNotification(
         pi,
         { kind: "result", agentId: identity.agentId, body: text },
@@ -420,6 +464,7 @@ async function spawnTeammateWithLease(
         ...t,
         lastError: error.message,
       }));
+      if (isTaskTerminal()) return;
       postLeaderNotification(
         pi,
         { kind: "turn_error", agentId: identity.agentId, error: error.message },
@@ -432,6 +477,7 @@ async function spawnTeammateWithLease(
         ...t,
         isIdle: true,
       }));
+      if (isTaskTerminal()) return;
       // Surface idle status to the leader's main LLM as an informational
       // notification. triggerTurn:false — leader sees the entry in context
       // but is not woken (claudecode pattern: idle is normal, no reaction
@@ -502,7 +548,7 @@ async function spawnTeammateWithLease(
         agentId,
         status: terminalStatus,
       });
-      handle.teamStore.removeMember(opts.teamName, agentId);
+      retireTeammate(handle, { teamName: opts.teamName, agentId }, sessionFile);
       try {
         session.dispose();
       } catch (e) {

@@ -7,9 +7,12 @@ import {
   isApprovalRequiredToolCall,
   isMutationApproved,
   registerApprovalSession,
+  registerLeaderSession,
   revokeApproval,
   runWithApprovalSession,
+  shouldGateToolCall,
   unregisterApprovalSession,
+  unregisterLeaderSession,
 } from "./approvalGate.js";
 import {
   _resetAgentMutationPauseForTest,
@@ -50,6 +53,52 @@ describe("teammate approvalGate", () => {
     expect(getCurrentApprovalSessionId()).toBeUndefined();
   });
 
+  // Regression guard for a real stall: the ALS store is inherited down async
+  // chains rooted by a teammate turn, and the tool_call hook runs for the LEADER
+  // too (registered at factory scope). So an ambient teammate id could land on a
+  // leader tool call and the leader's own writes were rejected under that
+  // teammate's name — observed 25 times in one session, blocking the leader's
+  // edits to `.vibegame/plan.md` (a file only the leader owns) and even
+  // read-only `ls`/`find` bash calls. The whole pipeline stopped.
+  describe("leader sessions are never gated", () => {
+    it("declines to gate a registered leader even when the ambient store names a teammate", async () => {
+      registerApprovalSession("worker-session", IDENTITY);
+      registerLeaderSession("leader-session");
+
+      // Simulate the leak: a teammate turn roots the chain, then a leader tool
+      // call observes that stale ambient id.
+      await runWithApprovalSession("worker-session", async () => {
+        expect(getCurrentApprovalSessionId()).toBe("worker-session");
+        // The teammate itself is still gated...
+        expect(shouldGateToolCall("worker-session")).toBe(true);
+      });
+
+      // ...but the leader id is refused regardless of what the store says.
+      expect(shouldGateToolCall("leader-session")).toBe(false);
+    });
+
+    it("stops refusing once the leader session is unregistered", () => {
+      registerLeaderSession("leader-session");
+      expect(shouldGateToolCall("leader-session")).toBe(false);
+      unregisterLeaderSession("leader-session");
+      // No approval session was ever registered for it, so it is still not gated
+      // (it was never a teammate) — the point is only that the exemption is gone.
+      expect(shouldGateToolCall("leader-session")).toBe(false);
+    });
+
+    it("still gates a real teammate session", () => {
+      registerApprovalSession("worker-session", IDENTITY);
+      expect(shouldGateToolCall("worker-session")).toBe(true);
+      unregisterApprovalSession("worker-session");
+      expect(shouldGateToolCall("worker-session")).toBe(false);
+    });
+
+    it("treats a missing or unknown session id as ungated", () => {
+      expect(shouldGateToolCall(undefined)).toBe(false);
+      expect(shouldGateToolCall("never-registered")).toBe(false);
+    });
+  });
+
   it("Plan mode invalidates an existing approval and rejects new grants", () => {
     registerApprovalSession("s1", IDENTITY);
     expect(grantApproval("s1")).toBe(true);
@@ -79,5 +128,23 @@ describe("teammate approvalGate", () => {
     registerApprovalSession("s1", IDENTITY);
     expect(approvalBlockReason("s1")).toContain("writer@team-a");
     expect(approvalBlockReason("s1")).toContain("request_plan_approval");
+  });
+
+  it("block reason states the turn scope, the timeout and the escape hatch", () => {
+    // A teammate blocked by the gate used to burn a whole reasoning section
+    // guessing when "this turn" ends and whether replying would reopen it. The
+    // message must answer that in place: exact call, lifetime, timeout, and
+    // what to do instead of retrying writes.
+    registerApprovalSession("s1", IDENTITY);
+    const reason = approvalBlockReason("s1");
+
+    expect(reason).toMatch(/remainder of THIS turn/i);
+    expect(reason).toMatch(/revoked when the turn ends/i);
+    expect(reason).toMatch(/times out/i);
+    expect(reason).toMatch(/send_message/);
+    // The quoted budget must track the env override the tool actually uses.
+    process.env.PI_TEAMMATE_APPROVAL_TIMEOUT_MS = String(11 * 60_000);
+    expect(approvalBlockReason("s1")).toContain("11 minute");
+    delete process.env.PI_TEAMMATE_APPROVAL_TIMEOUT_MS;
   });
 });

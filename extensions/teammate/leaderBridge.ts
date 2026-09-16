@@ -37,6 +37,20 @@ import type { LeaderNotificationDetails } from "./types.js";
  * leader's main LLM session (DM => triggerTurn:true wakes the leader). */
 export interface LeaderChannel {
   deliver(details: LeaderNotificationDetails, triggerTurn: boolean): void;
+  /**
+   * Whether the leader is idle right now (not streaming).
+   *
+   * Optional: offline/test channels (and any caller that cannot observe leader
+   * state) simply omit it, and protocol traffic then takes the loss-proof
+   * queue-only path. The real leader always provides it in session_start.
+   *
+   * Protocol notifications (`plan_approval_request`) may only use the wake-up
+   * path while the leader is idle: a busy leader parks `triggerTurn:true` in a
+   * steering queue that an abort can erase. Read live at call time — the answer
+   * changes every turn, and a captured ctx can go stale. Callers must treat a
+   * throw as `false` (the safe, loss-proof direction).
+   */
+  isLeaderIdle?(): boolean;
 }
 
 interface LeaderBridgeRegistry {

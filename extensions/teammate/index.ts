@@ -6,7 +6,8 @@ import { attachTeammateHandle, type TeammateHandle } from "./handle.js";
 import { createTeamStore } from "./teamStore.js";
 import { createMailbox } from "./mailbox.js";
 import { createTeamTaskStore } from "./teamTasks/teamTaskStore.js";
-import { getTasksHandle } from "../tasks/handle.js";
+import { createApprovalRequestRegistry } from "./handle.js";
+import { getTasksHandle, lazyTasksHandle } from "../tasks/handle.js";
 import { getRunningTasks } from "../tasks/framework.js";
 import {
   _bindPi,
@@ -16,6 +17,7 @@ import {
 } from "./killTeammate.js";
 import { buildTeamCreateTool } from "./tools/teamCreate.js";
 import { buildSendMessageTool } from "./tools/sendMessage.js";
+import { buildTeamRosterTool } from "./tools/teamRoster.js";
 import { buildTeamDeleteTool } from "./tools/teamDelete.js";
 import { buildTeamPlanApproveTool } from "./tools/teamPlanApprove.js";
 import { buildTeamTaskCreateTool } from "./teamTasks/tools/teamTaskCreate.js";
@@ -37,12 +39,15 @@ import {
   registerLeaderChannel,
   unregisterLeaderChannel,
 } from "./leaderBridge.js";
-import { postLeaderNotification } from "./leaderNotification.js";
+import { postLeaderNotification, setLeaderNotificationMembershipProbe } from "./leaderNotification.js";
 import {
   approvalBlockReason,
   getCurrentApprovalSessionId,
   isApprovalRequiredToolCall,
   isMutationApproved,
+  registerLeaderSession,
+  shouldGateToolCall,
+  unregisterLeaderSession,
 } from "./approvalGate.js";
 
 const WIDGET_KEY = "teammate-team";
@@ -51,8 +56,24 @@ export default function teammateExtension(pi: ExtensionAPI): void {
   const teamStore = createTeamStore();
   const mailbox = createMailbox();
   const teamTaskStore = createTeamTaskStore();
-  const handle: TeammateHandle = { teamStore, mailbox, teamTaskStore };
+  const handle: TeammateHandle = {
+    teamStore,
+    mailbox,
+    teamTaskStore,
+    approvalRequests: createApprovalRequestRegistry(),
+  };
   attachTeammateHandle(pi, handle);
+
+  // Wire the membership probe once. Every notification path (spawn, hydrate,
+  // loop callbacks, send_message) funnels through postLeaderNotification, so a
+  // teammate torn down by team_delete/task_kill can no longer inject turns for
+  // a team that no longer exists.
+  setLeaderNotificationMembershipProbe((agentId) => {
+    const at = agentId.indexOf("@");
+    if (at <= 0) return false;
+    const team = teamStore.getTeam(agentId.slice(at + 1));
+    return team !== undefined && team.memberAgentIds.includes(agentId);
+  });
 
   installTeammateEventContextFilter(pi);
 
@@ -72,6 +93,11 @@ export default function teammateExtension(pi: ExtensionAPI): void {
   // time — so it does not depend on session_start having attached the handle.
   pi.registerTool(buildSendMessageTool(pi));
 
+  // Roster is registered at the factory top-level for the same reason as
+  // send_message: a teammate sub-session never fires session_start, and a
+  // teammate needs to discover peer names before it can address them.
+  pi.registerTool(buildTeamRosterTool(pi));
+
   // The generic four team_task_* tools remain registered at factory top-level
   // for the leader and ordinary extension loading. An isolated teammate realm
   // would otherwise resolve these against its own empty handle, so spawn and
@@ -86,10 +112,16 @@ export default function teammateExtension(pi: ExtensionAPI): void {
   // Hard mutation boundary for teammate child sessions. The child prompt is
   // tagged through a process-global AsyncLocalStorage in approvalGate, so this
   // hook works even though each AgentSession loads extensions in its own jiti
-  // module realm. Leader calls have no approval context and are unaffected.
+  // module realm.
+  //
+  // This hook runs for the LEADER as well (it is registered at factory scope,
+  // which every session loads). `shouldGateToolCall` is what keeps the leader
+  // out: the ALS store is inherited down async chains a teammate turn rooted,
+  // so an ambient id is NOT proof that the caller is that teammate — observed
+  // real failure was the leader's own `edit` being blocked as "reviewer@forge".
   pi.on("tool_call", async (event) => {
     const approvalSessionId = getCurrentApprovalSessionId();
-    if (!approvalSessionId) return;
+    if (!shouldGateToolCall(approvalSessionId)) return;
     if (!isApprovalRequiredToolCall(event.toolName, event.input)) return;
     if (isMutationApproved(approvalSessionId)) return;
     return {
@@ -122,21 +154,50 @@ export default function teammateExtension(pi: ExtensionAPI): void {
     // for them — only the real leader ever registers a channel.
     const sessionId = ctx.sessionManager.getSessionId() || `ephemeral:${randomUUID()}`;
     leaderChannelSessionId = sessionId;
+    // Mark this session as the leader so the mutation gate can never block it.
+    // The gate's AsyncLocalStorage store is inherited down async chains rooted
+    // by teammate turns, so an ambient teammate id can leak onto leader tool
+    // calls; this registration is the durable "leader is never a teammate"
+    // anchor. Paired with unregisterLeaderSession in session_shutdown.
+    registerLeaderSession(sessionId);
+    // Captured so the delivery path can ask "can the leader be woken right
+    // now?". Read through the LIVE ctx at call time (not cached): the leader's
+    // busy/idle state changes every turn, and a ctx captured now can go stale
+    // after a session replacement. `safeIsIdle` in leaderNotification handles
+    // the throw from a stale ctx by treating it as "not idle".
+    const isLeaderIdle = () => ctx.isIdle();
     registerLeaderChannel(sessionId, {
       deliver: (details, triggerTurn) => {
-        postLeaderNotification(pi, details, triggerTurn);
+        postLeaderNotification(pi, details, triggerTurn, isLeaderIdle);
       },
     });
 
-    const tasksHandle = getTasksHandle(pi);
-    tasksHandle.registerTaskType("in_process_teammate", InProcessTeammateTask);
     // Leader-only tools. These are intentionally registered in session_start
     // (not top-level): teammate sub-sessions never fire session_start, and the
     // blocklist in spawnTeammate strips these from teammates anyway, so keeping
     // them here keeps them off teammates while still available to the leader.
+    //
+    // Register BEFORE any tasks-handle work. These tool factories resolve their
+    // collaborators lazily at call time (getTeammateHandle inside execute), so
+    // they do not need the store here — and registering first means a hiccup in
+    // the tasks handle can never make the leader's whole team toolset vanish.
+    // That failure mode was observed for real: the session still had the
+    // factory-level send_message + team_task_* tools but no team_create.
     pi.registerTool(buildTeamCreateTool(pi));
     pi.registerTool(buildTeamDeleteTool(pi));
     pi.registerTool(buildTeamPlanApproveTool(pi));
+
+    // Resolve through a lazy handle so nothing below can throw merely because
+    // the tasks extension has not attached yet. Real usage still fails loudly.
+    const tasksHandle = lazyTasksHandle(pi);
+    try {
+      tasksHandle.registerTaskType("in_process_teammate", InProcessTeammateTask);
+    } catch (e) {
+      // Non-fatal: teammates can still be spawned in this session; only the
+      // task-panel entry for them is unavailable. Never let this skip the
+      // leader tool registration above.
+      logError(e, "teammate registerTaskType");
+    }
 
     // Hydrate teammates from the parent session's jsonl. Failures must not
     // break session_start — a corrupt or unreadable jsonl should still allow
@@ -299,7 +360,7 @@ export default function teammateExtension(pi: ExtensionAPI): void {
               const sessionFile = target.sessionFile;
               const identity = target.identity;
               const overlayPromise = ctx.ui.custom<void>(
-                (_tui, theme, _kb, done) => {
+                (tui, theme, _kb, done) => {
                   overlayDone = done;
                   // Narrow Pi `Theme` to the minimal `fg`-only surface
                   // expected by renderTeammateOverlay so the overlay
@@ -335,6 +396,12 @@ export default function teammateExtension(pi: ExtensionAPI): void {
                     },
                     openSession: (path) => SessionManager.open(path),
                     theme: overlayTheme,
+                    // Report the TERMINAL height; the component subtracts the
+                    // input-dock reserve so the editor stays visible (the
+                    // overlay composites from the top of the same frame the
+                    // dock occupies the bottom of). Read it per render so a
+                    // resize is picked up without re-opening the overlay.
+                    getHeight: () => tui.terminal.rows,
                   });
                 },
                 {
@@ -399,25 +466,33 @@ export default function teammateExtension(pi: ExtensionAPI): void {
     unsubWidget = undefined;
     if (leaderChannelSessionId) {
       unregisterLeaderChannel(leaderChannelSessionId);
+      unregisterLeaderSession(leaderChannelSessionId);
       leaderChannelSessionId = undefined;
     }
-    const tasksHandle = getTasksHandle(pi);
-    const running = getRunningTasks(tasksHandle.store.get()).filter(
-      (t) => t.type === "in_process_teammate",
-    );
-    // Promise.allSettled — a single kill failure must not abort the rest.
-    // Each kill is wrapped in try/catch so the surrounding allSettled never
-    // sees a reject; logError surfaces the failure for diagnostics.
-    await Promise.allSettled(
-      running.map(async (t) => {
-        try {
-          await suspendTeammate(tasksHandle.store, t.id);
-        } catch (e) {
-          logError(e, "teammate session_shutdown kill");
-        }
-      }),
-    );
-    tasksHandle.unregisterTaskType("in_process_teammate");
+    // Everything above is unconditional leader-side teardown. The tasks-handle
+    // work below is best-effort: a missing handle must not skip the store
+    // resets or prevent the leader channel from being cleaned up.
+    try {
+      const tasksHandle = getTasksHandle(pi);
+      const running = getRunningTasks(tasksHandle.store.get()).filter(
+        (t) => t.type === "in_process_teammate",
+      );
+      // Promise.allSettled — a single kill failure must not abort the rest.
+      // Each kill is wrapped in try/catch so the surrounding allSettled never
+      // sees a reject; logError surfaces the failure for diagnostics.
+      await Promise.allSettled(
+        running.map(async (t) => {
+          try {
+            await suspendTeammate(tasksHandle.store, t.id);
+          } catch (e) {
+            logError(e, "teammate session_shutdown kill");
+          }
+        }),
+      );
+      tasksHandle.unregisterTaskType("in_process_teammate");
+    } catch (e) {
+      logError(e, "teammate session_shutdown tasks handle");
+    }
     _unbindPi();
     teamStore._resetForTest();
     mailbox._resetForTest();

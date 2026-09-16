@@ -29,12 +29,13 @@ import type { AgentModel, AgentThinkingLevel } from "../localagent/model.js";
 import { registerTask, updateTaskState } from "../tasks/framework.js";
 import { evictTaskOutput, initTaskOutput } from "../tasks/diskOutput.js";
 import { getTaskOutputPath } from "../tasks/outputPath.js";
-import { createTaskStateBase, generateTaskId } from "../tasks/Task.js";
+import { createTaskStateBase, generateTaskId, isTerminalTaskStatus } from "../tasks/Task.js";
 import { logError } from "../tasks/logging.js";
 import { getAgentCapacity } from "../tasks/agentCapacityHandle.js";
 import type { AgentCapacityLease } from "../tasks/agentCapacity.js";
 
 import { TEAMMATE_EVENT_CUSTOM_TYPE, emitTeammateEvent } from "./eventEmit.js";
+import { getLeaderChannel } from "./leaderBridge.js";
 import { postLeaderNotification } from "./leaderNotification.js";
 import {
   grantApproval,
@@ -48,12 +49,13 @@ import {
   type ReplayedState,
   type ReplayedTeammate,
 } from "./jsonlEvents.js";
-import type { TeammateHandle } from "./handle.js";
+import { retireTeammate, type TeammateHandle } from "./handle.js";
 import { startTeammateLoop } from "./teammateLoop.js";
 import { filterTeammateTools } from "./teammateToolPool.js";
 import { subscribeTeammateProgress } from "./sessionProgress.js";
 import { buildTeammateTeamTaskTools } from "./teamTasks/tools/teammateTeamTaskTools.js";
 import { buildTeammateSendMessageTool } from "./tools/teammateSendMessage.js";
+import { buildTeamRosterTool } from "./tools/teamRoster.js";
 import {
   buildRequestPlanApprovalTool,
   type PendingApprovals,
@@ -250,6 +252,7 @@ async function createResumedAgentSession(
   const roleTools = resolveSubAgentTools(agentDef, allToolNames);
   const collaborationTools = [
     "send_message",
+    "team_roster",
     "request_plan_approval",
     "team_task_create",
     "team_task_update",
@@ -268,7 +271,11 @@ async function createResumedAgentSession(
     set: (id, entry) => { pendingApprovalsMap.set(id, entry); },
     get: (id) => pendingApprovalsMap.get(id),
     delete: (id) => { pendingApprovalsMap.delete(id); },
+    ids: () => [...pendingApprovalsMap.keys()].sort(),
   };
+  // Mirror spawnTeammate: let team_plan_approve validate a request_id for a
+  // resumed teammate too.
+  ctx.handle.approvalRequests.register(replayed.identity.agentId, pendingApprovals);
   const { session } = await _hydrateSdk.createAgentSessionFromServices({
     services,
     sessionManager: sm,
@@ -290,12 +297,20 @@ async function createResumedAgentSession(
         pendingApprovals,
         getLeaderChannel: () => ({
           deliver: (details, triggerTurn) => {
+            // Route through the leader channel so the live `isLeaderIdle` probe
+            // decides between waking an idle leader and the loss-proof queue.
+            const ch = getLeaderChannel();
+            if (ch) {
+              ch.deliver(details, triggerTurn);
+              return;
+            }
             postLeaderNotification(ctx.pi, details, triggerTurn);
           },
         }),
         onApproved: () => grantApproval(replayed.sessionFile),
       }),
       ...buildTeammateTeamTaskTools(ctx.pi, ctx.handle, replayed.identity),
+      buildTeamRosterTool(ctx.pi, { handle: ctx.handle, identity: replayed.identity }),
     ],
   });
   return { session: session as AgentSession, pendingApprovals };
@@ -416,7 +431,7 @@ export async function respawnTeammates(
       ));
     } catch (error) {
       residentLease.release();
-      ctx.handle.teamStore.removeMember(replayed.identity.teamName, agentId);
+      retireTeammate(ctx.handle, replayed.identity, replayed.sessionFile);
       const message = error instanceof Error ? error.message : String(error);
       emitTeammateEvent(ctx.pi, {
         kind: "teammate_terminal",
@@ -504,6 +519,14 @@ export async function respawnTeammates(
     const handleRef = ctx.handle;
 
     registerApprovalSession(replayed.sessionFile, replayed.identity);
+
+    // Mirror spawnTeammate.ts: a teammate the leader already tore down must not
+    // keep surfacing turns. See spawnTeammate.ts for the observed failure.
+    const isTaskTerminal = (): boolean => {
+      const current = taskStoreRef.getTask(taskId);
+      return !current || isTerminalTaskStatus(current.status);
+    };
+
     startTeammateLoop({
       identity: replayed.identity,
       initialPrompt: undefined, // resume — go straight to idle
@@ -533,6 +556,7 @@ export async function respawnTeammates(
       },
       onTurnResult: (text) => {
         if (!text.trim()) return;
+        if (isTaskTerminal()) return;
         postLeaderNotification(
           piRef,
           { kind: "result", agentId, body: text },
@@ -545,6 +569,7 @@ export async function respawnTeammates(
           taskStoreRef,
           (t) => ({ ...t, lastError: error.message }),
         );
+        if (isTaskTerminal()) return;
         postLeaderNotification(
           piRef,
           { kind: "turn_error", agentId, error: error.message },
@@ -558,6 +583,7 @@ export async function respawnTeammates(
           taskStoreRef,
           (t) => ({ ...t, isIdle: true }),
         );
+        if (isTaskTerminal()) return;
         // Mirror spawnTeammate.ts — surface idle to the leader's main LLM
         // as an informational notification (triggerTurn:false).
         postLeaderNotification(
@@ -627,7 +653,7 @@ export async function respawnTeammates(
           agentId,
           status: terminalStatus,
         });
-        handleRef.teamStore.removeMember(teamName, agentId);
+        retireTeammate(handleRef, { teamName, agentId }, replayed.sessionFile);
         try {
           session.dispose();
         } catch (e) {

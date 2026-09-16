@@ -139,6 +139,15 @@ export default function mcpExtension(pi: ExtensionAPI): void {
       label: spec.label,
       description: spec.description,
       parameters: spec.parameters,
+      // Opt this tool into the system prompt's `Available tools` section.
+      //
+      // Pi only lists a custom tool there when `promptSnippet` is set. Without
+      // it MCP tools are registered and callable but *invisible*: the model has
+      // no way to learn they exist, so it must guess names and tends to
+      // conclude the capability is missing. Observed for real — an agent probed
+      // only read-only MCP tools, then reported the write/generation tools as
+      // absent while all 14 were registered.
+      promptSnippet: spec.promptSnippet,
       executionMode: "parallel",
       // Self-render like claude-ui's native overrides — no default bg Box —
       // with a `● server:tool(args)` head and a `⎿` result that folds when

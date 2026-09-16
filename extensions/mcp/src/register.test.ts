@@ -22,6 +22,48 @@ describe("buildToolDefinitions", () => {
     expect(defs[0].parameters as unknown).toEqual({ __from: { type: "object" } });
   });
 
+  // The system prompt's `Available tools` section only lists a custom tool when
+  // `promptSnippet` is set. Without this the MCP tools are registered but
+  // invisible, which is exactly how an agent concluded "the image-generation
+  // tools are not in my tool list" while all of them were present.
+  it("sets a promptSnippet naming the callable tool plus a description hint", () => {
+    const defs = buildToolDefinitions(
+      "game-studio",
+      [{ name: "GenerateImageAssets", description: "按契约批量生图", inputSchema: {} }],
+      stubConvert as never,
+    );
+    expect(defs[0].promptSnippet).toBe(
+      "mcp__game-studio__GenerateImageAssets — 按契约批量生图",
+    );
+  });
+
+  it("still sets a promptSnippet when the server omits a description", () => {
+    const defs = buildToolDefinitions("srv", [{ name: "t" }], stubConvert as never);
+    // Falls back to the bare callable name so the tool is never invisible.
+    expect(defs[0].promptSnippet).toBe("mcp__srv__t");
+  });
+
+  it("clips a verbose description so one server cannot bloat the prompt", () => {
+    const defs = buildToolDefinitions(
+      "srv",
+      [{ name: "t", description: "x".repeat(500) }],
+      stubConvert as never,
+    );
+    expect(defs[0].promptSnippet.length).toBeLessThanOrEqual(
+      "mcp__srv__t — ".length + 100,
+    );
+    expect(defs[0].promptSnippet).toContain("…");
+  });
+
+  it("collapses newlines in the hint so the snippet stays one line", () => {
+    const defs = buildToolDefinitions(
+      "srv",
+      [{ name: "t", description: "line one\n\n  line two" }],
+      stubConvert as never,
+    );
+    expect(defs[0].promptSnippet).toBe("mcp__srv__t — line one line two");
+  });
+
   it("fills a placeholder description when missing or blank", () => {
     const defs = buildToolDefinitions(
       "srv",
