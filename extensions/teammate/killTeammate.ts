@@ -27,6 +27,7 @@ import { retireTeammate, type TeammateHandle } from "./handle.js";
 import { getTeammateHandle } from "./handle.js";
 import { emitTeammateEvent } from "./eventEmit.js";
 import type { InProcessTeammateTaskState } from "./types.js";
+import { isInProcessTeammateTask } from "./types.js";
 import { unregisterApprovalSession } from "./approvalGate.js";
 
 /**
@@ -163,4 +164,61 @@ export const InProcessTeammateTask: Task = {
     const handle = getTeammateHandle(_currentPi);
     await killTeammate(_currentPi, store as TaskStore, handle, taskId);
   },
+  /**
+   * Answer "is this teammate wedged, or just busy?" — the question that could
+   * not be answered before, and which got a 200s `sleep`-polling artist
+   * misdiagnosed as unresponsive and killed.
+   *
+   * `lastTool` + `lastToolStartedAt` is the load-bearing pair: a teammate
+   * that has been inside `bash` for 3 minutes is NOT hung, it simply cannot
+   * read messages until that call returns. Treating message latency as a
+   * liveness signal is the mistake this block exists to prevent.
+   */
+  describe(taskId: string, store: TaskStoreLike): string[] | undefined {
+    const task = store.getTask(taskId) as InProcessTeammateTaskState | undefined;
+    if (!task || !isInProcessTeammateTask(task)) return undefined;
+    const lines: string[] = [];
+    const who = task.identity?.agentId ?? taskId;
+    lines.push(`teammate: ${who}`);
+    lines.push(
+      task.isIdle
+        ? "state: idle (between turns — NOT necessarily finished, stuck, or waiting on you)"
+        : "state: running (currently inside a turn)",
+    );
+    if (task.lastTool) {
+      const since = task.lastToolStartedAt ? Date.now() - task.lastToolStartedAt : undefined;
+      const held = since !== undefined ? ` for ${formatDuration(since)}` : "";
+      lines.push(`current tool: ${task.lastTool}${held}`);
+      // The single most useful sentence in this block: distinguish "taking a
+      // long time inside a tool call" from "wedged".
+      if (!task.isIdle && since !== undefined && since > 60_000) {
+        lines.push(
+          `  ⚠ inside ${task.lastTool} for >1min — it CANNOT read your messages until this returns; this is normal for a long poll, not a hang`,
+        );
+      }
+    }
+    if (task.pendingMessages.length > 0) {
+      lines.push(
+        `queued messages: ${task.pendingMessages.length} (delivered when the current turn ends)`,
+      );
+    }
+    lines.push(`turns: ${task.turnCount} · tool calls: ${task.toolCallCount}`);
+    if (task.shutdownRequested) {
+      lines.push(
+        task.shutdownAcknowledged
+          ? "shutdown: requested and acknowledged (should exit shortly)"
+          : "shutdown: requested, NOT yet acknowledged (it never saw the request — consider task_kill)",
+      );
+    }
+    if (task.lastError) lines.push(`last error: ${task.lastError}`);
+    return lines;
+  },
 };
+
+function formatDuration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rest = s % 60;
+  return rest === 0 ? `${m}m` : `${m}m${rest}s`;
+}

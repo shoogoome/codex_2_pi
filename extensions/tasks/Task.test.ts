@@ -29,6 +29,7 @@ describe("generateTaskId", () => {
     local_workflow: "w",
     monitor_mcp: "m",
     dream: "d",
+    async_shell: "b", // reuses the bash prefix — it IS a bash job, just backgrounded
   };
 
   it("uses the expected prefix per task type", () => {

@@ -14,10 +14,14 @@ export function buildTaskKillTool(store: TaskStore): ToolDefinition<typeof TaskK
     name: "task_kill",
     label: "Kill task",
     description:
-      "Stop a running task by ID. Works across all task types (bash, agent, ...)." +
-      "\n\n## Polling caveat\n\n" +
-      "- For teammates, prefer the graceful protocol: `send_message {to:\"<name>\", message:'{\"type\":\"shutdown_request\",\"request_id\":\"r1\"}'}` — the teammate's loop auto-acks and exits. Use task_kill only as a forced last resort (or via team_delete cascade for the whole team).",
+      "Force-stop a running task by ID. Works across all task types (bash, agent, teammate, ...)." +
+      "\n\n## When to use\n\n" +
+      "- **Teammate unresponsive / stuck in a long command**: `task_kill` is the correct, immediate remedy. It does NOT need the teammate's cooperation, so it works even when the teammate cannot read messages. Ask the leader for the decision on whether to kill, then call this.\n" +
+      "- **Graceful stop is still preferred when the teammate is responsive**: `send_message {to:\"<name>\", message:'{\"type\":\"shutdown_request\",\"request_id\":\"r1\"}'}` lets it ack and exit cleanly. It is a REQUEST — if the teammate is inside a long-running tool call it will not see it until that call returns.\n" +
+      "- **Do not use task_kill just to read progress.** Use `task_status` for that; killing is terminal.\n" +
+      "- **Whole team**: `team_delete` cascade-kills every member.",
     parameters: TaskKillParams,
+    promptSnippet: "Force-stop a running task or teammate by ID (no cooperation needed)",
     executionMode: "parallel",
     renderShell: "self",
     async execute(_callId, rawParams): Promise<AgentToolResult<{ action: string }>> {

@@ -205,7 +205,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	// Read-only guard: block write-class tools and write bash commands.
 	pi.on("tool_call", async (event) => {
 		if (!getState().enabled) return;
-		if (isToolCallEventType("bash", event) || event.toolName === "task_bash") {
+		if (isToolCallEventType("bash", event) || event.toolName === "task_bash" || event.toolName === "async_bash") {
 			const command = (event.input as { command?: unknown }).command;
 			if (typeof command === "string" && isWriteBashCommand(command)) {
 				return {

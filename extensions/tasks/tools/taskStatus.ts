@@ -6,6 +6,7 @@ import type {
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { TaskStore } from "../taskStore.js";
+import { getTaskType } from "../taskTypeRegistry.js";
 import { getTaskOutputDelta, flushTaskOutput } from "../diskOutput.js";
 import { logError } from "../logging.js";
 
@@ -27,6 +28,8 @@ interface TaskStatusDetails {
   output_delta: string;
   next_offset: number;
   total_size: number;
+  /** Per-type diagnostic lines (see `Task.describe`). */
+  diagnostics?: string[];
 }
 
 interface RenderTheme {
@@ -46,11 +49,15 @@ export function buildTaskStatusTool(store: TaskStore): ToolDefinition<typeof Tas
     label: "Task status",
     description:
       "Read a task's current status, terminal exit info, and incremental output past a byte offset." +
-      "\n\n## Polling caveat\n\n" +
+      "\n\n## What you get\n\n" +
+      "- `status` / `type` / `description` / timing, plus output since `output_offset`.\n" +
+      "- Task-type diagnostics when the type provides them. For a teammate these answer \"is it stuck, or just busy?\": idle vs running, which tool it is currently inside and for how long, messages queued behind that call, turn count, and last error. Read these BEFORE concluding a teammate is unresponsive — a teammate inside a long `bash` call cannot read your messages, and from the outside that looks identical to a hang.\n" +
+      "\n## Polling caveat\n\n" +
       "- Do NOT use task_status to poll teammate progress after send_message. Teammate replies are AUTOMATICALLY delivered to your context as new turns; just wait or work on other things.\n" +
-      "- Do NOT use task_status to check if a teammate is idle. Idle notifications are auto-delivered with triggerTurn:false (informational). Polling adds noise without value.\n" +
-      "- DO use task_status when: (a) you have an explicit reason to inspect a long-running local_bash task or local_agent sub-agent, (b) debugging a stuck task, or (c) verifying terminal state after kill.",
+      "- Do NOT use task_status merely to check if a teammate is idle. Idle notifications are auto-delivered with triggerTurn:false (informational), and **idle does not mean the teammate is finished, stuck, or waiting on you** — it may simply be between turns with work still pending.\n" +
+      "- DO use task_status when: (a) a teammate has gone quiet and you must decide whether it is working or wedged, (b) you have an explicit reason to inspect a long-running local_bash task or local_agent sub-agent, (c) debugging a stuck task, or (d) verifying terminal state after kill.",
     parameters: TaskStatusParams,
+    promptSnippet: "Inspect a task/teammate: status, diagnostics, incremental output",
     executionMode: "parallel",
     // Render without Pi's default backgrounded Box — matches claude-ui's
     // native-tool overrides so the stream has one consistent look.
@@ -74,6 +81,14 @@ export function buildTaskStatusTool(store: TaskStore): ToolDefinition<typeof Tas
       } catch (e) {
         logError(e, "task_status");
       }
+      let diagnostics: string[] | undefined;
+      try {
+        const impl = getTaskType(task.type);
+        diagnostics = impl?.describe?.(task_id, store);
+      } catch (e) {
+        // Diagnostics are a debugging aid — never fail the whole status read.
+        logError(e, "task_status.describe");
+      }
       const details: TaskStatusDetails = {
         action: "status",
         status: task.status,
@@ -85,8 +100,13 @@ export function buildTaskStatusTool(store: TaskStore): ToolDefinition<typeof Tas
         output_delta: delta,
         next_offset: nextOffset,
         total_size: nextOffset,
+        diagnostics,
       };
-      const head = `${task.status} (${task.type}) — ${task.description}`;
+      const diagBlock =
+        diagnostics && diagnostics.length > 0
+          ? `\n${diagnostics.map((line) => `  ${line}`).join("\n")}`
+          : "";
+      const head = `${task.status} (${task.type}) — ${task.description}${diagBlock}`;
       const tail = delta ? `\n${delta}` : "";
       return { content: [{ type: "text", text: head + tail }], details };
     },

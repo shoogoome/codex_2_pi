@@ -59,6 +59,7 @@ export function buildSendMessageTool(
     name: "send_message",
     label: "Send a message to a teammate",
     description: DESCRIPTION,
+    promptSnippet: "Send a message to a teammate or broadcast within your team",
     parameters: SendMessageParams,
     executionMode: "parallel",
     renderShell: "self",

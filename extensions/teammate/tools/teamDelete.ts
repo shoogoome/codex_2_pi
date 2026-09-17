@@ -42,6 +42,7 @@ export function buildTeamDeleteTool(
     name: "team_delete",
     label: "Delete a team and all its teammates",
     description: DESCRIPTION,
+    promptSnippet: "Delete a team, shutting down all of its teammates",
     parameters: TeamDeleteParams,
     executionMode: "parallel",
     renderShell: "self",

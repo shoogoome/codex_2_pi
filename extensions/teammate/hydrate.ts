@@ -51,7 +51,7 @@ import {
 } from "./jsonlEvents.js";
 import { retireTeammate, type TeammateHandle } from "./handle.js";
 import { startTeammateLoop } from "./teammateLoop.js";
-import { filterTeammateTools } from "./teammateToolPool.js";
+import { filterTeammateTools, TEAMMATE_COLLABORATION_TOOLS } from "./teammateToolPool.js";
 import { subscribeTeammateProgress } from "./sessionProgress.js";
 import { buildTeammateTeamTaskTools } from "./teamTasks/tools/teammateTeamTaskTools.js";
 import { buildTeammateSendMessageTool } from "./tools/teammateSendMessage.js";
@@ -250,15 +250,7 @@ async function createResumedAgentSession(
   });
   const allToolNames = ctx.pi.getAllTools().map((tool) => tool.name);
   const roleTools = resolveSubAgentTools(agentDef, allToolNames);
-  const collaborationTools = [
-    "send_message",
-    "team_roster",
-    "request_plan_approval",
-    "team_task_create",
-    "team_task_update",
-    "team_task_list",
-    "team_task_get",
-  ];
+  const collaborationTools = [...TEAMMATE_COLLABORATION_TOOLS];
   const tools = filterTeammateTools([
     ...new Set([...roleTools, ...collaborationTools]),
   ]);

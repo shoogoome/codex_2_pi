@@ -29,9 +29,11 @@ export function buildTaskListTool(store: TaskStore): ToolDefinition<typeof TaskL
     description:
       "List currently registered tasks. Filter='running' (default) or 'all'." +
       "\n\n## Polling caveat\n\n" +
-      "- task_list shows ALL active tasks. Don't use it as a \"show me my teammates\" check — your team membership is reflected in the TUI widget and any teammate updates arrive as automatic context messages.\n" +
+      "- task_list shows ALL active tasks, including every teammate in this session and the background tasks (`local_bash` / `local_agent`) they and you have spawned. Use it to discover the `task_id` you need for `task_status` / `task_kill`.\n" +
+      "- Don't use it as a \"show me my teammates\" check — your team membership and availability are reported by `team_roster`, and teammate updates arrive automatically as context messages.\n" +
       "- Use task_list mainly for: (a) finding background tasks you spawned earlier, (b) seeing if there are unrelated tasks competing for resources.",
     parameters: TaskListParams,
+    promptSnippet: "List running tasks (teammates, background shells) with ids for status/kill",
     executionMode: "parallel",
     renderShell: "self",
     async execute(_callId, rawParams): Promise<AgentToolResult<TaskListDetails>> {

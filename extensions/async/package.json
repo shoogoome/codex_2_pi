@@ -1,0 +1,10 @@
+{
+  "name": "pi-async-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Background shell execution with completion callbacks: async_bash / async_status / async_kill / async_wait.",
+  "pi": {
+    "extensions": ["dist/index.js"]
+  }
+}

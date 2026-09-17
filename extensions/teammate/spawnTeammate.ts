@@ -54,7 +54,7 @@ import {
 } from "./approvalGate.js";
 import { fingerprintAgentDefinition } from "./roleFingerprint.js";
 import { startTeammateLoop } from "./teammateLoop.js";
-import { filterTeammateTools } from "./teammateToolPool.js";
+import { filterTeammateTools, TEAMMATE_COLLABORATION_TOOLS } from "./teammateToolPool.js";
 import { prependBoilerplate } from "./teammatePromptBoilerplate.js";
 import { subscribeTeammateProgress } from "./sessionProgress.js";
 import { buildTeammateTeamTaskTools } from "./teamTasks/tools/teammateTeamTaskTools.js";
@@ -243,15 +243,7 @@ async function spawnTeammateWithLease(
   const allToolInfos = pi.getAllTools();
   const allToolNames = allToolInfos.map((t) => t.name);
   const roleTools = resolveSubAgentTools(agentDef, allToolNames);
-  const collaborationTools = [
-    "send_message",
-    "team_roster",
-    "request_plan_approval",
-    "team_task_create",
-    "team_task_update",
-    "team_task_list",
-    "team_task_get",
-  ];
+  const collaborationTools = [...TEAMMATE_COLLABORATION_TOOLS];
   const tools = filterTeammateTools([...new Set([...roleTools, ...collaborationTools])]);
 
   // Leader-realm map of in-flight plan_approval_request entries. Allocated

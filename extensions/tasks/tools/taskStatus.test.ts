@@ -160,3 +160,75 @@ describe("buildTaskStatusTool", () => {
     });
   });
 });
+
+describe("buildTaskStatusTool — promptSnippet + per-type diagnostics", () => {
+  // Regression: pi leaves a custom tool OUT of the system prompt's
+  // `Available tools` section entirely when `promptSnippet` is omitted
+  // (pi resource-loader: "Omitting promptSnippet now leaves the tool out of
+  // that section instead of falling back to description"). task_status was
+  // invisible to the model because of this.
+  it("declares a promptSnippet so the tool is visible in Available tools", () => {
+    const tool = buildTaskStatusTool(createTaskStore());
+    expect(tool.promptSnippet).toBeTruthy();
+    expect(typeof tool.promptSnippet).toBe("string");
+  });
+
+  it("appends Task.describe() output to the status head", async () => {
+    const store = createTaskStore();
+    store._setSessionId(`test-${Math.random()}`);
+    _setDefaultTaskStoreForTest(store);
+    const task = sample("b-desc1");
+    registerTask(task as never, store);
+    const fakeImpl = {
+      name: "FakeTask",
+      type: "local_bash" as const,
+      kill: vi.fn(),
+      describe: vi.fn(() => ["teammate: artist-1@forge", "state: running (currently inside a turn)"]),
+    };
+    const { registerTaskType } = await import("../taskTypeRegistry.js");
+    registerTaskType("local_bash", fakeImpl);
+
+    const tool = buildTaskStatusTool(store);
+    const res = await run(tool, { task_id: "b-desc1" });
+    const text = getText(res.content[0]);
+    expect(text).toContain("teammate: artist-1@forge");
+    expect(text).toContain("state: running");
+    expect(fakeImpl.describe).toHaveBeenCalledWith("b-desc1", store);
+  });
+
+  it("a throwing describe() does not break the status read", async () => {
+    const store = createTaskStore();
+    store._setSessionId(`test-${Math.random()}`);
+    _setDefaultTaskStoreForTest(store);
+    const task = sample("b-desc2");
+    registerTask(task as never, store);
+    const { registerTaskType } = await import("../taskTypeRegistry.js");
+    registerTaskType("local_bash", {
+      name: "BoomTask",
+      type: "local_bash" as const,
+      kill: vi.fn(),
+      describe: vi.fn(() => {
+        throw new Error("boom");
+      }),
+    });
+
+    const tool = buildTaskStatusTool(store);
+    const res = await run(tool, { task_id: "b-desc2" });
+    const text = getText(res.content[0]);
+    expect(text).toContain("b-desc2");
+  });
+
+  it("omits the diagnostic block when the type provides no describe()", async () => {
+    const store = createTaskStore();
+    store._setSessionId(`test-${Math.random()}`);
+    _setDefaultTaskStoreForTest(store);
+    const task = sample("b-desc3");
+    registerTask(task as never, store);
+    const { registerTaskType } = await import("../taskTypeRegistry.js");
+    registerTaskType("local_bash", { name: "PlainTask", type: "local_bash" as const, kill: vi.fn() });
+
+    const tool = buildTaskStatusTool(store);
+    const res = await run(tool, { task_id: "b-desc3" });
+    expect(res.details?.diagnostics).toBeUndefined();
+  });
+});

@@ -41,6 +41,7 @@ export function buildTeamCreateTool(
     name: "team_create",
     label: "Create a team of in-process teammates",
     description: DESCRIPTION,
+    promptSnippet: "Create a team to hold long-lived teammates",
     parameters: TeamCreateParams,
     executionMode: "parallel",
     renderShell: "self",

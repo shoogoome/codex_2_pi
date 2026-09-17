@@ -124,6 +124,7 @@ export function buildRequestPlanApprovalTool(
     name: "request_plan_approval",
     label: "Ask leader to approve the plan",
     description: DESCRIPTION,
+    promptSnippet: "Ask the leader to approve your plan (required before mutating tools)",
     parameters: RequestPlanApprovalParams,
     executionMode: "parallel",
     async execute(_callId: unknown, raw: unknown, signal?: AbortSignal) {

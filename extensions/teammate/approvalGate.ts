@@ -203,7 +203,7 @@ const DIRECT_MUTATION_TOOLS = new Set([
 
 export function isApprovalRequiredToolCall(toolName: string, input: unknown): boolean {
   if (isWriteTool(toolName) || DIRECT_MUTATION_TOOLS.has(toolName)) return true;
-  if (toolName === "bash" || toolName === "task_bash") {
+  if (toolName === "bash" || toolName === "task_bash" || toolName === "async_bash") {
     const command = typeof input === "object" && input !== null
       ? (input as { command?: unknown }).command
       : undefined;

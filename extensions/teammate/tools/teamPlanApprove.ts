@@ -69,6 +69,7 @@ export function buildTeamPlanApproveTool(
     name: "team_plan_approve",
     label: "Approve or reject a teammate's plan",
     description: DESCRIPTION,
+    promptSnippet: "Approve or reject a teammate plan_approval_request",
     parameters: TeamPlanApproveParams,
     executionMode: "parallel",
     renderShell: "self",

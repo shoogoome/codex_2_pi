@@ -83,6 +83,7 @@ export function buildTeammateSendMessageTool(
     label: "Send a message to the leader or a teammate",
     description: DESCRIPTION,
     parameters: SendMessageParams,
+    promptSnippet: "Send a message to your leader or a peer teammate",
     executionMode: "parallel",
     async execute(_callId: unknown, raw: unknown) {
       const params = raw as { to?: string; message?: string };

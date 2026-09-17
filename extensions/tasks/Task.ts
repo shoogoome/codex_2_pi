@@ -22,7 +22,16 @@ export type TaskType =
   | "dream"
   | "remote_agent"
   | "local_workflow"
-  | "monitor_mcp";
+  | "monitor_mcp"
+  /**
+   * Background shell jobs submitted by the `async` extension's `async_bash`.
+   *
+   * Separate from `local_bash` on purpose: `localshell`'s `task_bash` also
+   * registers `local_bash`, and two extensions registering the same type would
+   * silently override each other's `kill` (the registry warns and last-wins),
+   * breaking `task_kill` for whichever lost. Distinct types keep both alive.
+   */
+  | "async_shell";
 
 export type TaskStatus = "pending" | "running" | "completed" | "failed" | "killed";
 
@@ -63,6 +72,18 @@ export interface Task {
   name: string;
   type: TaskType;
   kill(taskId: string, store: TaskStoreLike): Promise<void>;
+  /**
+   * Optional diagnostic lines surfaced by `task_status` (after the status head,
+   * before the output delta). Implemented per task type so `tasks` stays
+   * independent of concrete type internals — the concrete type knows which of
+   * its fields are worth reporting, the generic tool just prints them.
+   *
+   * Motivation: "did the teammate hang, or is it just inside a long command?"
+   * is not answerable from status + output alone. Without this the caller has
+   * to guess from message latency and gets it wrong (misdiagnosing a 200s bash
+   * poll as a dead teammate).
+   */
+  describe?(taskId: string, store: TaskStoreLike): string[] | undefined;
 }
 
 // 减小循环 import:此处只需要 set/getTask 两个能力的形状,完整接口在 taskStore.ts。
@@ -84,6 +105,7 @@ const TASK_ID_PREFIXES: Record<TaskType, string> = {
   local_workflow: "w",
   monitor_mcp: "m",
   dream: "d",
+  async_shell: "b", // 复用 bash 前缀:它就是一个后台 bash 任务
 };
 
 // 36^8 ≈ 2.8 万亿组合,足够防 sandbox symlink 攻击的 brute-force。

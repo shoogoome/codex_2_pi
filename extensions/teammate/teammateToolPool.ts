@@ -15,6 +15,31 @@ export const TEAMMATE_TOOLS_BLOCKLIST = new Set<string>([
   "team_delete",
 ]);
 
+/**
+ * Collaboration tools every teammate gets, in addition to its role tools.
+ *
+ * Lives here because spawn AND hydrate both need it; when the two lists were
+ * written out separately they could drift, and a resumed teammate would
+ * silently lose a tool it had before the restart.
+ */
+export const TEAMMATE_COLLABORATION_TOOLS = [
+  "send_message",
+  "team_roster",
+  "request_plan_approval",
+  "team_task_create",
+  "team_task_update",
+  "team_task_list",
+  "team_task_get",
+  // Background execution. Teammates are the side most likely to block on a long
+  // poll (`for i in 1..8; do sleep 25; done`) and thereby become unable to read
+  // leader messages — which the leader then misreads as "unresponsive".
+  // async_bash turns that into submit-and-return.
+  "async_bash",
+  "async_status",
+  "async_kill",
+  "async_wait",
+] as const;
+
 export function filterTeammateTools(allTools: readonly string[]): string[] {
   return allTools.filter((name) => !TEAMMATE_TOOLS_BLOCKLIST.has(name));
 }

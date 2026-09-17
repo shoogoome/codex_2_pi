@@ -201,3 +201,101 @@ describe("InProcessTeammateTask interface", () => {
     ).rejects.toThrow(/before extension session_start/);
   });
 });
+
+describe("InProcessTeammateTask.describe — \"stuck or busy?\" diagnostics", () => {
+  // Regression for a real misdiagnosis: artist-1 was inside `sleep 25 x8`
+  // (a 200s bash poll) and could not read leader messages; the leader read
+  // silence as "unresponsive" and had it killed. `describe` exists so the
+  // caller can tell "inside a long tool call" from "wedged" BEFORE acting.
+  function seed(taskId: string, overrides: Partial<InProcessTeammateTaskState>) {
+    const store = createTaskStore();
+    const { state } = buildRunningTask(taskId);
+    registerTask({ ...state, ...overrides } as never, store);
+    return store;
+  }
+
+  it("reports running state + current tool + held duration", () => {
+    const store = seed("t-busy", {
+      isIdle: false,
+      lastTool: "bash",
+      lastToolStartedAt: Date.now() - 200_000,
+      turnCount: 4,
+      toolCallCount: 37,
+    });
+    const lines = InProcessTeammateTask.describe!("t-busy", store)!;
+    const text = lines.join("\n");
+    expect(text).toContain("alpha@team1");
+    expect(text).toContain("state: running");
+    expect(text).toContain("current tool: bash");
+    expect(text).toContain("3m20s");
+    expect(text).toContain("turns: 4");
+    expect(text).toContain("tool calls: 37");
+  });
+
+  it("flags a long-running tool call as NOT a hang (the load-bearing hint)", () => {
+    const store = seed("t-longcall", {
+      isIdle: false,
+      lastTool: "bash",
+      lastToolStartedAt: Date.now() - 120_000,
+    });
+    const text = InProcessTeammateTask.describe!("t-longcall", store)!.join("\n");
+    expect(text).toContain("CANNOT read your messages");
+  });
+
+  it("does not flag a short tool call", () => {
+    const store = seed("t-shortcall", {
+      isIdle: false,
+      lastTool: "read",
+      lastToolStartedAt: Date.now() - 3_000,
+    });
+    const text = InProcessTeammateTask.describe!("t-shortcall", store)!.join("\n");
+    expect(text).not.toContain("CANNOT read your messages");
+  });
+
+  it("says idle is NOT the same as finished", () => {
+    const store = seed("t-idle", { isIdle: true, turnCount: 2 });
+    const text = InProcessTeammateTask.describe!("t-idle", store)!.join("\n");
+    expect(text).toContain("state: idle");
+    expect(text).toContain("NOT necessarily finished");
+  });
+
+  it("reports queued messages (the visible symptom of a blocked teammate)", () => {
+    const store = seed("t-queued", {
+      isIdle: false,
+      lastTool: "bash",
+      lastToolStartedAt: Date.now() - 90_000,
+      pendingMessages: [
+        { from: "leader", body: "please report", ts: 1 },
+        { from: "leader", body: "status?", ts: 2 },
+      ] as never,
+    });
+    const text = InProcessTeammateTask.describe!("t-queued", store)!.join("\n");
+    expect(text).toContain("queued messages: 2");
+    expect(text).toContain("delivered when the current turn ends");
+  });
+
+  it("distinguishes an unacknowledged shutdown request (kill is warranted)", () => {
+    const store = seed("t-shut1", { shutdownRequested: true, shutdownAcknowledged: false });
+    const text = InProcessTeammateTask.describe!("t-shut1", store)!.join("\n");
+    expect(text).toContain("NOT yet acknowledged");
+    expect(text).toContain("task_kill");
+  });
+
+  it("acknowledged shutdown is reported as such", () => {
+    const store = seed("t-shut2", { shutdownRequested: true, shutdownAcknowledged: true });
+    const text = InProcessTeammateTask.describe!("t-shut2", store)!.join("\n");
+    expect(text).toContain("acknowledged");
+    expect(text).not.toContain("NOT yet acknowledged");
+  });
+
+  it("surfaces lastError", () => {
+    const store = seed("t-err", { lastError: "model timeout" });
+    const text = InProcessTeammateTask.describe!("t-err", store)!.join("\n");
+    expect(text).toContain("last error: model timeout");
+  });
+
+  it("returns undefined for an unknown task id", () => {
+    const store = createTaskStore();
+    expect(InProcessTeammateTask.describe!("nope", store)).toBeUndefined();
+  });
+});

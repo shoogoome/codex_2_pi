@@ -53,6 +53,7 @@ export function buildTeamRosterTool(
     name: "team_roster",
     label: "List teammate roster",
     description: DESCRIPTION,
+    promptSnippet: "List your team members and their exact name@team addresses",
     parameters: TeamRosterParams,
     executionMode: "parallel",
     renderShell: "self",
