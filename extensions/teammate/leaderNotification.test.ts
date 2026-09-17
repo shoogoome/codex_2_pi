@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildContent,
   postLeaderNotification,
   setLeaderNotificationMembershipProbe,
   TEAMMATE_NOTIFICATION_CUSTOM_TYPE,
@@ -377,5 +378,69 @@ describe("postLeaderNotification — retired teammate guard", () => {
       true,
     );
     expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("buildContent — approval requests are visually distinct", () => {
+  // Regression from a real session: the leader received five
+  // plan_approval_requests while mid-turn, read them as ordinary
+  // "[from X] {json}" chatter, kept working, and every teammate timed out after
+  // 5 minutes. The request must be recognizable as a BLOCKING ask at a glance,
+  // and must carry the request_id so it can be answered by copying it.
+  const req = {
+    kind: "message" as const,
+    agentId: "artist-2@forge",
+    to: "leader",
+    body: JSON.stringify({
+      type: "plan_approval_request",
+      request_id: "pa-ba9b0e4890c8",
+      plan: "8 个 NPC 立绘",
+    }),
+  };
+
+  it("marks a plan approval request as a pending blocking ask", () => {
+    const text = buildContent(req);
+    expect(text).toContain("待审批");
+    expect(text).toContain("team_plan_approve");
+    expect(text).toContain("artist-2@forge");
+  });
+
+  it("carries the request_id verbatim so it can be copied", () => {
+    expect(buildContent(req)).toContain("pa-ba9b0e4890c8");
+  });
+
+  it("includes the plan body", () => {
+    expect(buildContent(req)).toContain("8 个 NPC 立绘");
+  });
+
+  it("warns that the request expires", () => {
+    expect(buildContent(req)).toMatch(/超时|阻塞/);
+  });
+
+  it("renders an ordinary message WITHOUT the approval marker", () => {
+    const text = buildContent({
+      kind: "message",
+      agentId: "artist-2@forge",
+      to: "leader",
+      body: "进度：已完成 3/8",
+    });
+    expect(text).not.toContain("待审批");
+    expect(text).toBe("[from artist-2@forge] 进度：已完成 3/8");
+  });
+
+  it("does not crash on a body that only looks like protocol JSON", () => {
+    const text = buildContent({
+      kind: "message",
+      agentId: "x@t",
+      to: "leader",
+      body: '{"type":"plan_approval_request"}',
+    });
+    expect(typeof text).toBe("string");
+  });
+
+  it("keeps other notification kinds unchanged", () => {
+    expect(buildContent({ kind: "idle", agentId: "a@t" })).toBe("[teammate a@t idle]");
+    expect(buildContent({ kind: "result", agentId: "a@t", body: "done" })).toContain("result");
+    expect(buildContent({ kind: "turn_error", agentId: "a@t", error: "boom" })).toContain("boom");
   });
 });

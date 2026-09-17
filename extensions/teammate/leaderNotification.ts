@@ -14,7 +14,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { logError } from "../tasks/logging.js";
 import { runWithoutApprovalSession } from "./approvalGate.js";
-import { detectProtocol } from "./protocol.js";
+import { detectProtocol, parsePlanApprovalRequest } from "./protocol.js";
 import type { LeaderNotificationDetails } from "./types.js";
 
 export const TEAMMATE_NOTIFICATION_CUSTOM_TYPE = "teammate/notification";
@@ -82,8 +82,22 @@ function normalizeDetails(details: LeaderNotificationDetails): LeaderNotificatio
   };
 }
 
-function buildContent(details: LeaderNotificationDetails): string {
+export function buildContent(details: LeaderNotificationDetails): string {
   if (details.kind === "message") {
+    // An approval request is a BLOCKING ask: the teammate cannot proceed until
+    // the leader answers, and the request expires. Rendered as a plain
+    // `[from X] {json}` it is indistinguishable from a status message, and that
+    // is exactly what happened in a real session: the leader received five
+    // requests while mid-turn, read them as ordinary chatter, kept working, and
+    // the teammates timed out 5 minutes later. Give it its own loud shape.
+    const req = parsePlanApprovalRequest(details.body);
+    if (req) {
+      return (
+        `⚠️ [from ${details.agentId}] 待审批 · 请立刻用 team_plan_approve 答复（它已阻塞，超时会失败）\n` +
+        `request_id: ${req.request_id}\n` +
+        `plan:\n${req.plan}`
+      );
+    }
     return `[from ${details.agentId}] ${details.body}`;
   }
   if (details.kind === "result") {
