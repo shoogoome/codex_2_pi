@@ -20,6 +20,7 @@ import { buildSendMessageTool } from "./tools/sendMessage.js";
 import { buildTeamRosterTool } from "./tools/teamRoster.js";
 import { buildTeamDeleteTool } from "./tools/teamDelete.js";
 import { buildTeamPlanApproveTool } from "./tools/teamPlanApprove.js";
+import { buildTeammateInterruptTool } from "./tools/teammateInterrupt.js";
 import { buildTeamTaskCreateTool } from "./teamTasks/tools/teamTaskCreate.js";
 import { buildTeamTaskUpdateTool } from "./teamTasks/tools/teamTaskUpdate.js";
 import { buildTeamTaskListTool } from "./teamTasks/tools/teamTaskList.js";
@@ -186,6 +187,7 @@ export default function teammateExtension(pi: ExtensionAPI): void {
     pi.registerTool(buildTeamCreateTool(pi));
     pi.registerTool(buildTeamDeleteTool(pi));
     pi.registerTool(buildTeamPlanApproveTool(pi));
+    pi.registerTool(buildTeammateInterruptTool(pi));
 
     // Resolve through a lazy handle so nothing below can throw merely because
     // the tasks extension has not attached yet. Real usage still fails loudly.

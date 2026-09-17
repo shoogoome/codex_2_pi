@@ -22,7 +22,7 @@
  * index.ts. So a missing/stale build never makes an extension disappear — it just loads
  * the slower way.
  */
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -110,6 +110,53 @@ async function main() {
   }
   const skipped = [...SKIP].filter((n) => n !== "shared");
   console.log(`\nDone. Bundled ${results.length}. Skipped (unbundled, resource deps): ${skipped.join(", ") || "none"}.`);
+  checkDuplicateInlining(results);
+}
+
+/**
+ * Guard against silently-diverging copies of the same module across bundles.
+ *
+ * Why this exists (a real, expensive bug): `localagent/tools/taskAgent.ts`
+ * imports `../../teammate/spawnTeammate.js` and `../../teammate/teammateLoop.js`,
+ * and esbuild inlines both into localagent's bundle. So the teammate RUN LOOP
+ * ships TWICE: once in `teammate/dist/index.js`, once inside
+ * `localagent/dist/index.js`.
+ *
+ * A fix applied to `teammate/` alone therefore updates only ONE of the two
+ * copies that actually execute — and `task_agent` (registered by localagent) is
+ * driven by the localagent copy. That happened for real: several end-to-end runs
+ * and rounds of trace instrumentation all measured a stale copy because only
+ * `teammate` had been rebuilt; a debug marker inside the loop never fired, which
+ * is what finally exposed it.
+ *
+ * This makes the drift loud at build time instead of at runtime. It checks for
+ * the inlined loop's own symbols rather than comparing whole files, because the
+ * two bundles legitimately differ everywhere else.
+ */
+function checkDuplicateInlining(results) {
+  const byName = new Map(results.map((r) => [r.name, r.outfile]));
+  // Markers must be symbols that ONLY exist in the current source. Using a
+  // function NAME is useless: a stale copy still contains the name (and its
+  // call sites), so the check would pass while the code was out of date. These
+  // are the anchors of the interrupt/abort classification, which is exactly
+  // what drifted last time.
+  const markers = ["TeammateTurnAbortedError", "consumeInterruptMarker"];
+  const names = ["teammate", "localagent"];
+  const files = names.map((n) => byName.get(n)).filter(Boolean);
+  if (files.length < 2) return;
+  const missing = markers.filter((m) =>
+    files.some((f) => !readFileSync(f, "utf8").includes(m)),
+  );
+  if (missing.length > 0) {
+    console.error(
+      `\n!! duplicate-inlining drift: ${names.join(" + ")} should ALL contain [${markers.join(", ")}], ` +
+        `but these symbols are missing from at least one: [${missing.join(", ")}].\n` +
+        "   One bundle will run STALE teammate-loop code. Rebuild before testing.",
+    );
+    process.exitCode = 1;
+    return;
+  }
+  console.log("Duplicate-inlining check: ok (teammate loop present in both teammate + localagent).");
 }
 
 main().catch((err) => {

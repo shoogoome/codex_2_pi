@@ -13,6 +13,10 @@ export const TEAMMATE_TOOLS_BLOCKLIST = new Set<string>([
   "task_agent",
   "team_create",
   "team_delete",
+  // Leader-only stop-loss. A teammate must not be able to abort another
+  // teammate's turn — and role tools resolve from `tools: ["*"]`, so without
+  // this entry the tool would leak in via TASK-role definitions.
+  "teammate_interrupt",
 ]);
 
 /**

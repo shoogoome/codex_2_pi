@@ -150,6 +150,18 @@ export type TeammateEvent =
       approve: boolean;
       feedback?: string;
     }
+  /**
+   * Leader stopped a teammate's in-flight turn (stop-loss) without killing it.
+   * Purely informational for replay — the teammate is still alive, so no
+   * state transition is derived from it.
+   */
+  | {
+      kind: "teammate_interrupted";
+      agentId: string;
+      wasBusy: boolean;
+      inTool?: string;
+      busyForMs?: number;
+    }
   | TeamTaskEvent;
 
 /**

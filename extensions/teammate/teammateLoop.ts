@@ -10,6 +10,11 @@
 // Abort: when abortSignal fires, the loop exits at the next await boundary
 // (mid-prompt or mid-wait). Already-running prompts are NOT aborted from
 // the loop — that's the caller's responsibility (call session.abort()).
+//
+// A prompt aborted from OUTSIDE (leader stop-loss via teammate_interrupt)
+// rejects with TeammateTurnAbortedError. The loop treats that as a normal
+// non-event — not a completed turn, not a failed one — because the redirect
+// the leader sends becomes the very next turn.
 
 import { randomBytes } from "node:crypto";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
@@ -27,6 +32,72 @@ import {
 } from "./protocol.js";
 import type { PendingApprovals } from "./tools/requestPlanApproval.js";
 import type { MailboxMessage, TeammateIdentity } from "./types.js";
+
+/**
+ * A turn that was cancelled on purpose (leader stop-loss), as opposed to a turn
+ * that failed. Distinguished from a real error so the loop can stay silent:
+ * a "turn failed" notification after a successful interrupt makes the leader
+ * doubt the interrupt and re-verify work that already happened.
+ */
+export class TeammateTurnAbortedError extends Error {
+  readonly aborted = true;
+  constructor(message = "turn aborted") {
+    super(message);
+    this.name = "TeammateTurnAbortedError";
+  }
+}
+
+function isTurnAborted(error: unknown): boolean {
+  return error instanceof TeammateTurnAbortedError;
+}
+
+/**
+ * pi surfaces a cancelled operation with one of these messages. Kept narrow on
+ * purpose: treating every rejection as an abort would hide real provider
+ * failures as "cancelled".
+ */
+function isAbortError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /aborted|abort requested/i.test(message);
+}
+/**
+ * Explicit "a leader asked to interrupt this teammate" markers.
+ *
+ * The message-text heuristic alone is brittle — a provider could reject with a
+ * message that merely contains "aborted", or pi could change its wording. Both
+ * interruptTeammate (a leader tool) and teammateLoop run in the LEADER realm,
+ * but the extension can be instantiated more than once, so the shared cell
+ * lives on globalThis rather than in a module-level Set.
+ */
+const INTERRUPT_MARKERS_KEY = Symbol.for("pi.teammate.interruptMarkers");
+
+function interruptMarkers(): Set<string> {
+  const target = globalThis as unknown as Record<symbol, Set<string> | undefined>;
+  let value = target[INTERRUPT_MARKERS_KEY];
+  if (!value) {
+    value = new Set<string>();
+    target[INTERRUPT_MARKERS_KEY] = value;
+  }
+  return value;
+}
+
+/** Called by interruptTeammate before it aborts, so the loop can tell why. */
+export function markInterruptRequested(agentId: string): void {
+  interruptMarkers().add(agentId);
+}
+
+/** Test-only: clear the cross-realm marker set between cases. */
+export function _resetInterruptMarkersForTest(): void {
+  interruptMarkers().clear();
+}
+
+/** Read-and-clear: one interrupt silences exactly one turn. */
+export function consumeInterruptMarker(agentId: string): boolean {
+  const set = interruptMarkers();
+  if (!set.has(agentId)) return false;
+  set.delete(agentId);
+  return true;
+}
 
 export interface TeammateLoopOptions {
   identity: TeammateIdentity;
@@ -145,6 +216,7 @@ export function startTeammateLoop(
 
   async function promptWithErrorDetection(text: string): Promise<string> {
     let assistantError: string | undefined;
+    let aborted = false;
     let lastAssistantText = "";
     const unsubscribe = opts.session.subscribe((event) => {
       const e = event as {
@@ -157,8 +229,35 @@ export function startTeammateLoop(
         };
       };
       if (e.type !== "message_end" || e.message?.role !== "assistant") return;
+      // An intentional abort (leader stop-loss via teammate_interrupt) ends the
+      // turn with stopReason "aborted". That is a NORMAL outcome, not a
+      // failure: the leader immediately delivers a redirect that becomes this
+      // teammate's next turn.
+      //
+      // Reporting it as a turn error actively misleads the leader. Observed for
+      // real: after a successful interrupt the leader received
+      // "[teammate sleeper@forge turn failed] This operation was aborted" and
+      // concluded "the aborted turn ended as failed rather than the message
+      // being processed" — then spent later turns re-verifying an interrupt
+      // that had already worked (the redirect had in fact run).
+      if (e.message.stopReason === "aborted") {
+        aborted = true;
+        return;
+      }
       if (e.message.stopReason === "error") {
-        assistantError = e.message.errorMessage || "Agent request failed";
+        // pi does NOT always label an aborted turn as "aborted": when the
+        // abort surfaces as a provider-level error it arrives here as
+        // stopReason "error" with errorMessage "This operation was aborted".
+        // Classifying it as a real error re-introduces the misleading
+        // "turn failed" notification this whole path exists to prevent
+        // (confirmed end-to-end: the notification still fired after the first
+        // fix, because this branch won over the aborted check below).
+        const message = e.message.errorMessage || "Agent request failed";
+        if (isAbortError(message)) {
+          aborted = true;
+          return;
+        }
+        assistantError = message;
         return;
       }
       const content = e.message.content;
@@ -186,10 +285,28 @@ export function startTeammateLoop(
       } else {
         await opts.session.prompt(text);
       }
+    } catch (error) {
+      // session.abort() makes the in-flight prompt() REJECT (pi raises
+      // "This operation was aborted"), so a leader stop-loss can arrive here
+      // rather than through the stopReason check above. Both shapes must be
+      // reported as an intentional cancel — otherwise interruptTeammate
+      // produces a bogus "turn failed" notification on the very turn it
+      // cancelled.
+      if (
+        aborted ||
+        consumeInterruptMarker(opts.identity.agentId) ||
+        isAbortError(error)
+      ) {
+        throw new TeammateTurnAbortedError();
+      }
+      throw error;
     } finally {
       unsubscribe();
     }
     if (assistantError) throw new Error(assistantError);
+    // Surface the abort to the loop rather than returning normally: a cancelled
+    // turn must not be counted as a completed one.
+    if (aborted) throw new TeammateTurnAbortedError();
     return lastAssistantText;
   }
 
@@ -209,7 +326,7 @@ export function startTeammateLoop(
               opts.onTurnResult?.(result, cause);
             }
           } catch (error) {
-            if (!opts.abortSignal.aborted) {
+            if (!isTurnAborted(error) && !opts.abortSignal.aborted) {
               opts.onTurnError?.(
                 error instanceof Error ? error : new Error(String(error)),
                 cause,
@@ -286,7 +403,11 @@ export function startTeammateLoop(
               acknowledge(msg);
             }
           } catch (error) {
-            if (!opts.abortSignal.aborted) {
+            // A leader-initiated interrupt must not surface as a turn failure.
+            // The redirect that follows is the real next step, and a "turn
+            // failed" notification makes the leader doubt an interrupt that in
+            // fact succeeded.
+            if (!isTurnAborted(error) && !opts.abortSignal.aborted) {
               opts.onTurnError?.(
                 error instanceof Error ? error : new Error(String(error)),
                 cause,

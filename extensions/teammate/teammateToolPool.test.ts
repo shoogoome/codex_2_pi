@@ -19,8 +19,12 @@ describe("TEAMMATE_TOOLS_BLOCKLIST", () => {
     expect(TEAMMATE_TOOLS_BLOCKLIST.has("task_kill")).toBe(false);
   });
 
-  it("has exactly 3 entries — only recursion guards remain", () => {
-    expect(TEAMMATE_TOOLS_BLOCKLIST.size).toBe(3);
+  it("blocks teammate_interrupt — a teammate must not abort another teammate's turn", () => {
+    expect(TEAMMATE_TOOLS_BLOCKLIST.has("teammate_interrupt")).toBe(true);
+  });
+
+  it("has exactly 4 entries — 3 recursion guards + the leader-only interrupt", () => {
+    expect(TEAMMATE_TOOLS_BLOCKLIST.size).toBe(4);
   });
 });
 
@@ -34,6 +38,7 @@ describe("filterTeammateTools", () => {
       "task_agent",
       "team_create",
       "team_delete",
+      "teammate_interrupt",
       "bash",
       "write",
       "edit",
@@ -68,6 +73,7 @@ describe("filterTeammateTools", () => {
       "find",
       "task_agent",
       "send_message",
+      "teammate_interrupt",
       "edit",
       "ls",
     ];

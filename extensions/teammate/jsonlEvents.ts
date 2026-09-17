@@ -174,6 +174,13 @@ function applyEvent(state: ReplayedState, event: TeammateEvent): ReplayedState {
       delete teamTasksCopy[event.taskId];
       return { ...state, teamTasks: teamTasksCopy };
     }
+    case "teammate_interrupted": {
+      // Stop-loss is a transient runtime action, not a state transition: the
+      // teammate is deliberately still alive and its next turn follows. Nothing
+      // to rebuild on replay — listed explicitly (rather than falling into
+      // `default`) so the exhaustive `never` check keeps working.
+      return state;
+    }
     default: {
       // Defensive: unknown kind. Asserts at the type level via never check.
       const _exhaustive: never = event;
