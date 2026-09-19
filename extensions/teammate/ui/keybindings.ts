@@ -30,6 +30,14 @@ import { classifyKey } from "./keyEventClassifier.js";
 /** Minimal UI surface required by the keybindings layer. */
 export type KeybindingsUI = Pick<ExtensionUIContext, "onTerminalInput">;
 
+/** Running teammate agentIds, in the same order cycleSelection uses. */
+function runningAgentIds(taskStore: TaskStore): string[] {
+  return Object.values(taskStore.get())
+    .filter(isInProcessTeammateTask)
+    .filter((t) => t.status === "running")
+    .map((t) => t.identity.agentId);
+}
+
 export interface KeybindingsDeps {
   pi: ExtensionAPI;
   ui: KeybindingsUI;
@@ -68,9 +76,18 @@ export function registerTeammateKeybindings(deps: KeybindingsDeps): () => void {
 
     // Ctrl+G is universal at the leader scope: blurred or focused, it
     // toggles. Teammate view owns its own focus, so Ctrl+G falls through.
+    //
+    // Focusing also parks the cursor on the first teammate when nothing is
+    // selected, because the header advertises Enter/k the moment the panel is
+    // focused — see viewState.focusWithSelection.
     if (action.kind === "toggle-focus") {
       if (state.kind === "teammate") return undefined;
-      deps.viewState.toggleFocus();
+      const wasFocused = state.focused;
+      if (wasFocused) {
+        deps.viewState.toggleFocus();
+      } else {
+        deps.viewState.focusWithSelection(runningAgentIds(deps.taskStore));
+      }
       return { consume: true };
     }
 
@@ -103,6 +120,34 @@ export function registerTeammateKeybindings(deps: KeybindingsDeps): () => void {
       if (action.kind === "esc") {
         // Esc on focused leader = blur.
         deps.viewState.toggleFocus();
+        return { consume: true };
+      }
+      // Defensive: a focused leader with no selection can still be reached
+      // without going through Ctrl+G (e.g. a re-render that focuses the panel).
+      // The header advertises Enter/k in this state, so silently typing them
+      // into the editor is the bug — handle them by selecting first. With zero
+      // teammates `focusWithSelection` leaves the state untouched and we fall
+      // through as before.
+      if (action.kind === "enter" || action.kind === "kill") {
+        if (activeIds.length === 0) return undefined;
+        deps.viewState.focusWithSelection(activeIds);
+        const selected = deps.viewState.get();
+        if (selected.kind !== "leader_with_selection") return { consume: true };
+        if (action.kind === "enter") {
+          deps.viewState.enterTeammateView();
+          return { consume: true };
+        }
+        const task = teammates.find(
+          (t) => t.identity.agentId === selected.selectedAgentId,
+        );
+        if (task) {
+          void killTeammate(deps.pi, deps.taskStore, deps.handle, task.id).catch(
+            (e) => {
+              logError(e, "registerTeammateKeybindings kill");
+            },
+          );
+        }
+        deps.viewState.reset();
         return { consume: true };
       }
       return undefined;

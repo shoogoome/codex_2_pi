@@ -212,10 +212,20 @@ describe("registerTeammateKeybindings (focus-aware)", () => {
     const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
     const result = h.trigger("\x07");
     expect(result).toEqual({ consume: true });
+    expect(h.viewState.get()).toEqual({
+      kind: "leader_with_selection",
+      selectedAgentId: "alpha@team1",
+      focused: true,
+    });
+  });
+
+  it("blurred leader + Ctrl+G + no teammates → focused leader (nothing to select)", () => {
+    const h = makeHarness();
+    h.trigger("\x07");
     expect(h.viewState.get()).toEqual({ kind: "leader", focused: true });
   });
 
-  it("focused leader + Ctrl+G → focused=false + consume (blurs)", () => {
+  it("focused leader + Ctrl+G → blurred + consume (blurs)", () => {
     const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
     h.viewState.toggleFocus();
     const result = h.trigger("\x07");
@@ -336,6 +346,42 @@ describe("registerTeammateKeybindings (focus-aware)", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(h.taskStore.getTask("t1")?.status).toBe("killed");
+  });
+
+  // ─── Regression: the reported "k did nothing" bug ───
+  //
+  // User report: "在 TUI 上用 k kill 成员不会真的 kill 进程". Root cause: the
+  // panel header advertises "k kill" as soon as it is focused, but the focused
+  // `leader` state carried no selectedAgentId, so `k` fell through to the
+  // editor — the teammate stayed alive and a literal `k` was typed into the
+  // input box instead.
+  it("REGRESSION: Ctrl+G then k kills the first teammate (no manual arrow press)", async () => {
+    const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
+
+    h.trigger("\x07"); // Ctrl+G only — the user never pressed ↑/↓
+    const result = h.trigger("k");
+
+    // Must be consumed (not typed into the editor) and must actually kill.
+    expect(result).toEqual({ consume: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.taskStore.getTask("t1")?.status).toBe("killed");
+  });
+
+  it("REGRESSION: Ctrl+G then Enter opens the teammate view (advertised key works)", () => {
+    const h = makeHarness({ tasks: [{ id: "t1", agentName: "alpha" }] });
+    h.trigger("\x07");
+    const result = h.trigger("\r");
+    expect(result).toEqual({ consume: true });
+    expect(h.viewState.get()).toEqual({ kind: "teammate", agentId: "alpha@team1" });
+  });
+
+  it("focused leader + k + no teammates → falls through (nothing to kill)", () => {
+    const h = makeHarness();
+    h.viewState.toggleFocus();
+    const before = h.viewState.get();
+    expect(h.trigger("k")).toBeUndefined();
+    expect(h.viewState.get()).toBe(before);
   });
 
   it("focused leader_with_selection + k + selected task missing → reset + consume (no throw)", () => {

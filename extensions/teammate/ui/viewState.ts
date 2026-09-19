@@ -34,6 +34,8 @@ export interface ViewStateStore {
   reset(): void;
   selectAgent(agentId: string): void;
   cycleSelection(direction: "next" | "prev", availableAgentIds: readonly string[]): void;
+  /** Focus the panel, selecting the first teammate when none is selected yet. */
+  focusWithSelection(availableAgentIds: readonly string[]): void;
   enterTeammateView(): void;
   exitTeammateView(): void;
   toggleFocus(): void;
@@ -116,6 +118,35 @@ export function createViewStateStore(): ViewStateStore {
         }
         const focused = prev.focused;
         return { kind: "leader_with_selection", selectedAgentId: picked, focused };
+      });
+    },
+    /**
+     * Focus the panel and, when nothing is selected yet, park the cursor on the
+     * first available teammate.
+     *
+     * Why focusing alone was not enough: the panel header advertises
+     * "↑↓ move · Enter open · Esc back · k kill" as soon as it is focused, but
+     * the focused-`leader` state has no `selectedAgentId` — so `Enter` and `k`
+     * fell through the handler and reached the EDITOR instead. The user pressed
+     * Ctrl+G then `k` and got a literal `k` typed into the input box with the
+     * teammate still alive. Selecting on focus makes the advertised keys work
+     * immediately; with zero teammates the panel still just focuses (nothing to
+     * select), which is the `cycle` path's existing early return.
+     */
+    focusWithSelection(availableAgentIds: readonly string[]) {
+      set((prev) => {
+        if (prev.kind === "teammate") return prev;
+        if (prev.kind === "leader_with_selection") {
+          return prev.focused ? prev : { ...prev, focused: true };
+        }
+        if (availableAgentIds.length === 0) {
+          return prev.focused ? prev : { ...prev, focused: true };
+        }
+        return {
+          kind: "leader_with_selection",
+          selectedAgentId: availableAgentIds[0]!,
+          focused: true,
+        };
       });
     },
     enterTeammateView() {
