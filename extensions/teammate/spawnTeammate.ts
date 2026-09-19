@@ -40,6 +40,7 @@ import type {
 } from "../tasks/agentCapacity.js";
 
 import { retireTeammate, type TeammateHandle } from "./handle.js";
+import { getOwnerIndex } from "../tasks/currentOwner.js";
 import type { InProcessTeammateTaskState, TeammateIdentity } from "./types.js";
 import { isInProcessTeammateTask } from "./types.js";
 import { emitTeammateEvent } from "./eventEmit.js";
@@ -386,6 +387,13 @@ async function spawnTeammateWithLease(
     abortController,
     agentResidentLease: residentLease,
   }));
+
+  // 6.1 Attribute background tasks started by this teammate to it, so killing
+  //     the teammate can reap children that live outside the AgentSession
+  //     (async_bash's ChildProcess is only in a process-global registry).
+  //     Keyed by session file because AsyncLocalStorage does not survive into
+  //     the sub-session's tool-call realm — see tasks/currentOwner.ts.
+  getOwnerIndex().register(sessionFile, agentId);
 
   // 6.5 Subscribe to session events so the panel widget gets live
   //     tokenCount / toolCallCount / lastTool updates. The teammateLoop

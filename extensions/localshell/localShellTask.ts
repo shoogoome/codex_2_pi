@@ -30,6 +30,7 @@ import {
 } from "../tasks/diskOutput.js";
 import { getTaskOutputPath } from "../tasks/outputPath.js";
 import { generateTaskId } from "../tasks/Task.js";
+import { registerChildReaper, unregisterChildReaper } from "../tasks/childReaper.js";
 import {
   notifyTaskTerminal,
   type NotifyTaskTerminalOptions,
@@ -38,6 +39,7 @@ import { logError } from "../tasks/logging.js";
 import { startStallWatchdog } from "./stallWatchdog.js";
 import { killLocalShellTask } from "./kill.js";
 import { readTruncatedOutput } from "./outputBuffer.js";
+import { getDefaultTaskStore } from "../tasks/taskStore.js";
 
 export interface LocalShellTaskState extends TaskStateBase {
   type: "local_bash";
@@ -58,6 +60,12 @@ export interface SpawnLocalShellOptions {
   timeoutMs?: number;
   cwd?: string;
   operations?: BashOperations;
+  /**
+   * Owning teammate (`name@team`) when a teammate started this command, so a
+   * team kill can reap it if it auto-backgrounds. Resolved by the caller from
+   * `ctx.sessionManager.getSessionFile()` — see tasks/currentOwner.ts.
+   */
+  ownerAgentId?: string;
   /** Called synchronously after registration and before the process starts. */
   onStart?: (taskId: string) => void;
   /**
@@ -156,6 +164,10 @@ export function spawnLocalShell(
       description: opts.description,
       outputFile,
       toolUseId: opts.toolUseId,
+      // Tag the owning teammate so a team kill can reap this task if it later
+      // auto-backgrounds (its abort listener is removed once backgrounded, so
+      // session.abort() no longer reaches the process — see reapOwned.ts).
+      ownerAgentId: opts.ownerAgentId,
     }),
     type: "local_bash",
     status: "running",
@@ -417,6 +429,38 @@ export function _bindPi(pi: ExtensionAPI): void {
   _currentPi = pi;
   _agentStreaming = false;
   _pendingTerminalNotifications.clear();
+  // Publish a process-global child reaper so a teammate kill stops backgrounded
+  // task_bash processes it started. These live in the TEAMMATE session's own
+  // TaskStore, out of reach of the leader-side store sweep. Keyed so a reload
+  // replaces rather than accumulates. See tasks/childReaper.ts.
+  registerChildReaper("localshell", killLocalShellTasksOwnedBy);
+}
+
+/**
+ * Stop every tracked local_bash task owned by `agentId`.
+ *
+ * Global store lookup on purpose: the owner registered these in the teammate's
+ * own session store, and the process-global default store slot is mirrored to
+ * the same object within a realm (see getTasksHandle).
+ */
+export async function killLocalShellTasksOwnedBy(agentId: string): Promise<number> {
+  let store: TaskStore;
+  try {
+    store = getDefaultTaskStore();
+  } catch {
+    return 0;
+  }
+  const owned = Object.values(store.get()).filter(
+    (t) => t.type === "local_bash" && t.ownerAgentId === agentId && t.status === "running",
+  );
+  for (const t of owned) {
+    try {
+      await killLocalShellTask(_currentPi as ExtensionAPI, store, t.id);
+    } catch (e) {
+      logError(e, "killLocalShellTasksOwnedBy");
+    }
+  }
+  return owned.length;
 }
 
 /** session_shutdown 内调。 */
@@ -424,6 +468,7 @@ export function _unbindPi(): void {
   _currentPi = undefined;
   _agentStreaming = false;
   _pendingTerminalNotifications.clear();
+  unregisterChildReaper("localshell");
 }
 
 /** Test helper. */

@@ -28,25 +28,16 @@ import { registerTask, updateTaskState } from "../tasks/framework.js";
 import { notifyTaskTerminal } from "../tasks/notifications.js";
 import { appendTaskOutput, evictTaskOutput, flushTaskOutput, initTaskOutput } from "../tasks/diskOutput.js";
 import { getTaskOutputPath } from "../tasks/outputPath.js";
+import { ownerFromSessionFile } from "../tasks/currentOwner.js";
+import { registerChildReaper, unregisterChildReaper } from "../tasks/childReaper.js";
 import { logError } from "../tasks/logging.js";
 
 /** 每任务内存里保留的输出尾部上限；完整输出始终在 outputFile 里。 */
 const TAIL_MAX_CHARS = 4_000;
 /** 唤醒通知里带多少行尾部。 */
 const NOTIFY_TAIL_LINES = 30;
-/** async_wait 的硬上限 —— 它的语义是「短暂搭车」，不是变相 sleep。 */
-export const MAX_WAIT_MS = 120_000;
-export const DEFAULT_WAIT_MS = 30_000;
 
 export type AsyncStatus = "running" | "completed" | "failed" | "killed";
-
-export interface AsyncWaitResult {
-  taskId: string;
-  status: AsyncStatus;
-  exitCode?: number | null;
-  elapsedMs: number;
-  timedOut: boolean;
-}
 
 // Explicit details shapes per tool: without them TS infers a union of the
 // success/error/hit/miss branches and rejects the tool definition.
@@ -73,10 +64,6 @@ interface AsyncKillDetails {
   wasRunning?: boolean;
 }
 
-interface AsyncWaitDetails extends Partial<AsyncWaitResult> {
-  action: "async_wait";
-}
-
 interface AsyncTaskState {
   id: string;
   command: string;
@@ -94,7 +81,12 @@ interface AsyncTaskState {
   killed: boolean;
   /** 是否在完成时唤醒模型。 */
   notify: boolean;
-  waiter?: { resolve: (v: AsyncWaitResult) => void; timer: ReturnType<typeof setTimeout> };
+  /**
+   * 发起该任务的 teammate（`name@team`），leader 发起时为 undefined。
+   * task_status 把它渲染成 `owner:` 行，便于回答「这个后台任务为什么没被
+   * 回收」—— 只有记到 owner 的任务才会在成员被 kill 时一并终止。
+   */
+  ownerAgentId?: string;
 }
 
 /**
@@ -149,14 +141,26 @@ export function formatDuration(ms: number): string {
 export function spawnAsyncShell(
   pi: ExtensionAPI,
   store: TaskStoreLike,
-  opts: { command: string; cwd: string; label?: string; notify: boolean },
+  opts: {
+    command: string;
+    cwd: string;
+    label?: string;
+    notify: boolean;
+    /** Owning teammate (`name@team`), resolved from the CALLER's session file. */
+    ownerAgentId?: string;
+  },
 ): AsyncTaskState {
   const id = generateTaskId("async_shell");
   const outputFile = getTaskOutputPath(id);
+  const ownerAgentId = opts.ownerAgentId;
   const child = spawn("/bin/bash", ["-lc", opts.command], {
     cwd: opts.cwd,
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
+    // Own process group, so killing can target the GROUP rather than one pid.
+    // Without this a `nohup … &` / `cmd1 && cmd2` grandchild survives the kill
+    // (pi's own bash tool does the same, then killProcessTree(-pid)).
+    detached: process.platform !== "win32",
   });
 
   const task: AsyncTaskState = {
@@ -171,6 +175,7 @@ export function spawnAsyncShell(
     startedAt: Date.now(),
     killed: false,
     notify: opts.notify,
+    ownerAgentId,
   };
   registry().set(id, task);
 
@@ -179,9 +184,19 @@ export function spawnAsyncShell(
   const description =
     opts.label ??
     (opts.command.split(/\r?\n/)[0] ?? opts.command).slice(0, 80);
+  // Register into the SAME store this realm reads from the tasks handle.
+  // NOTE: a teammate's own session has its OWN tasks extension instance, so a
+  // task it starts lands in a DIFFERENT store object than the leader's. Global
+  // child reapers (tasks/childReaper.js) are what make a team kill reach it.
   registerTask(
     {
-      ...createTaskStateBase({ id, type: "async_shell", description, outputFile }),
+      ...createTaskStateBase({
+        id,
+        type: "async_shell",
+        description,
+        outputFile,
+        ownerAgentId,
+      }),
       status: "running",
     } as never,
     store as never,
@@ -229,19 +244,6 @@ export function spawnAsyncShell(
       }) as never);
     } catch (e) {
       logError(e, "async updateTaskState");
-    }
-
-    const wait = task.waiter;
-    if (wait) {
-      clearTimeout(wait.timer);
-      task.waiter = undefined;
-      wait.resolve({
-        taskId: id,
-        status,
-        exitCode: task.exitCode,
-        elapsedMs: elapsedOf(task),
-        timedOut: false,
-      });
     }
 
     if (!task.notify) return;
@@ -295,18 +297,10 @@ export async function killAsyncTask(id: string): Promise<boolean> {
   if (!task) return false;
   if (task.endedAt !== undefined) return true;
   task.killed = true;
-  try {
-    task.child.kill("SIGTERM");
-  } catch (e) {
-    logError(e, "async kill SIGTERM");
-  }
+  signalTaskTree(task.child, "SIGTERM");
   await new Promise<void>((resolve) => {
     const t = setTimeout(() => {
-      try {
-        task.child.kill("SIGKILL");
-      } catch {
-        /* ignore */
-      }
+      signalTaskTree(task.child, "SIGKILL");
       resolve();
     }, 5_000);
     t.unref?.();
@@ -316,6 +310,58 @@ export async function killAsyncTask(id: string): Promise<boolean> {
     });
   });
   return true;
+}
+
+/**
+ * Signal the spawned shell's whole process group, falling back to the single
+ * pid.
+ *
+ * `detached:true` at spawn time made the shell a group leader, so `-pid`
+ * reaches grandchildren too. A command like `nohup server.js &` would otherwise
+ * survive (the shell exits, the grandchild is reparented to init and keeps
+ * holding the port). Mirrors pi core's `killProcessTree`.
+ */
+function signalTaskTree(
+  child: ReturnType<typeof spawn>,
+  signal: NodeJS.Signals,
+): void {
+  const pid = child.pid;
+  if (pid === undefined) {
+    // Never spawned (spawn error path): nothing to signal.
+    return;
+  }
+  try {
+    process.kill(-pid, signal);
+    return;
+  } catch {
+    // Group kill unavailable (already reaped, or the group leader changed).
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    /* already dead */
+  }
+}
+
+/**
+ * Stop every tracked child owned by `agentId`. Registered as a process-global
+ * child reaper so a teammate kill reaches it regardless of which session realm
+ * spawned the child (see tasks/childReaper.ts for the measured store split).
+ */
+export async function killAsyncTasksOwnedBy(agentId: string): Promise<number> {
+  const mine = [...registry().values()].filter(
+    (t) => t.ownerAgentId === agentId && t.endedAt === undefined,
+  );
+  await Promise.all(
+    mine.map(async (t) => {
+      try {
+        await killAsyncTask(t.id);
+      } catch (e) {
+        logError(e, "async killAsyncTasksOwnedBy");
+      }
+    }),
+  );
+  return mine.length;
 }
 
 /**
@@ -342,6 +388,9 @@ export const AsyncShellTask = {
         : `state: ${st} (took ${formatDuration(elapsedOf(task))})`,
     ];
     if (task.pid) lines.push(`pid: ${task.pid}`);
+    // Ownership drives teammate-kill reaping; surface it so "why wasn't this
+    // reaped?" is answerable from task_status alone.
+    lines.push(`owner: ${task.ownerAgentId ?? "leader"}`);
     lines.push(
       task.notify
         ? st === "running"
@@ -380,15 +429,6 @@ const AsyncKillParams = Type.Object({
   task_id: Type.String({ description: "Background task id from async_bash." }),
 });
 
-const AsyncWaitParams = Type.Object({
-  task_id: Type.String({ description: "Background task id from async_bash." }),
-  timeout_ms: Type.Optional(
-    Type.Number({
-      description: `Max wait in ms (default ${DEFAULT_WAIT_MS}, cap ${MAX_WAIT_MS}).`,
-    }),
-  ),
-});
-
 export default function asyncExtension(pi: ExtensionAPI): void {
   /**
    * The tasks store, captured ONCE while the session is alive.
@@ -414,15 +454,20 @@ export default function asyncExtension(pi: ExtensionAPI): void {
       // 非致命：async 工具本身仍可用，只是不接 task_kill / task 面板。
       logError(e, "async session_start");
     }
+    // Process-global so a teammate kill can stop children this realm spawned —
+    // the teammate's task lives in ITS OWN session's TaskStore, out of reach of
+    // the leader-side store sweep. Keyed so a reload replaces, not accumulates.
+    registerChildReaper("async", killAsyncTasksOwnedBy);
   });
 
   pi.on("session_shutdown", async () => {
+    unregisterChildReaper("async");
     const running = [...registry().values()].filter((t) => t.endedAt === undefined);
     await Promise.all(
       running.map(async (t) => {
         try {
           t.killed = true;
-          t.child.kill("SIGTERM");
+          signalTaskTree(t.child, "SIGTERM");
         } catch {
           /* ignore */
         }
@@ -444,8 +489,8 @@ export default function asyncExtension(pi: ExtensionAPI): void {
       "- After submitting, END YOUR TURN (or continue with other work). Do not poll. You will be woken with the exit code, the tail of the output, and the full output file path." +
       "\n\n## Notes\n\n" +
       "- Output is appended to a task output file; only the tail is kept in memory. Read the file for the full log." +
-      "- Inspect with `async_status`, stop with `async_kill` (or `task_kill`)." +
-      "- Use `async_wait` only if you expect completion within ~30s and want to save a wake-up round-trip.",
+      "- Inspect with `async_status`, stop with `async_kill` (or `task_kill`).",
+
     parameters: AsyncBashParams,
     promptSnippet:
       "Run a shell command in the background; get woken with its result when it finishes",
@@ -473,6 +518,13 @@ export default function asyncExtension(pi: ExtensionAPI): void {
           cwd: cwd ?? ctx?.cwd ?? process.cwd(),
           label,
           notify: notify !== "never",
+          // Attribute the child to the calling teammate, read from the
+          // session file (realm-safe) — NOT from AsyncLocalStorage, which is
+          // empty inside a teammate sub-session's tool-call realm.
+          ownerAgentId: ownerFromSessionFile(
+            (ctx as { sessionManager?: { getSessionFile?: () => string | undefined } } | undefined)
+              ?.sessionManager?.getSessionFile?.(),
+          ),
         });
         const text =
           `started (taskId=${task.id}${task.pid ? `, pid=${task.pid}` : ""}).\n` +
@@ -611,81 +663,12 @@ export default function asyncExtension(pi: ExtensionAPI): void {
       };
     },
   });
-
-  // ---------- ④ async_wait ----------
-
-  pi.registerTool<typeof AsyncWaitParams, AsyncWaitDetails>({
-    name: "async_wait",
-    label: "Async wait",
-    description:
-      `Wait up to N milliseconds for a background task to finish (default ${DEFAULT_WAIT_MS}, hard cap ${MAX_WAIT_MS}). Returns as soon as the task reaches a terminal state, or reports that it is still running on timeout.` +
-      "\n\n## This is NOT a sleep\n\n" +
-      "- Use it only when you expect the task to finish within seconds and want to avoid a wake-up round-trip." +
-      "- **Never** use it to wait on another agent, a teammate, or a human. Those are delivered to you automatically; waiting blocks your turn and hides their messages." +
-      "- If it times out, do NOT wait again in a loop — end your turn and let the completion notice wake you.",
-    parameters: AsyncWaitParams,
-    promptSnippet: "Briefly wait (bounded) for a background async_bash task to finish",
-    executionMode: "parallel",
-    async execute(_callId, raw) {
-      const { task_id, timeout_ms } = raw as { task_id: string; timeout_ms?: number };
-      const task = registry().get(task_id);
-      if (!task) {
-        return {
-          content: [{ type: "text" as const, text: `unknown background task: ${task_id}` }],
-          isError: true,
-          details: { action: "async_wait" as const },
-        };
-      }
-      const st = statusOf(task);
-      if (st !== "running") {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text:
-                `already ${st}` +
-                `${task.exitCode !== undefined && task.exitCode !== null ? ` (exit ${task.exitCode})` : ""}` +
-                ` after ${formatDuration(elapsedOf(task))}`,
-            },
-          ],
-          details: { action: "async_wait" as const, taskId: task_id, status: st, timedOut: false },
-        };
-      }
-      const budget = Math.min(Math.max(timeout_ms ?? DEFAULT_WAIT_MS, 1), MAX_WAIT_MS);
-      const result = await new Promise<AsyncWaitResult>((resolve) => {
-        const timer = setTimeout(() => {
-          task.waiter = undefined;
-          resolve({
-            taskId: task_id,
-            status: statusOf(task),
-            exitCode: task.exitCode,
-            elapsedMs: elapsedOf(task),
-            timedOut: true,
-          });
-        }, budget);
-        timer.unref?.();
-        task.waiter = { resolve, timer };
-      });
-      const text = result.timedOut
-        ? `still running after ${formatDuration(budget)} — end your turn and you will be woken when it finishes (do not wait in a loop).`
-        : `${result.status} after ${formatDuration(result.elapsedMs)}` +
-          `${result.exitCode !== undefined && result.exitCode !== null ? ` (exit ${result.exitCode})` : ""}`;
-      return {
-        content: [{ type: "text" as const, text }],
-        details: { action: "async_wait" as const, ...result },
-      };
-    },
-  });
 }
 
 /** Test-only: tear down every tracked child + clear the registry. */
 export function _resetAsyncRegistryForTest(): void {
   for (const t of registry().values()) {
-    try {
-      t.child.kill("SIGKILL");
-    } catch {
-      /* ignore */
-    }
+    signalTaskTree(t.child, "SIGKILL");
   }
   registry().clear();
 }

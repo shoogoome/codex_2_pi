@@ -22,6 +22,7 @@ import {
 import { buildToolHead, resolveMaxLines } from "../claude-ui/src/tool-gutter.js";
 import type { ClaudeUiTheme } from "../claude-ui/src/theme-types.js";
 import { getTasksHandle } from "../tasks/handle.js";
+import { ownerFromSessionFile } from "../tasks/currentOwner.js";
 import { getRunningTasks } from "../tasks/framework.js";
 import {
   _bindPi,
@@ -88,7 +89,7 @@ export default function localshellExtension(pi: ExtensionAPI): void {
       // Match claude-ui's native-tool overrides: render without Pi's default
       // backgrounded Box so task_bash blends in with read/grep/write.
       renderShell: "self",
-      async execute(_callId: unknown, raw: unknown, signal, onUpdate) {
+      async execute(_callId: unknown, raw: unknown, signal, onUpdate, ctx) {
         const { command, description, timeout_ms } = raw as {
           command: string;
           description: string;
@@ -169,6 +170,12 @@ export default function localshellExtension(pi: ExtensionAPI): void {
           command,
           description,
           timeoutMs: timeout_ms,
+          // Attribute to the calling teammate via its session file (realm-safe;
+          // AsyncLocalStorage is empty in a teammate sub-session's tool realm).
+          ownerAgentId: ownerFromSessionFile(
+            (ctx as { sessionManager?: { getSessionFile?: () => string | undefined } } | undefined)
+              ?.sessionManager?.getSessionFile?.(),
+          ),
           onStart: (taskId) => {
             // Capture immediately, before any stdout arrives. Silent commands
             // such as `sleep` must still be cancellable with Esc.

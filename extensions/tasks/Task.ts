@@ -61,6 +61,19 @@ export interface TaskStateBase {
   outputOffset: number;
   /** 终态通知是否已发出 — markTaskNotified CAS 控制。 */
   notified: boolean;
+  /**
+   * 发起该任务的 teammate（`name@team`），leader 自己发起的任务为 undefined。
+   *
+   * 为什么需要：后台 shell 任务（async_bash / 已后台化的 task_bash）的进程句柄
+   * 活在进程级 registry 里，**不在任何 AgentSession 里**。所以 kill 一个成员时
+   * `session.abort()` 杀不掉它已经启动的后台子进程 —— 实测一个成员被 kill 后它的
+   * `async_bash sleep 5321` 仍在运行，并在完成时把通知推给 leader。
+   * killTeammate 据此字段回收「该成员名下的 running 任务」。
+   *
+   * 只写不读的扩展无需关心它；未知归属一律留 undefined，宁可不回收也不误杀
+   * leader 自己的任务。
+   */
+  ownerAgentId?: string;
 }
 
 /**
@@ -134,6 +147,8 @@ export function createTaskStateBase(args: {
   description: string;
   outputFile: string;
   toolUseId?: string;
+  /** 发起该任务的 teammate（`name@team`）；leader 发起时省略。见 TaskStateBase.ownerAgentId。 */
+  ownerAgentId?: string;
 }): TaskStateBase {
   return {
     id: args.id,
@@ -145,5 +160,6 @@ export function createTaskStateBase(args: {
     outputFile: args.outputFile,
     outputOffset: 0,
     notified: false,
+    ...(args.ownerAgentId !== undefined ? { ownerAgentId: args.ownerAgentId } : {}),
   };
 }

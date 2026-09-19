@@ -9,6 +9,7 @@ import { createTeamTaskStore } from "./teamTasks/teamTaskStore.js";
 import { createApprovalRequestRegistry } from "./handle.js";
 import { getTasksHandle, lazyTasksHandle } from "../tasks/handle.js";
 import { getRunningTasks } from "../tasks/framework.js";
+import { setOwnerLivenessProbe } from "../tasks/currentOwner.js";
 import {
   _bindPi,
   _unbindPi,
@@ -70,6 +71,23 @@ export default function teammateExtension(pi: ExtensionAPI): void {
   // teammate torn down by team_delete/task_kill can no longer inject turns for
   // a team that no longer exists.
   setLeaderNotificationMembershipProbe((agentId) => {
+    const at = agentId.indexOf("@");
+    if (at <= 0) return false;
+    const team = teamStore.getTeam(agentId.slice(at + 1));
+    return team !== undefined && team.memberAgentIds.includes(agentId);
+  });
+
+  // Publish the cross-realm owner-liveness probe. Delegates to THIS realm's
+  // team store at call time, because `tasks`/`async`/`localshell` live in
+  // separate jiti realms where a direct import would read an empty store.
+  // Used to stop a task whose owning teammate is already gone from waking the
+  // leader with a completion notice for a teammate that no longer exists.
+  //
+  // Ownership itself is NOT published via a probe: AsyncLocalStorage does not
+  // survive into a teammate sub-session's tool-call realm (see
+  // tasks/currentOwner.ts), so spawn/hydrate instead register the teammate's
+  // session file in the process-global owner index.
+  setOwnerLivenessProbe((agentId) => {
     const at = agentId.indexOf("@");
     if (at <= 0) return false;
     const team = teamStore.getTeam(agentId.slice(at + 1));

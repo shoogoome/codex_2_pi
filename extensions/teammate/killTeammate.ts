@@ -8,23 +8,34 @@
 //      emit/dispose work, avoiding double teammate_terminal events).
 //   3. Emit teammate_terminal event (status="killed").
 //   4. Remove member from teamStore.
-//   5. Abort the loop wait and active AgentSession prompt, allowing its
+//   5. Reap background tasks the teammate started (see reconcile note below).
+//   6. Abort the loop wait and active AgentSession prompt, allowing its
 //      execution-capacity lease to settle.
-//   6. Dispose the session (defensive/idempotent).
-//   7. Evict task output (fire-and-forget).
+//   7. Dispose the session (defensive/idempotent).
+//   8. Evict task output (fire-and-forget).
+//
+// Step 5 exists because killing the session does NOT reach the teammate's
+// background children (measured: an `async_bash sleep 5321` outlived its killed
+// owner and later notified the leader). See tasks/reapOwned.ts.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   isTerminalTaskStatus,
   type Task,
+  type TaskStateBase,
   type TaskStoreLike,
+  type TaskType,
 } from "../tasks/Task.js";
 import type { TaskStore } from "../tasks/taskStore.js";
 import { updateTaskState } from "../tasks/framework.js";
 import { evictTaskOutput } from "../tasks/diskOutput.js";
 import { logError } from "../tasks/logging.js";
+import { reapOwnedTasks } from "../tasks/reapOwned.js";
+import { reapChildrenOf } from "../tasks/childReaper.js";
+import { getTasksHandle } from "../tasks/handle.js";
 import { retireTeammate, type TeammateHandle } from "./handle.js";
 import { getTeammateHandle } from "./handle.js";
+import { getOwnerIndex } from "../tasks/currentOwner.js";
 import { emitTeammateEvent } from "./eventEmit.js";
 import type { InProcessTeammateTaskState } from "./types.js";
 import { isInProcessTeammateTask } from "./types.js";
@@ -34,6 +45,12 @@ import { unregisterApprovalSession } from "./approvalGate.js";
  * Tear down an in-process teammate without writing a terminal event. Used when
  * the leader runtime is replaced/reloaded so the persisted `teammate_spawn`
  * remains resumable on the next session_start.
+ *
+ * No owned-task sweep here (unlike killTeammate): suspend runs from
+ * session_shutdown, where each task extension already tears down its own
+ * running tasks (`extensions/async` kills its whole registry, localshell kills
+ * its running local_bash tasks). Sweeping here would race those and make a
+ * resumable suspension destructive.
  */
 export async function suspendTeammate(
   taskStore: TaskStore,
@@ -100,12 +117,22 @@ export async function killTeammate(
   // Step 4: remove from team + drop any in-flight approval request so
   // team_plan_approve can no longer answer a teammate that is gone.
   retireTeammate(handle, task.identity, task.sessionFile);
+  // Stop attributing new tasks to a teammate that no longer exists.
+  getOwnerIndex().unregister(task.sessionFile);
+
+  // Step 5: reap background tasks this teammate started. Must happen BEFORE
+  // the session is disposed: the children live outside the session (a
+  // process-global registry for async_bash), so nothing in the abort/dispose
+  // path can reach them — without this sweep they keep running, stay
+  // "running" in task_list, and later push their completion notification to
+  // the leader as if their (now dead) owner reported back.
+  await reapTeammateOwnedTasks(pi, taskStore, task.identity.agentId, "kill");
 
   // Release cross-session resources eagerly. The loop's terminal callback is
   // idempotent and may run later after session.abort settles.
   task.agentResidentLease?.release();
 
-  // Step 5: wake any capacity waiter, then abort an active prompt so the
+  // Step 6: wake any capacity waiter, then abort an active prompt so the
   // loop's finally block can release its execution lease.
   try {
     task.abortController?.abort();
@@ -118,7 +145,7 @@ export async function killTeammate(
     logError(e, "killTeammate session.abort");
   }
 
-  // Step 6: dispose session (the loop sees notified=true and skips its own
+  // Step 7: dispose session (the loop sees notified=true and skips its own
   // terminal dispose path).
   try {
     task.session?.dispose();
@@ -126,8 +153,64 @@ export async function killTeammate(
     logError(e, "killTeammate session.dispose");
   }
 
-  // Step 7: evict output asynchronously.
+  // Step 8: evict output asynchronously.
   void evictTaskOutput(taskId);
+}
+
+/**
+ * Sweep the background tasks a teammate started.
+ *
+ * The task-type lookup is taken from the tasks handle rather than this realm's
+ * `getTaskType`, because a teammate-realm import would read its own empty
+ * registry Map (see reapOwned.ts).
+ *
+ * Best-effort in two distinct senses:
+ *   - No tasks extension loaded → there are no tracked tasks at all, so this is
+ *     a legitimate no-op, NOT an error (test harnesses and hosts without the
+ *     tasks extension hit this).
+ *   - A task whose type has no kill implementation IS reported, by
+ *     reapOwnedTasks, because that process really is still running.
+ */
+async function reapTeammateOwnedTasks(
+  pi: ExtensionAPI,
+  taskStore: TaskStore,
+  agentId: string,
+  reason: string,
+): Promise<void> {
+  let getImpl: ((type: TaskType) => Task | undefined) | undefined;
+  try {
+    const handle = getTasksHandle(pi);
+    getImpl = (type) => handle.getTaskType(type);
+  } catch {
+    // Tasks extension not loaded in this session. Child reapers below are still
+    // worth asking: they live in process-global registries, not in the store.
+  }
+  // (1) Stop children via the process-global reapers. This is the path that
+  //     actually works for a teammate's own background commands, because those
+  //     are registered in the TEAMMATE session's TaskStore — a different store
+  //     object than the leader-side one swept below (measured: the leader's
+  //     store held only the teammate task). See tasks/childReaper.ts.
+  let reaped = 0;
+  try {
+    reaped += await reapChildrenOf(agentId);
+  } catch (e) {
+    logError(e, "killTeammate reapChildrenOf");
+  }
+  // (2) Also sweep the leader-side store, for any task that DID land here
+  //     (and for task types that do not publish a reaper).
+  if (getImpl) {
+    try {
+      const ids = await reapOwnedTasks(taskStore, agentId, reason, getImpl);
+      reaped += ids.length;
+    } catch (e) {
+      logError(e, "killTeammate reapOwnedTasks");
+    }
+  }
+  if (reaped > 0) {
+    console.error(
+      `[teammate] reaped ${reaped} background task(s) owned by ${agentId} (${reason})`,
+    );
+  }
 }
 
 // ---- Task interface impl ----

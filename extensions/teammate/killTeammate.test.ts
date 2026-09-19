@@ -18,17 +18,46 @@ import { createMailbox } from "./mailbox.js";
 import { createTeamTaskStore } from "./teamTasks/teamTaskStore.js";
 import type { TeammateHandle } from "./handle.js";
 import type { InProcessTeammateTaskState } from "./types.js";
+import type { Task, TaskType } from "../tasks/Task.js";
+import {
+  registerChildReaper,
+  _resetChildReapersForTest,
+} from "../tasks/childReaper.js";
 
-const fakePi: { events: Record<string, unknown>; sendMessage: ReturnType<typeof vi.fn> } = {
+/**
+ * Fake pi whose `events` map acts as the shared EventBus that
+ * `getTasksHandle()` reads (`__pi_tasks_handle__`).
+ *
+ * killTeammate reaches the task-type registry through the tasks HANDLE (not a
+ * direct import) because the teammate extension runs in its own jiti realm,
+ * where the module-level registry Map would be empty. Absent handle mirrors
+ * "tasks extension not loaded".
+ */
+const fakePi: {
+  events: Record<string, unknown>;
+  sendMessage: ReturnType<typeof vi.fn>;
+} = {
   events: {},
   sendMessage: vi.fn(),
 };
+
+const TASKS_HANDLE_KEY = "__pi_tasks_handle__";
+
+/** Publish a minimal tasks handle for the reap path. */
+function setTasksHandle(handle: {
+  store: ReturnType<typeof createTaskStore>;
+  getTaskType(type: TaskType): Task | undefined;
+}): void {
+  fakePi.events[TASKS_HANDLE_KEY] = handle;
+}
 
 beforeEach(() => {
   _setDefaultTaskStoreForTest(createTaskStore());
   _resetTaskOutputDirForTest();
   _resetTeammatePiBindingForTest();
   fakePi.sendMessage.mockClear();
+  delete fakePi.events[TASKS_HANDLE_KEY];
+  _resetChildReapersForTest();
 });
 
 function buildHandle(teamName?: string): TeammateHandle {
@@ -184,6 +213,89 @@ describe("killTeammate — basics", () => {
     expect(abort).toHaveBeenCalled();
     expect(dispose).toHaveBeenCalled();
     expect(fakePi.sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("killTeammate — reaps the teammate's background tasks", () => {
+  // Measured leak: killing a teammate left its `async_bash` child running,
+  // because that ChildProcess lives in a process-global registry outside every
+  // AgentSession — so session.abort()/dispose() cannot reach it. The leaked
+  // child kept reporting itself "running" and later woke the leader.
+  //
+  // Two mechanisms are exercised (both needed — see the note on the second
+  // test): a store sweep for tasks in THIS store, and process-global child
+  // reapers for tasks the teammate registered in its own session's store.
+  function seedOwnedTask(
+    store: ReturnType<typeof createTaskStore>,
+    id: string,
+    ownerAgentId: string,
+  ): void {
+    registerTask(
+      {
+        ...createTaskStateBase({
+          id,
+          type: "async_shell",
+          description: `bg ${id}`,
+          outputFile: `/tmp/${id}.out`,
+          ownerAgentId,
+        }),
+        status: "running",
+      },
+      store,
+    );
+  }
+
+  it("kills tasks owned by the killed teammate, leaving others alone", async () => {
+    const taskStore = createTaskStore();
+    const handle = buildHandle("team1");
+    const { state } = buildRunningTask("t1");
+    registerTask(state, taskStore);
+
+    seedOwnedTask(taskStore, "mine", "alpha@team1");
+    seedOwnedTask(taskStore, "theirs", "beta@team1");
+
+    const kill = vi.fn(async (_taskId: string) => {});
+    setTasksHandle({
+      store: taskStore,
+      getTaskType: () => ({ name: "Fake", type: "async_shell", kill }),
+    });
+
+    await killTeammate(fakePi as never, taskStore, handle, "t1");
+
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(kill.mock.calls[0]![0]).toBe("mine");
+  });
+
+  it("REGRESSION: asks process-global child reapers (the path that works for a teammate's own tasks)", async () => {
+    // A teammate's background task lives in the TEAMMATE session's TaskStore, a
+    // different object from the one this kill path can sweep. Only the
+    // process-global reaper registry reaches it.
+    const taskStore = createTaskStore();
+    const handle = buildHandle("team1");
+    const { state } = buildRunningTask("t1");
+    registerTask(state, taskStore);
+
+    const reaper = vi.fn(async () => 1);
+    registerChildReaper("async-test", reaper);
+
+    await killTeammate(fakePi as never, taskStore, handle, "t1");
+
+    expect(reaper).toHaveBeenCalledWith("alpha@team1");
+  });
+
+  it("does not throw when no tasks handle and no reapers exist", async () => {
+    const taskStore = createTaskStore();
+    const handle = buildHandle("team1");
+    const { state } = buildRunningTask("t1");
+    registerTask(state, taskStore);
+    seedOwnedTask(taskStore, "mine", "alpha@team1");
+
+    // No tasks handle published → tasks extension not loaded in this session.
+    await expect(
+      killTeammate(fakePi as never, taskStore, handle, "t1"),
+    ).resolves.toBeUndefined();
+    // The teammate itself is still killed.
+    expect(taskStore.getTask("t1")?.status).toBe("killed");
   });
 });
 

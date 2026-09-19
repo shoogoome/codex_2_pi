@@ -18,6 +18,7 @@ import { Box, Text, type Component } from "@earendil-works/pi-tui";
 import type { TaskStateBase, TaskType } from "./Task.js";
 import type { TaskStore } from "./taskStore.js";
 import { installCustomTypeContextFilter } from "./contextFilter.js";
+import { isOwnerActive } from "./currentOwner.js";
 import { PANEL_GRACE_MS } from "./framework.js";
 import {
   EXIT_CODE_TAG,
@@ -222,6 +223,19 @@ export function notifyTaskTerminal(
   store: TaskStore,
   opts: NotifyTaskTerminalOptions,
 ): void {
+  // Refuse to speak for a teammate that no longer exists. Without this a
+  // background task whose owner was killed still reports its completion and
+  // WAKES the leader (observed: a leaked async_bash notified the leader after
+  // its teammate had been torn down). Applies only to tasks that recorded an
+  // owner — leader-owned tasks always deliver, and a missing probe is
+  // fail-open. See tasks/currentOwner.ts.
+  const ownerAgentId = store.getTask(opts.taskId)?.ownerAgentId;
+  if (!isOwnerActive(ownerAgentId)) {
+    // Mark notified so the CAS stays single-shot and the task can be evicted
+    // normally; it simply produces no message.
+    markTaskNotified(opts.taskId, store, opts.retainMs);
+    return;
+  }
   if (!markTaskNotified(opts.taskId, store, opts.retainMs)) return;
   const content = buildTaskNotificationXml(opts);
   const llmVisible = opts.llmVisible !== false;

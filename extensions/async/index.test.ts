@@ -1,7 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  DEFAULT_WAIT_MS,
-  MAX_WAIT_MS,
   _internals,
   _resetAsyncRegistryForTest,
   formatDuration,
@@ -10,6 +8,7 @@ import {
   statusOf,
   tailLines,
 } from "./index.js";
+import asyncExtension from "./index.js";
 import { createTaskStore } from "../tasks/taskStore.js";
 import { _setDefaultTaskStoreForTest } from "../tasks/taskStore.js";
 import { _resetTaskOutputDirForTest } from "../tasks/outputPath.js";
@@ -216,49 +215,22 @@ describe("async — status transitions", () => {
   });
 });
 
-describe("async_wait — bounded, not a sleep", () => {
-  it("resolves as soon as the task completes (well before the budget)", async () => {
+describe("async — registered tool surface", () => {
+  // `async_wait` was REMOVED: it let a model burn a whole turn blocking on a
+  // background task (measured: 83 calls passed timeout_ms:120000, and one
+  // teammate slept a full 2 minutes waiting on a job that never finished in
+  // time). Completion is delivered by wake-up instead, so the wait tool only
+  // added a second, worse way to do the thing async_bash exists to avoid.
+  it("registers exactly async_bash / async_status / async_kill", () => {
     const { pi } = fakePi();
-    const task = spawnAsyncShell(pi, store, {
-      command: "sleep 0.2",
-      cwd: "/tmp",
-      notify: false,
-    });
-    const waiter = new Promise<{ timedOut: boolean }>((resolve) => {
-      task.waiter = {
-        resolve: resolve as never,
-        timer: setTimeout(() => {}, 0),
-      };
-    });
-    // Simulate what async_wait does, with a generous budget.
-    const got = await Promise.race([
-      waiter,
-      new Promise<{ timedOut: boolean }>((r) => setTimeout(() => r({ timedOut: true }), 5_000)),
-    ]);
-    expect(got.timedOut).toBe(false);
-  });
-
-  it("reports timedOut when the task outlives the budget", async () => {
-    const { pi } = fakePi();
-    const task = spawnAsyncShell(pi, store, {
-      command: "sleep 5",
-      cwd: "/tmp",
-      notify: false,
-    });
-    const result = await new Promise<{ timedOut: boolean }>((resolve) => {
-      const timer = setTimeout(() => {
-        task.waiter = undefined;
-        resolve({ timedOut: true });
-      }, 100);
-      task.waiter = { resolve: resolve as never, timer };
-    });
-    expect(result.timedOut).toBe(true);
-    await killAsyncTask(task.id);
-  });
-
-  it("caps the wait budget at MAX_WAIT_MS so it cannot be abused as a sleep", () => {
-    expect(MAX_WAIT_MS).toBe(120_000);
-    expect(DEFAULT_WAIT_MS).toBeLessThanOrEqual(MAX_WAIT_MS);
+    asyncExtension(pi);
+    // Tools are registered synchronously in the factory body; no session event
+    // needs to fire for the surface to exist.
+    const registered = (
+      pi.registerTool as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls.map((call) => (call[0] as { name: string }).name);
+    expect(registered).toEqual(["async_bash", "async_status", "async_kill"]);
+    expect(registered).not.toContain("async_wait");
   });
 });
 

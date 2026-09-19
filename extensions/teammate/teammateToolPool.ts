@@ -41,7 +41,6 @@ export const TEAMMATE_COLLABORATION_TOOLS = [
   "async_bash",
   "async_status",
   "async_kill",
-  "async_wait",
 ] as const;
 
 export function filterTeammateTools(allTools: readonly string[]): string[] {

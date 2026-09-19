@@ -50,6 +50,7 @@ import {
   type ReplayedTeammate,
 } from "./jsonlEvents.js";
 import { retireTeammate, type TeammateHandle } from "./handle.js";
+import { getOwnerIndex } from "../tasks/currentOwner.js";
 import { startTeammateLoop } from "./teammateLoop.js";
 import { filterTeammateTools, TEAMMATE_COLLABORATION_TOOLS } from "./teammateToolPool.js";
 import { subscribeTeammateProgress } from "./sessionProgress.js";
@@ -511,6 +512,9 @@ export async function respawnTeammates(
     const handleRef = ctx.handle;
 
     registerApprovalSession(replayed.sessionFile, replayed.identity);
+    // Mirror spawnTeammate: attribute the resumed teammate's future background
+    // tasks to it, so a later kill can reap them.
+    getOwnerIndex().register(replayed.sessionFile, agentId);
 
     // Mirror spawnTeammate.ts: a teammate the leader already tore down must not
     // keep surfacing turns. See spawnTeammate.ts for the observed failure.
@@ -646,6 +650,7 @@ export async function respawnTeammates(
           status: terminalStatus,
         });
         retireTeammate(handleRef, { teamName, agentId }, replayed.sessionFile);
+        getOwnerIndex().unregister(replayed.sessionFile);
         try {
           session.dispose();
         } catch (e) {
