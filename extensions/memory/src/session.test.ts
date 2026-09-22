@@ -97,3 +97,15 @@ describe("MemorySession", () => {
     expect(s.build("anything")).toBeNull();
   });
 });
+
+it("does not consume recall for topic blocks excluded by a small dynamic budget", () => {
+  const s = new MemorySession({ fs: repoFs(), cwd: "/repo", home: "/home/u" });
+  s.start();
+  expect(s.build("auth", 0)).toBeNull();
+  const tiny = s.build("auth", 200);
+  expect(Buffer.byteLength(tiny!)).toBeLessThanOrEqual(200);
+  expect(tiny).not.toContain("### Auth");
+  expect(s.build("auth", 8000)).toContain("### Auth");
+  s.resetInjectionLatch();
+  expect(s.build("auth", 8000)).toContain("### Auth");
+});

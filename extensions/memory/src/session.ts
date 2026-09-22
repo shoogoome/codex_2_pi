@@ -160,6 +160,7 @@ export class MemorySession {
   /** session_compact: dropped injected messages → re-arm rules + index. */
   resetInjectionLatch(): void {
     this.armed = true;
+    this.recalledPaths.clear();
   }
 
   /**
@@ -167,14 +168,14 @@ export class MemorySession {
    * (until re-armed) and recalled topic bodies for the current prompt. Returns
    * null when nothing should be injected.
    */
-  build(prompt: string): string | null {
+  build(prompt: string, maxBytes?: number): string | null {
     if (!this.hasMemory()) return null;
 
     const includeRulesAndIndex = this.armed;
     const keywords = extractKeywords(prompt ?? "");
     const { selected } = selectTopics(this.topics, keywords, {
       maxPerTurn: this.maxPerTurn,
-      maxBytesPerTopic: this.maxBytesPerTopic,
+      maxBytesPerTopic: maxBytes === undefined ? this.maxBytesPerTopic : Math.floor(maxBytes / 4),
       sessionCap: this.sessionCap,
       alreadyRecalled: this.recalledPaths,
     });
@@ -185,12 +186,19 @@ export class MemorySession {
       index: this.index,
       recalled: selected,
       includeRulesAndIndex,
+      maxBytes,
     });
     if (content === null) return null;
 
     // Advance latches only once we know we're returning content.
     this.armed = false;
-    for (const t of selected) this.recalledPaths.add(t.path);
+    for (const t of selected) {
+      // A small dynamic budget may cut off entire topic blocks. Do not mark
+      // invisible topics as recalled, so a later turn can still retrieve them.
+      if (content.includes(`### ${t.name} (${t.type}) — \`${t.path}\``)) {
+        this.recalledPaths.add(t.path);
+      }
+    }
     return content;
   }
 }

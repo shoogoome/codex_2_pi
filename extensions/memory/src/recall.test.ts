@@ -62,7 +62,7 @@ describe("truncateBody", () => {
     const body = "line1\nline2\nline3\n".repeat(200);
     const r = truncateBody(body, 128);
     expect(r.truncated).toBe(true);
-    expect(Buffer.byteLength(r.content, "utf8")).toBeLessThanOrEqual(128 + 64);
+    expect(Buffer.byteLength(r.content, "utf8")).toBeLessThanOrEqual(128);
     expect(r.content).toContain("[truncated:");
   });
 });
@@ -95,4 +95,12 @@ describe("selectTopics", () => {
     });
     expect(capReached.selected).toHaveLength(0);
   });
+});
+
+it("keeps tiny byte budgets and Unicode boundaries safe", () => {
+  for (let max = 0; max < 200; max++) {
+    const { content } = truncateBody("😀中文".repeat(100), max);
+    expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(max);
+    expect(content).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+  }
 });

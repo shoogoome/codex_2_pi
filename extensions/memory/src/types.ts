@@ -73,10 +73,13 @@ export const AGENT_MEMORY_SUBDIR = ".pi/agent/memory";
 export const MEMORY_INDEX_FILENAME = "MEMORY.md";
 
 /** Recall budgets (tuning knobs — see risks in the build plan). */
-export const RECALL_MAX_TOPICS_PER_TURN = 5;
+export const RECALL_MAX_TOPICS_PER_TURN = 2;
+/** Hard UTF-8 budgets, including truncation notices and metadata. */
+export const MEMORY_INDEX_MAX_BYTES = 2 * 1024;
+export const MEMORY_INJECTION_MAX_BYTES = 8 * 1024;
 /** Per-topic body byte cap when recalled into context. */
-export const RECALL_TOPIC_MAX_BYTES = 4 * 1024;
+export const RECALL_TOPIC_MAX_BYTES = 2 * 1024;
 /** Session cumulative cap on distinct topics ever recalled. */
-export const SESSION_MAX_RECALL_TOPICS = 20;
+export const SESSION_MAX_RECALL_TOPICS = 6;
 /** Minimum keyword length considered for recall scoring. */
 export const MIN_KEYWORD_LENGTH = 3;

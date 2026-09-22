@@ -24,6 +24,10 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
+import { randomUUID } from "node:crypto";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { boundMemoryContext, memoryBudget, readContextRatio } from "./src/budget.js";
+import { compactMemoryDirectory } from "./src/compact.js";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
@@ -71,6 +75,21 @@ export default function memoryExtension(pi: ExtensionAPI): void {
   // Per-session state machine; rebuilt whenever the active session changes.
   let session: MemorySession | null = null;
   let sessionGeneration = 0;
+  let memoryEpoch: string | undefined;
+  let compacting = false;
+  let compactionDone: Promise<void> | undefined;
+  const compactEntryType = "memory-compaction";
+  const budgetFor = (ctx: ExtensionContext): number =>
+    memoryBudget(ctx.model?.contextWindow, readContextRatio(getAgentDir()));
+  const restoreEpoch = (ctx: ExtensionContext): void => {
+    memoryEpoch = undefined;
+    for (const entry of ctx.sessionManager?.getBranch() ?? []) {
+      if (entry.type === "custom" && entry.customType === compactEntryType) {
+        const data = entry.data as { memoryEpoch?: unknown } | undefined;
+        if (typeof data?.memoryEpoch === "string") memoryEpoch = data.memoryEpoch;
+      }
+    }
+  };
   let autoMemoryQueue: Promise<void> = Promise.resolve();
 
   const enabled = (): boolean => {
@@ -115,24 +134,31 @@ export default function memoryExtension(pi: ExtensionAPI): void {
       session = null;
       return;
     }
+    restoreEpoch(ctx);
     beginSession(ctx);
   };
   // The host reports startup, reload, resume, new, and fork through one event.
   pi.on("session_start", handleSessionChange);
+  pi.on("session_tree", handleSessionChange);
+  pi.on("context", (event, ctx) => ({
+    messages: boundMemoryContext(event.messages, enabled() ? budgetFor(ctx) : 0, memoryEpoch),
+  }));
 
   // before_agent_start: inject the memory block (rules+index once, recall each
   // turn) as a display:false CustomMessage. Never touches systemPrompt so we
   // compose cleanly with other extensions.
-  pi.on("before_agent_start", async (event, _ctx: ExtensionContext) => {
+  pi.on("before_agent_start", async (event, ctx: ExtensionContext) => {
+    await compactionDone;
     if (!enabled() || !session) return;
     try {
-      const content = session.build(event.prompt ?? "");
+      const content = session.build(event.prompt ?? "", budgetFor(ctx));
       if (!content) return;
       return {
         message: {
           customType: CUSTOM_TYPE,
           content,
           display: false,
+          details: { memoryEpoch },
         },
       };
     } catch {
@@ -177,13 +203,57 @@ export default function memoryExtension(pi: ExtensionAPI): void {
   pi.on("session_shutdown", async () => {
     // Give queued writes a chance to complete before the host tears down.
     await autoMemoryQueue;
+    await compactionDone;
   });
 
-  // --- /memory list | show <name> | init -------------------------------
+  // This only replaces injected memory, not the user's conversation or tools.
+  const compactMemory = async (_args: string, ctx: ExtensionCommandContext): Promise<void> => {
+    if (!enabled()) {
+      ctx.ui.notify("Memory is disabled.", "warning");
+      return;
+    }
+    if (compacting || !ctx.isIdle()) {
+      ctx.ui.notify("Busy — try /memory-compact again once the agent is idle.", "warning");
+      return;
+    }
+    compacting = true;
+    let finish!: () => void;
+    compactionDone = new Promise<void>((resolve) => { finish = resolve; });
+    const generation = sessionGeneration;
+    try {
+      await autoMemoryQueue;
+      if (generation !== sessionGeneration || !ctx.isIdle()) {
+        ctx.ui.notify("Session changed or became busy; memory compaction cancelled.", "warning");
+        return;
+      }
+      const active = session ?? freshSession(ctx);
+      const result = await compactMemoryDirectory(active.getMemoryDir());
+      if (generation !== sessionGeneration) return;
+      const epoch = randomUUID();
+      pi.appendEntry(compactEntryType, { memoryEpoch: epoch });
+      memoryEpoch = epoch;
+      active.reload();
+      active.resetInjectionLatch();
+      session = active;
+      ctx.ui.notify(`Memory compacted: ${result.changed} files changed. Old injected memory will be replaced on the next model request; conversation unchanged.${result.backupDir ? ` Backup: ${result.backupDir}` : ""}`, "info");
+    } catch (error) {
+      ctx.ui.notify(`Memory compaction failed: ${(error as Error).message}`, "error");
+    } finally {
+      compacting = false;
+      compactionDone = undefined;
+      finish();
+    }
+  };
+  pi.registerCommand("memory-compact", {
+    description: "Compact this session's memory directory and replace previously injected memory.",
+    handler: compactMemory,
+  });
+
+  // --- /memory list | show <name> | init | compact ----------------------
   pi.registerCommand("memory", {
-    description: "Inspect long-term memory: /memory list | show <name> | init",
+    description: "Inspect long-term memory: /memory list | show <name> | init | compact",
     getArgumentCompletions: (prefix) => {
-      const subs = ["list", "show", "init"];
+      const subs = ["list", "show", "init", "compact"];
       const p = prefix.trim().toLowerCase();
       return subs
         .filter((s) => s.startsWith(p))
@@ -195,6 +265,10 @@ export default function memoryExtension(pi: ExtensionAPI): void {
         return;
       }
       const [sub, ...rest] = args.trim().split(/\s+/);
+      if (sub?.toLowerCase() === "compact") {
+        await compactMemory(rest.join(" "), ctx);
+        return;
+      }
       const s = freshSession(ctx);
       const memoryDir = s.getMemoryDir();
       const entries = deriveEntries(s);
@@ -245,7 +319,7 @@ export default function memoryExtension(pi: ExtensionAPI): void {
         }
         default: {
           ctx.ui.notify(
-            "Usage: /memory list | show <name> | init",
+            "Usage: /memory list | show <name> | init | compact",
             "warning",
           );
         }
@@ -267,7 +341,7 @@ export default function memoryExtension(pi: ExtensionAPI): void {
         return;
       }
       // Guard mutation on idle so we never race the agent's own file writes.
-      if (!ctx.isIdle()) {
+      if (compacting || !ctx.isIdle()) {
         ctx.ui.notify("Busy — try /remember again once the agent is idle.", "warning");
         return;
       }

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +19,10 @@ function makeFakePi() {
   const flags = new Map<string, { default: unknown }>();
   const renderers = new Map<string, unknown>();
   return {
+    entries: [] as Array<{ type: string; customType: string; data: unknown }>,
+    appendEntry(customType: string, data: unknown) {
+      this.entries.push({ type: "custom", customType, data });
+    },
     handlers,
     commands,
     flags,
@@ -42,6 +46,8 @@ function makeFakePi() {
     },
   };
 }
+
+afterEach(() => vi.unstubAllEnvs());
 
 let root: string;
 
@@ -70,6 +76,8 @@ describe("memory extension wiring", () => {
     }
     expect(pi.commands.has("memory")).toBe(true);
     expect(pi.commands.has("remember")).toBe(true);
+    expect(pi.commands.has("memory-compact")).toBe(true);
+    expect(pi.handlers.has("context")).toBe(true);
     expect(pi.renderers.has("memory")).toBe(true);
   });
 
@@ -183,4 +191,59 @@ describe("memory extension wiring", () => {
     expect(result?.message?.content).toContain("# Second memory");
     expect(result?.message?.content).not.toContain("# First memory");
   });
+});
+
+it("uses current model and live global settings to bound cumulative injected memory", async () => {
+  const agentDir = join(root, "agent-settings");
+  mkdirSync(agentDir, { recursive: true });
+  vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+  writeFileSync(join(agentDir, "settings.json"), '{"memory":{"contextRatio":0.05}}');
+  const pi = makeFakePi();
+  memoryExtension(pi as never);
+  const ctx = { model: { contextWindow: 10_000 } };
+  const messages = [{ role: "custom", customType: "memory", content: "word ".repeat(1000) }];
+  const context = pi.handlers.get("context")![0];
+  const result = await context({ messages }, ctx) as { messages: Array<{ content: string }> };
+  expect(Buffer.byteLength(result.messages[0].content)).toBeLessThanOrEqual(500);
+  ctx.model.contextWindow = 100_000;
+  expect((await context({ messages }, ctx) as typeof result).messages[0].content).toBe(messages[0].content);
+  writeFileSync(join(agentDir, "settings.json"), '{"memory":{"contextRatio":0}}');
+  expect((await context({ messages }, ctx) as typeof result).messages).toEqual([]);
+});
+
+it("compacts memory in an existing session and restores pruning after reload and tree navigation", async () => {
+  const repo = join(root, "manual-compact");
+  mkdirSync(join(repo, ".git"), { recursive: true });
+  const pi = makeFakePi();
+  memoryExtension(pi as never);
+  const notify = vi.fn();
+  const ctx = { cwd: repo, isIdle: () => true, ui: { notify }, sessionManager: { getBranch: () => pi.entries } };
+  await pi.handlers.get("session_start")![0]({}, ctx);
+  const before = pi.handlers.get("before_agent_start")![0];
+  const old = await before({ prompt: "anything" }, ctx) as { message: object };
+  await pi.commands.get("memory-compact")!.handler("", ctx);
+  expect(pi.entries).toHaveLength(1);
+  expect(notify).toHaveBeenLastCalledWith(expect.stringContaining("Memory compacted"), "info");
+  const fresh = await before({ prompt: "anything" }, ctx) as { message: object };
+  const messages = [{ role: "custom", ...old.message }, { role: "user", content: "keep conversation" }, { role: "custom", ...fresh.message }];
+  const context = pi.handlers.get("context")![0];
+  const filtered = await context({ messages }, ctx) as { messages: unknown[] };
+  expect(filtered.messages).toEqual(messages.slice(1));
+  await pi.handlers.get("session_start")![0]({ reason: "reload" }, ctx);
+  expect(await context({ messages }, ctx)).toEqual(filtered);
+  pi.entries.length = 0; // Navigate before the compaction marker.
+  await pi.handlers.get("session_tree")![0]({}, ctx);
+  expect((await context({ messages }, ctx) as typeof filtered).messages).toHaveLength(3);
+});
+
+it("does not compact while busy or disabled", async () => {
+  const pi = makeFakePi();
+  memoryExtension(pi as never);
+  const notify = vi.fn();
+  await pi.commands.get("memory-compact")!.handler("", { isIdle: () => false, ui: { notify } });
+  expect(notify).toHaveBeenLastCalledWith(expect.stringContaining("Busy"), "warning");
+  vi.stubEnv("PI_MEMORY", "0");
+  await pi.commands.get("memory-compact")!.handler("", { isIdle: () => true, ui: { notify } });
+  expect(notify).toHaveBeenLastCalledWith("Memory is disabled.", "warning");
+  expect(pi.entries).toEqual([]);
 });

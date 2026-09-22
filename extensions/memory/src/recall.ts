@@ -72,6 +72,10 @@ export function truncateBody(
   if (total <= max) return { content: body, truncated: false };
   const notice = (kept: number) =>
     `\n… [truncated: kept ${kept} of ${total} bytes]`;
+  // Tiny budgets must also include the notice, and never split a surrogate pair.
+  if (max < Buffer.byteLength(notice(0), "utf8")) {
+    return { content: "", truncated: true };
+  }
   const reserve = Buffer.byteLength(notice(total), "utf8") + 16;
   const budget = Math.max(0, max - reserve);
   let lo = 0;
@@ -81,6 +85,7 @@ export function truncateBody(
     if (Buffer.byteLength(body.slice(0, mid), "utf8") <= budget) lo = mid;
     else hi = mid - 1;
   }
+  if (lo > 0 && /[\uD800-\uDBFF]/.test(body[lo - 1]!)) lo--;
   let cut = body.slice(0, lo);
   const lastNl = cut.lastIndexOf("\n");
   if (lastNl > 0) cut = cut.slice(0, lastNl);

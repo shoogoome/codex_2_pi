@@ -40,7 +40,7 @@
 | `extensions/agents-context` | 补充加载 `AGENTS.md`/`CLAUDE.md`、`.claude/rules`、`@include`、条件 paths 规则，去重后隐藏注入。 | `--agents-context`（默认开）· `PI_AGENTS_CONTEXT=0` |
 | `extensions/settings-env` | 从全局和项目 `settings.json` 的顶层 `env` 读取变量并注入 Pi 进程；已有环境默认优先。 | `env` · `envOverride` |
 | `extensions/channel` | 多 Channel 通信中心：TUI 面板管理具名 HTTP/微信 ClawBot 通道，支持当前/多选/全部会话范围、入站/出站/双向限制；Pi 可感知名称并用 `channel_send` 路由阶段产物。认证由协议适配器提供，兼容原 `PI_CHANNEL_*` 单 HTTP 入站配置。 | `/channel` 面板 · `channel_send` · `/channel status\|restart\|auth\|login\|send` |
-| `extensions/memory` | Claude Code 风格自动长期记忆：零配置初始化、相关主题召回、每轮按需提炼并去重更新 `.pi/memory`。 | `/memory [list\|show\|init]` · `/remember <text>`（均为可选手动入口） |
+| `extensions/memory` | Claude Code 风格自动长期记忆：按当前模型窗口动态限额，全局 `memory.contextRatio` 设置占比（默认 2%），限制累计注入；按需提炼，支持备份去重目录并收拢会话已注入记忆。 | `/memory [list\|show\|init\|compact]` · `/memory-compact` · `/remember <text>` |
 | `extensions/approvals` | 唯一审批闸门:权限模式 × 规则库 × 命令安全 × 受保护路径 × MCP 逐工具，统一 allow/ask/deny。 | `/approvals [mode\|rules\|allow\|ask\|deny\|remove]` |
 | `extensions/plan-mode` | 只读规划闸门:仅可探查，模型提交计划经批准后才恢复写工具。 | `/plan [on\|off]` · `Alt+P` · `exit_plan_mode` |
 | `extensions/behavior` | 向系统提示词追加「工作准则」：Codex 式自主性 + Claude Code 式工程规则（默认开）。 | `--behavior=false` · `PI_BEHAVIOR=0` |

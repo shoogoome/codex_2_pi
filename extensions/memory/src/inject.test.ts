@@ -78,3 +78,24 @@ describe("buildInjection", () => {
     expect(out).toContain("## Recalled memory");
   });
 });
+
+ describe("injection budgets", () => {
+  it("bounds oversized index, metadata and recall including UTF-8 text", () => {
+    for (const includeRulesAndIndex of [true, false]) {
+      const out = buildInjection({
+        memoryDir: "/m", indexPath: "/m/MEMORY.md",
+        index: "索引😀".repeat(10000),
+        recalled: [recalled({ name: "主题😀".repeat(10000), body: "正文".repeat(10000) })],
+        includeRulesAndIndex,
+      })!;
+      expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(8192);
+      expect(out).toContain("[truncated:");
+      expect(out).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+    }
+  });
+  it("reserves room for recall after a huge index", () => {
+    const out = buildInjection({ memoryDir: "/m", indexPath: "/m/MEMORY.md",
+      index: "index".repeat(10000), recalled: [recalled()], includeRulesAndIndex: true });
+    expect(out).toContain("uses OAuth");
+  });
+});
