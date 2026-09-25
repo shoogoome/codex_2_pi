@@ -70,11 +70,10 @@ async function fire(handlers: Map<string, Handler[]>, event: string, payload: an
 }
 
 describe("fast mode core", () => {
-  it("recognizes only Codex models advertised with the priority tier", () => {
-    for (const id of ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"]) {
+  it("accepts every OpenAI Codex Responses model without an ID allowlist", () => {
+    for (const id of ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.4-mini", "future-model"]) {
       expect(isFastCapableModel({ ...codexModel, id } as any)).toBe(true);
     }
-    expect(isFastCapableModel({ ...codexModel, id: "gpt-5.4-mini" } as any)).toBe(false);
     expect(isFastCapableModel({ ...codexModel, provider: "openai" } as any)).toBe(false);
     expect(isFastCapableModel({ ...codexModel, api: "openai-responses" } as any)).toBe(false);
   });
@@ -98,7 +97,7 @@ describe("fast mode core", () => {
     expect(applyFastServiceTier(payload, { enabled: true, model: codexModel as any, usingOAuth: false })).toBe(payload);
     expect(applyFastServiceTier(payload, {
       enabled: true,
-      model: { ...codexModel, id: "gpt-5.4-mini" } as any,
+      model: { ...codexModel, provider: "openai" } as any,
       usingOAuth: true,
     })).toBe(payload);
     expect(applyFastServiceTier("raw", { enabled: true, model: codexModel as any, usingOAuth: true })).toBe("raw");
@@ -164,16 +163,22 @@ describe("fast mode extension", () => {
     expect(unchanged).toBeUndefined();
   });
 
-  it("does not enable Fast for API-key auth or unsupported models", async () => {
+  it("does not enable Fast for API-key auth, but allows any Codex model", async () => {
     const apiKeyHarness = createHarness({ oauth: false });
     await apiKeyHarness.commands.get("fast").handler("on", apiKeyHarness.ctx);
     expect(apiKeyHarness.entries).toEqual([]);
     expect(apiKeyHarness.notifications.at(-1)?.message).toContain("OAuth");
 
-    const miniHarness = createHarness({ model: { ...codexModel, id: "gpt-5.4-mini" } });
-    await miniHarness.commands.get("fast").handler("on", miniHarness.ctx);
-    expect(miniHarness.entries).toEqual([]);
-    expect(miniHarness.notifications.at(-1)?.message).toContain("unavailable");
+    const modelHarness = createHarness({ model: { ...codexModel, id: "gpt-5.4-mini" } });
+    await modelHarness.commands.get("fast").handler("on", modelHarness.ctx);
+    expect(modelHarness.entries.at(-1)?.data).toEqual({ enabled: true });
+    const result = await fire(
+      modelHarness.handlers,
+      "before_provider_request",
+      { type: "before_provider_request", payload: { model: "gpt-5.4-mini" } },
+      modelHarness.ctx,
+    );
+    expect(result).toEqual({ model: "gpt-5.4-mini", service_tier: "priority" });
   });
 
   it("restores Fast from the session branch and from --fast", async () => {

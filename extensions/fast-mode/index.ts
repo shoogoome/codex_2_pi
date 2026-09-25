@@ -27,7 +27,7 @@ function availabilityMessage(model: CurrentModel, availability: FastAvailability
     case "no-model":
       return "Fast mode requires an active Codex model.";
     case "unsupported-model":
-      return `Fast mode is unavailable for ${modelLabel(model)}. Supported models: GPT-6 Astra, GPT-5.6 Sol/Terra/Luna, GPT-5.5, and GPT-5.4.`;
+      return `Fast mode is unavailable for ${modelLabel(model)}. It requires an OpenAI Codex Responses model.`;
     case "oauth-required":
       return "Fast mode requires openai-codex ChatGPT subscription OAuth; API-key requests are left unchanged.";
   }

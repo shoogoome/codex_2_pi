@@ -3,15 +3,6 @@ import type { Model } from "@earendil-works/pi-ai";
 export const FAST_MODE_STATE_ENTRY = "fast-mode-state";
 export const FAST_SERVICE_TIER = "priority";
 
-const FAST_MODEL_IDS = new Set([
-  "gpt-6-astra",
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-  "gpt-5.6-luna",
-  "gpt-5.5",
-  "gpt-5.4",
-]);
-
 export interface FastModeState {
   enabled: boolean;
 }
@@ -27,9 +18,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function isFastCapableModel(model: FastModel | undefined): boolean {
-  return model?.provider === "openai-codex"
-    && model.api === "openai-codex-responses"
-    && FAST_MODEL_IDS.has(model.id);
+  // The priority service tier applies to every OpenAI Codex Responses model;
+  // keep this independent of a hard-coded model ID allowlist.
+  return model?.provider === "openai-codex" && model.api === "openai-codex-responses";
 }
 
 export function getFastAvailability(
