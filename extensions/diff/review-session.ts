@@ -72,6 +72,7 @@ export class SessionReview {
   get signal(): AbortSignal { return this.controller.signal; }
   get disposed(): boolean { return this.signal.aborted; }
   get hasBaseline(): boolean { return this.tracker?.hasBaseline ?? false; }
+  get hasRepositories(): boolean { return this.repositories.size > 0; }
 
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
@@ -99,7 +100,16 @@ export class SessionReview {
       this.changed();
       this.repository = await this.options.git.resolve(this.signal);
       this.signal.throwIfAborted();
-      if (!this.repository) throw new Error("当前目录不在 Git 工作树内，无法打开会话审阅。");
+      if (!this.repository) {
+        // A historical session may start from a non-Git cwd while later tools
+        // operate in another repository. Keep the session alive so task cwd,
+        // absolute paths, and shell directory hints can discover that repo.
+        this.viewMode = "workspaces";
+        this.notice = "当前 cwd 不在 Git 工作树；会话触及其他 Git 仓库后可在跨目录模式查看。";
+        this.stale = false;
+        this.error = undefined;
+        return;
+      }
       const primary = await this.createRepositoryReview(this.repository, this.options.git);
       this.repositories.set(this.repository.key, primary);
       this.state = primary.state;
@@ -231,8 +241,10 @@ export class SessionReview {
       this.loading = true;
       this.changed();
       try {
+        const primaryRepository = this.repository;
+        if (!primaryRepository) throw new Error("当前 cwd 不在 Git 工作树内，当前目录文件模式不可用；请使用跨目录仓库模式。");
         const files = await listFiles.call(this.options.git, this.options.cwd, this.signal);
-        this.folderFiles = new Map([...files].map(([path, file]) => [path, this.decorate(this.repositories.get(this.repository!.key)!, file)]));
+        this.folderFiles = new Map([...files].map(([path, file]) => [path, this.decorate(this.repositories.get(primaryRepository.key)!, file)]));
       } finally { if (!this.disposed) { this.loading = false; this.changed(); } }
     }
     this.viewMode = mode;
@@ -277,8 +289,9 @@ export class SessionReview {
     try {
       await Promise.all([...this.repositories.values()].map((review) => review.tracker.refresh()));
       if (this.viewMode === "folder" && this.options.git.listFiles) {
+        if (!this.repository) throw new Error("当前 cwd 不在 Git 工作树内，当前目录文件模式不可用；请使用跨目录仓库模式。");
         const files = await this.options.git.listFiles(this.options.cwd, this.signal);
-        const primary = this.repositories.get(this.repository!.key)!;
+        const primary = this.repositories.get(this.repository.key)!;
         this.folderFiles = new Map([...files].map(([path, file]) => [path, this.decorate(primary, file)]));
       }
     } finally { if (!this.disposed) { this.loading = false; this.changed(); } }
@@ -360,10 +373,12 @@ export class SessionReview {
     const params = input && typeof input === "object" ? input as Record<string, unknown> : {};
     const tool = name.split(".").at(-1) ?? name;
     const trackers: ReviewTracker[] = [];
-    const operation = reviewOperationForTool(name, input, this.repository!.root, this.options.cwd);
-    if (operation) {
-      await this.tracker!.begin(`tool:${id}`, operation.paths);
-      trackers.push(this.tracker!);
+    const operation = this.repository
+      ? reviewOperationForTool(name, input, this.repository.root, this.options.cwd)
+      : undefined;
+    if (operation && this.tracker) {
+      await this.tracker.begin(`tool:${id}`, operation.paths);
+      trackers.push(this.tracker);
     }
     const directories = this.shellDirectories(tool, params);
     // Explicit write paths may point into another repository, most commonly when
@@ -377,8 +392,8 @@ export class SessionReview {
       try { external = await this.ensureRepository(directory); }
       catch { continue; }
       if (!external || trackers.includes(external.tracker)) continue;
-      const relativeToPrimary = relative(this.repository!.root, external.repository.root);
-      const isExternal = relativeToPrimary === ".." || relativeToPrimary.startsWith(`..${sep}`) || isAbsolute(relativeToPrimary);
+      const relativeToPrimary = this.repository ? relative(this.repository.root, external.repository.root) : "../external";
+      const isExternal = !this.repository || relativeToPrimary === ".." || relativeToPrimary.startsWith(`..${sep}`) || isAbsolute(relativeToPrimary);
       if (isExternal) {
         await external.tracker.begin(`tool:${id}`);
         trackers.push(external.tracker);

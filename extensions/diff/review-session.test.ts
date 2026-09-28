@@ -6,7 +6,7 @@ import type { ReviewDetail, ReviewFile } from "./review-types.js";
 const instances: SessionReview[] = [];
 afterEach(() => { instances.splice(0).forEach((session) => session.dispose()); });
 const file = (path: string, version: string, dirty = true): ReviewFile => ({ path, fingerprint: version.repeat(64), status: dirty ? " M" : "  ", dirty });
-function fixture(branch: unknown[] = [], sessionId = "s1") {
+function fixture(branch: unknown[] = [], sessionId = "s1", primaryRepo = true) {
   const disk = new Map<string, ReviewFile>();
   const entries: unknown[] = [];
   const repo = { root: "/repo", gitDir: "/repo/.git", key: "repo" };
@@ -27,7 +27,8 @@ function fixture(branch: unknown[] = [], sessionId = "s1") {
   };
   const persist = vi.fn((event: ReviewEvent) => { entries.push({ type: "custom", customType: REVIEW_ENTRY_TYPE, data: event }); });
   const readerForCwd = vi.fn((cwd: string) => ({ ...git, resolve: async () => cwd.startsWith("/other") ? { root: "/other", gitDir: "/other/.git", key: "other" } : repo }));
-  const session = new SessionReview({ sessionId, cwd: "/repo", branch, git, persist, readerForCwd });
+  const primaryGit = (primaryRepo ? git : { ...git, resolve: vi.fn(async () => null) }) as typeof git;
+  const session = new SessionReview({ sessionId, cwd: "/repo", branch, git: primaryGit, persist, readerForCwd });
   instances.push(session);
   return { session, disk, entries, git, persist, readerForCwd };
 }
@@ -48,6 +49,18 @@ describe("session review integration", () => {
     expect(f.session.getView().files.map((entry) => [entry.path, entry.initialDirty])).toEqual([["a.ts", true]]);
     expect((await f.session.detail("a.ts")).text).toBe("full diff");
     expect(JSON.stringify(f.entries)).not.toContain("full diff");
+  });
+
+  it("keeps a non-Git historical cwd alive and discovers an external repo on edit", async () => {
+    const f = fixture([], "non-git", false);
+    const otherRepo = { root: "/other", gitDir: "/other/.git", key: "other" };
+    f.readerForCwd.mockImplementation(() => ({ ...f.git, resolve: async () => otherRepo }));
+    await f.session.initialize();
+    expect(f.session.getView().mode).toBe("workspaces");
+    await f.session.beforeTool("external-edit", "write", { path: "/other/authorization_setting.dart" });
+    f.disk.set("authorization_setting.dart", file("authorization_setting.dart", "changed"));
+    await f.session.afterTool("external-edit");
+    expect(f.session.getView().files.map((entry) => [entry.repoKey, entry.path])).toEqual([["other", "authorization_setting.dart"]]);
   });
 
   it("lists the whole cwd in folder mode and attributes panel edits", async () => {

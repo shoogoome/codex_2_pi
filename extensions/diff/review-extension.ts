@@ -133,6 +133,10 @@ export function installSessionReview(pi: ExtensionAPI, options: ReviewExtensionO
       try {
         await current.initialize();
         if (epoch !== generation || current.disposed) return;
+        if (!current.hasRepositories) {
+          ctx.ui.notify("当前 cwd 不在 Git 工作树，且尚未发现可审阅的跨目录仓库。请先在其他 Git 仓库执行一次写入或启动相关后台任务后重试。", "warning");
+          return;
+        }
         current.setPanelOpen(true);
         // Render a loading state immediately; opening does not wait for a model turn.
         void current.refresh().catch(() => undefined);

@@ -69,6 +69,13 @@
 - 最终 `npm test`：283 个测试文件通过，2845 项测试通过，5 项跳过；剩余 3 个既有失败文件为 `extensions/side/side-overlay.tui.test.ts`（SDK 的 TUI 仅类型导出）、`extensions/resume-picker/index.test.ts`（夹具排序基线）和 `extensions/web/src/smoke-fast.test.ts`（环境探针），均不由本次审阅改动引入。
 - `npm run typecheck` 仍受仓库既有 SDK 兼容诊断影响（ProviderHeaders、completeSimple、SessionHandleHost/EventBus、TUI、web flag 等）；过滤审阅相关路径后，本轮没有新增类型诊断。
 
+## Follow-up: Non-Git historical cwd
+
+- 修复历史会话从非 Git cwd 恢复时直接终止审阅初始化的问题。
+- 非 Git 主 cwd 现在会进入跨目录仓库候选状态；后续绝对路径 write/edit、Shell 目录提示和后台任务 cwd 发现外部 Git 仓库后，`Ctrl+R` 可正常打开跨目录模式。
+- 若尚未发现任何外部仓库，打开面板会给出明确提示，而不挂起等待一个不可用的 UI。
+- 新增非 Git cwd + 外部仓库编辑回归；审阅核心 48 项相关测试通过。
+
 ## Follow-up: Explicit Git diff row backgrounds
 
 - 发现 `vague-codex` 的 `toolSuccessBg` 是中性 `#1b1b1c`，不能直接作为新增行背景，因此新增 `review-colors.ts`：依据主题明暗模式选择亮/暗对比度，但使用独立明确的绿/红 ANSI 背景，不复用工具状态背景色。
