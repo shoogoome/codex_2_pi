@@ -40,9 +40,9 @@
 - **WHEN** 多个会话操作重叠执行，或一个操作写入文件后失败或被取消
 - **THEN** 成功观察到的实际修改仍被保留，不被另一个操作的旧快照覆盖，不以工具成功与否代替文件变化判定
 
-#### Scenario: Separate worktree
-- **WHEN** 子任务在另一个仓库或独立 worktree 修改文件
-- **THEN** 当前工作树面板不混入这些文件，并在使用说明中明确当前工作树范围
+#### Scenario: Separate worktree in default mode
+- **WHEN** 子任务在另一个仓库或独立 worktree 修改文件且用户仍处于默认 Git 差异模式
+- **THEN** 当前主工作树列表不混入这些文件；切换跨目录仓库模式后，若该操作窗口已发现对应仓库，则可以单独查看这些文件
 
 ### Requirement: File-level complete Git differences
 系统 SHALL 提供按路径排列的文件列表、Git 状态、可获得的增删行数和可滚动的逐文件差异。跟踪文件 SHALL 默认显示 HEAD 到当前工作树的净差异，涵盖暂存和未暂存的效果；若 index 仍有变化但净差异为空，MUST 显示暂存及未暂存两部分，避免隐藏待提交内容。未跟踪文件 SHALL 作为新增内容展示，无 HEAD 仓库 SHALL 使用空树语义。
@@ -131,6 +131,22 @@
 #### Scenario: Unsupported environment
 - **WHEN** 用户在非 Git 目录或非 TUI 模式请求审阅面板
 - **THEN** 系统给出明确不可用原因，不启动终端面板、不破坏现有命令，也不写入模型上下文
+
+### Requirement: Cross-directory repository review
+
+系统 SHALL 提供跨目录仓库模式，聚合当前会话操作窗口触及的其他 Git 工作树。系统 MUST 按 `repoKey` 隔离每个仓库的基线、候选、详情读取、编辑和确认，不得因同名相对路径串库；未被当前会话发现的任意磁盘脏文件不得自动纳入。
+
+#### Scenario: Background task in another repository
+- **WHEN** 当前会话启动的后台任务在不同 Git 工作树的 cwd 中修改文件
+- **THEN** 跨目录仓库模式显示该仓库的待审文件，Git 差异相对该仓库 HEAD 计算，主仓库模式不混入该文件
+
+#### Scenario: Explicit path or shell directory
+- **WHEN** 会话通过绝对路径 write/edit，或常见 `cd <repo>` / `git -C <repo>` Shell 形式修改另一个仓库
+- **THEN** 系统在对应操作窗口建立该仓库基线并纳入实际变化，详情、编辑和确认仍绑定对应仓库
+
+#### Scenario: Same filename across repositories
+- **WHEN** 两个仓库都存在同名候选文件
+- **THEN** 列表显示仓库目录前缀，选择、详情读取、确认和后续版本失效互不影响
 
 ### Requirement: Vim navigation without mutation ambiguity
 

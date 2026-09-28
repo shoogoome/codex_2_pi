@@ -9,6 +9,7 @@
 import {
   type ExtensionAPI,
   type ExtensionCommandContext,
+  type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { completeSimple, type TextContent, type UserMessage } from "@earendil-works/pi-ai";
 import {
@@ -19,6 +20,7 @@ import {
 } from "./side-context.js";
 import { buildInitialSideMessage } from "./side-prompt.js";
 import { completeSideWithOverflowRetry } from "./side-request.js";
+import { SIDE_REQUEST_CHANNEL, type SideRequest } from "../shared/side-protocol.js";
 import {
   SIDE_OVERLAY_MAX_HEIGHT,
   SideOverlay,
@@ -31,9 +33,16 @@ export default function sideExtension(pi: ExtensionAPI) {
     description: "start a Codex-style side conversation in a temporary overlay fork",
     handler: async (args, ctx) => runSide(args, ctx, pi),
   });
+  if (pi.events && typeof pi.events.on === "function") {
+    pi.events.on(SIDE_REQUEST_CHANNEL, (data) => {
+      const request = data as Partial<SideRequest>;
+      if (typeof request.question !== "string" || !request.ctx) return;
+      void runSide(request.question, request.ctx, pi);
+    });
+  }
 }
 
-async function runSide(args: string, ctx: ExtensionCommandContext, pi: ExtensionAPI): Promise<void> {
+export async function runSide(args: string, ctx: ExtensionContext, pi: ExtensionAPI): Promise<void> {
   if (!ctx.hasUI) {
     ctx.ui.notify("/side requires interactive mode", "error");
     return;

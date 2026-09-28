@@ -1,9 +1,10 @@
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { reviewRowBackground, type ReviewBackgroundTheme } from "./review-colors.js";
-import type { ReviewDetail, ReviewFile } from "./review-types.js";
+import type { ReviewDetail, ReviewFile, ReviewViewMode } from "./review-types.js";
 
 export interface ReviewPanelView {
   files: readonly (ReviewFile & { initialDirty?: boolean })[];
+  mode?: ReviewViewMode;
   loading?: boolean;
   stale?: boolean;
   error?: string;
@@ -15,17 +16,21 @@ export interface ReviewPanelModel {
   getView(): ReviewPanelView;
   subscribe(listener: () => void): () => void;
   refresh(): Promise<void>;
-  detail(path: string, signal?: AbortSignal): Promise<ReviewDetail>;
+  detail(path: string, signal?: AbortSignal, repoKey?: string): Promise<ReviewDetail>;
   acknowledge(detail: ReviewDetail): Promise<boolean | void>;
+  setMode?(mode: ReviewViewMode): Promise<void>;
 }
 
 type Color = "accent" | "text" | "muted" | "warning" | "error" | "toolDiffAdded" | "toolDiffRemoved";
-interface DiffRow { text: string; kind: "added" | "removed" | "context" }
+interface DiffRow { text: string; raw: string; sourceLine: number; kind: "added" | "removed" | "context" }
 export interface ReviewPanelOptions {
   requestRender(): void;
   onClose(): void;
   height?(): number;
   theme?: ReviewBackgroundTheme & { fg(color: Color, text: string): string };
+  onEdit?(path: string, file?: ReviewFile): Promise<void>;
+  onAskSide?(selection: string): Promise<void>;
+  onAskMain?(selection: string): Promise<void>;
 }
 
 /** Escape terminal controls and bidi overrides; keep the raw path only in the model. */
@@ -48,6 +53,11 @@ export class ReviewPanel implements Component {
   private focus: "list" | "detail" = "list";
   private count = "";
   private pendingG = false;
+  private pendingComma = false;
+  private sidebarVisible = true;
+  private visual = false;
+  private selectionAnchor?: number;
+  private selectionEnd?: number;
   private wrapped?: { detail: ReviewDetail; width: number; lines: DiffRow[] };
   private width = 90;
   private bodyHeight = 12;
@@ -78,7 +88,7 @@ export class ReviewPanel implements Component {
     this.selectedIndex = index >= 0 ? index : Math.max(0, Math.min(this.selectedIndex, this.view.files.length - 1));
     const selected = this.view.files[this.selectedIndex];
     this.selectedPath = selected?.path;
-    const key = selected ? JSON.stringify([selected.path, selected.fingerprint]) : undefined;
+    const key = selected ? JSON.stringify([selected.path, selected.repoKey, selected.fingerprint, this.view.mode]) : undefined;
     if (key !== this.detailKey) {
       this.detailKey = key;
       this.loadDetail();
@@ -93,15 +103,17 @@ export class ReviewPanel implements Component {
     this.controller = new AbortController();
     this.currentDetail = undefined;
     this.wrapped = undefined;
+    this.clearSelection();
     this.error = undefined;
     this.diffOffset = 0;
     const path = this.selectedPath;
+    const repoKey = this.view.files[this.selectedIndex]?.repoKey;
     this.loadingDetail = path !== undefined;
     if (path === undefined) return;
     // Start outside render; request id protects against clients that ignore abort.
     void Promise.resolve().then(() => {
       if (this.closed || request !== this.request) return undefined;
-      return this.model.detail(path, this.controller!.signal);
+      return this.model.detail(path, this.controller!.signal, repoKey);
     }).then((detail) => {
       if (this.closed || request !== this.request) return;
       if (detail && detail.file.path !== path) throw new Error("返回的文件详情不匹配，请刷新。");
@@ -164,7 +176,7 @@ export class ReviewPanel implements Component {
   }
 
   private diffWidth(): number {
-    return this.width >= 90 ? this.width - Math.min(45, Math.floor(this.width * 0.36)) - 3 : this.width;
+    return this.width >= 90 && this.sidebarVisible ? this.width - Math.min(45, Math.floor(this.width * 0.36)) - 3 : this.width;
   }
 
   private wrappedLines(width: number): DiffRow[] {
@@ -174,13 +186,13 @@ export class ReviewPanel implements Component {
       let inHunk = false;
       this.wrapped = {
         detail, width,
-        lines: detail.text.split("\n").flatMap((line): DiffRow[] => {
+        lines: detail.text.split("\n").flatMap((line, sourceLine): DiffRow[] => {
           if (line.startsWith("diff ") || line.startsWith("[")) inHunk = false;
           if (line.startsWith("@@")) inHunk = true;
           const kind = line.startsWith("+") && (inHunk || !line.startsWith("+++")) ? "added"
             : line.startsWith("-") && (inHunk || !line.startsWith("---")) ? "removed" : "context";
           return wrapTextWithAnsi(safeReviewText(line.replaceAll("\t", "    ")), Math.max(1, width))
-            .map((text) => ({ text, kind }));
+            .map((text) => ({ text, raw: line, sourceLine, kind }));
         }),
       };
     }
@@ -192,7 +204,57 @@ export class ReviewPanel implements Component {
     else {
       const end = Math.max(0, this.wrappedLines(this.diffWidth()).length - this.bodyHeight);
       this.diffOffset = Math.max(0, Math.min(end, this.diffOffset + amount));
+      if (this.visual) this.selectionEnd = this.diffOffset;
     }
+  }
+
+  private jumpViewport(position: "top" | "middle" | "bottom"): void {
+    if (this.focus === "list") {
+      const end = Math.max(0, this.view.files.length - 1);
+      const target = position === "top" ? 0 : position === "middle" ? Math.floor(end / 2) : end;
+      this.listOffset = Math.max(0, Math.min(target, end - this.bodyHeight + 1));
+      this.selectedIndex = target;
+      this.selectedPath = this.view.files[target]?.path;
+      this.sync();
+      return;
+    }
+    const end = Math.max(0, this.wrappedLines(this.diffWidth()).length - this.bodyHeight);
+    this.diffOffset = position === "top" ? 0 : position === "middle" ? Math.floor(end / 2) : end;
+    if (this.visual) this.selectionEnd = this.diffOffset;
+    this.redraw();
+  }
+
+  private selectionText(): string | undefined {
+    if (!this.currentDetail || this.selectionAnchor === undefined || this.selectionEnd === undefined) return undefined;
+    const rows = this.wrappedLines(this.diffWidth());
+    const start = Math.max(0, Math.min(this.selectionAnchor, this.selectionEnd));
+    const end = Math.min(rows.length - 1, Math.max(this.selectionAnchor, this.selectionEnd));
+    const selected = new Map<number, string>();
+    for (const row of rows.slice(start, end + 1)) if (!selected.has(row.sourceLine)) selected.set(row.sourceLine, row.raw);
+    return [...selected.values()].join("\n").trim() || undefined;
+  }
+
+  private clearSelection(): void {
+    this.visual = false;
+    this.selectionAnchor = undefined;
+    this.selectionEnd = undefined;
+  }
+
+  private async toggleMode(): Promise<void> {
+    const mode = this.view.mode ?? "git";
+    const next = mode === "git" ? "folder" : mode === "folder" ? "workspaces" : "git";
+    if (!this.model.setMode) return;
+    try { await this.model.setMode(next); }
+    catch (error) { if (!this.closed) this.error = error instanceof Error ? error.message : String(error); }
+    this.redraw();
+  }
+
+  private async runSelection(action: ((selection: string) => Promise<void>) | undefined): Promise<void> {
+    const selection = this.selectionText();
+    if (!selection) { this.error = "请先按 v 选择一段 diff 代码。"; this.redraw(); return; }
+    this.clearSelection();
+    if (action) await action(selection);
+    else { this.error = "当前没有配置该操作。"; this.redraw(); }
   }
 
   private jump(target: number): void {
@@ -201,10 +263,26 @@ export class ReviewPanel implements Component {
 
   handleInput(data: string): void {
     if (this.closed) return;
-    const hadPrefix = this.pendingG || this.count !== "";
+    const hadPrefix = this.pendingG || this.pendingComma || this.count !== "";
     if (matchesKey(data, "escape") && hadPrefix) {
       this.pendingG = false;
+      this.pendingComma = false;
       this.count = "";
+      this.redraw();
+      return;
+    }
+    if (this.pendingComma) {
+      this.pendingComma = false;
+      if (matchesKey(data, "m")) {
+        this.sidebarVisible = !this.sidebarVisible;
+        if (!this.sidebarVisible) this.focus = "detail";
+      }
+      else if (matchesKey(data, "f")) void this.toggleMode();
+      this.redraw();
+      return;
+    }
+    if (data === ",") {
+      this.pendingComma = true;
       this.redraw();
       return;
     }
@@ -244,11 +322,20 @@ export class ReviewPanel implements Component {
     } else if (matchesKey(data, "enter") || matchesKey(data, "l")) {
       if (this.selectedPath !== undefined) this.focus = "detail";
     } else if (matchesKey(data, "h")) {
+      this.clearSelection();
       this.focus = "list";
     } else if (matchesKey(data, "up") || matchesKey(data, "k")) {
       this.move(-count);
     } else if (matchesKey(data, "down") || matchesKey(data, "j")) {
       this.move(count);
+    } else if (matchesKey(data, "shift+h")) {
+      this.jumpViewport("top");
+    } else if (matchesKey(data, "shift+m")) {
+      this.jumpViewport("middle");
+    } else if (matchesKey(data, "shift+l")) {
+      this.jumpViewport("bottom");
+    } else if (matchesKey(data, "shift+b")) {
+      this.move(this.focus === "list" ? -count : -count * this.bodyHeight);
     } else if (matchesKey(data, "shift+g")) {
       this.jump(hasCount ? count - 1 : Number.MAX_SAFE_INTEGER);
     } else if (matchesKey(data, "ctrl+u") || matchesKey(data, "ctrl+d")) {
@@ -256,12 +343,27 @@ export class ReviewPanel implements Component {
     } else if (matchesKey(data, "ctrl+b") || matchesKey(data, "ctrl+f")) {
       this.move((matchesKey(data, "ctrl+b") ? -1 : 1) * count * this.bodyHeight);
     } else if (matchesKey(data, "pageUp") || matchesKey(data, "pageDown")) {
-      // Preserve the existing wide-screen PageUp/PageDown detail shortcut.
       this.move((matchesKey(data, "pageUp") ? -1 : 1) * this.bodyHeight,
         this.width >= 90 ? "detail" : this.focus);
+    } else if (matchesKey(data, "v") && this.focus === "detail") {
+      if (this.visual) this.clearSelection();
+      else { this.visual = true; this.selectionAnchor = this.diffOffset; this.selectionEnd = this.diffOffset; }
+    } else if (matchesKey(data, "s") && this.visual) {
+      void this.runSelection(this.options.onAskSide);
+    } else if (matchesKey(data, "m") && this.visual) {
+      void this.runSelection(this.options.onAskMain);
+    } else if (matchesKey(data, "m")) {
+      this.sidebarVisible = !this.sidebarVisible;
+      if (!this.sidebarVisible) this.focus = "detail";
+    } else if (matchesKey(data, "e") && this.selectedPath) {
+      const action = this.options.onEdit;
+      if (action) void action(this.selectedPath, this.view.files[this.selectedIndex]);
+      else this.error = "当前没有配置编辑功能。";
+    } else if (matchesKey(data, "o")) {
+      void this.toggleMode();
     } else if (matchesKey(data, "r")) {
       void this.refresh();
-    } else if (matchesKey(data, "d") && !hasCount) {
+    } else if (matchesKey(data, "d") && !hasCount && !this.visual) {
       void this.acknowledge();
     }
     this.redraw();
@@ -278,7 +380,9 @@ export class ReviewPanel implements Component {
     if (this.selectedIndex >= this.listOffset + this.bodyHeight) this.listOffset = this.selectedIndex - this.bodyHeight + 1;
     return files.slice(this.listOffset, this.listOffset + this.bodyHeight).map((file, index) => {
       const selected = index + this.listOffset === this.selectedIndex;
-      const name = file.oldPath === undefined ? file.path : `${file.oldPath} → ${file.path}`;
+      const repoPrefix = this.view.mode === "workspaces" && file.repoRoot
+        ? `${file.repoRoot.replace(/\/$/, "").split("/").at(-1) ?? file.repoRoot}: ` : "";
+      const name = `${repoPrefix}${file.oldPath === undefined ? file.path : `${file.oldPath} → ${file.path}`}`;
       const counts = `${file.added === undefined ? "" : ` +${file.added}`}${file.removed === undefined ? "" : ` -${file.removed}`}`;
       const flags = `${file.binary ? " 二进制" : ""}${file.conflicted ? " 冲突" : ""}`;
       return this.color(selected ? "accent" : "text", truncateToWidth(
@@ -291,9 +395,12 @@ export class ReviewPanel implements Component {
     if (!this.currentDetail) return [this.error ? "无法加载差异；r 重试" : "选择文件查看差异"];
     const text = this.wrappedLines(width);
     this.diffOffset = Math.max(0, Math.min(this.diffOffset, Math.max(0, text.length - this.bodyHeight)));
-    return text.slice(this.diffOffset, this.diffOffset + this.bodyHeight).map((row) => {
+    return text.slice(this.diffOffset, this.diffOffset + this.bodyHeight).map((row, index) => {
+      const absolute = this.diffOffset + index;
+      const selected = this.visual && this.selectionAnchor !== undefined && this.selectionEnd !== undefined &&
+        absolute >= Math.min(this.selectionAnchor, this.selectionEnd) && absolute <= Math.max(this.selectionAnchor, this.selectionEnd);
       const color = row.kind === "added" ? "toolDiffAdded" : row.kind === "removed" ? "toolDiffRemoved" : "text";
-      if (row.kind === "context" || !this.options.theme) return this.color(color, row.text);
+      if (row.kind === "context" || !this.options.theme) return selected ? this.color("accent", row.text) : this.color(color, row.text);
       // Carry the original line's kind across wrapping, and fill only the diff pane.
       const padded = row.text + " ".repeat(Math.max(0, width - visibleWidth(row.text)));
       return reviewRowBackground(this.options.theme, row.kind === "added", this.color(color, padded));
@@ -306,12 +413,13 @@ export class ReviewPanel implements Component {
     const height = Math.max(1, Math.floor(this.options.height?.() ?? 24));
     this.bodyHeight = Math.max(1, height - 8);
     const selected = this.view.files[this.selectedIndex];
-    const header = `会话 Git 审阅 · ${this.view.files.length} 待审 · 相对 HEAD${this.view.loading ? " · 刷新中" : ""}`;
+    const mode = this.view.mode === "folder" ? "当前目录" : this.view.mode === "workspaces" ? "跨目录仓库" : "Git 差异";
+    const header = `会话 Git 审阅 · ${mode} · ${this.view.files.length} ${this.view.mode === "folder" ? "个文件" : "待审"} ·${this.visual ? " VISUAL ·" : ""}${this.view.loading ? " 刷新中 ·" : ""} 相对 HEAD`;
     const lines: string[] = [this.color("accent", header)];
     lines.push(`焦点: ${this.focus === "list" ? "文件列表" : "差异"}${this.count || this.pendingG ? ` [${this.count}${this.pendingG ? "g" : ""}]` : ""} · ${safeReviewText(this.selectedPath ?? "")}`);
     if (!this.view.files.length) {
       lines.push(this.view.loading ? "正在加载文件列表…" : this.view.stale || this.view.error ? "Git 查询失败；保留最后状态，r 重试" : "当前没有待审文件");
-    } else if (width >= 90) {
+    } else if (width >= 90 && this.sidebarVisible) {
       const leftWidth = Math.min(45, Math.floor(width * 0.36));
       const left = this.fileLines(leftWidth);
       const right = this.diffLines(width - leftWidth - 3);
@@ -320,7 +428,7 @@ export class ReviewPanel implements Component {
         lines.push(cell + " ".repeat(Math.max(0, leftWidth - visibleWidth(cell))) + " │ " + (right[row] ?? ""));
       }
     } else {
-      lines.push(...(this.focus === "list" ? this.fileLines(width) : this.diffLines(width)));
+      lines.push(...(this.sidebarVisible && this.focus === "list" ? this.fileLines(width) : this.diffLines(width)));
     }
     while (lines.length < this.bodyHeight + 2) lines.push("");
     lines.push(this.color("warning", this.currentDetail?.truncated ? "预览已截断；d 确认当前完整版本" :
@@ -330,8 +438,8 @@ export class ReviewPanel implements Component {
       this.view.backgroundAvailable === true ? "后台跟踪可用；仅当前工作树" : "后台跟踪不可用；仅直接工具跟踪"));
     lines.push(this.color(this.error || this.view.error || this.view.stale ? "error" : "muted",
       safeReviewText(this.error ?? this.view.error ?? (this.view.stale ? "状态已过期，禁止确认；r 重试" : this.confirming ? "正在保存确认…" : this.view.notice ?? ""))));
-    lines.push("j/k ↑↓ · h/l 切栏 · gg/G 首尾 · Ctrl+u/d 半页 · Ctrl+b/f 翻页");
-    lines.push("r 刷新 · d 确认 · q 关闭 · Esc 返回 · 次数: 5j/10gg · Enter/Tab 切栏");
+    lines.push("j/k ↑↓ · H/M/L 顶中底 · B 上页 · gg/G 首尾 · Ctrl+u/d 半页");
+    lines.push("v 选择 · s side · m 主会话/边栏 · e 编辑 · o 模式(差异/目录/跨仓库) · ,m 边栏 · q 关闭 · d 确认");
     return lines.slice(0, height).map((line) => truncateToWidth(line, this.width, "…"));
   }
 

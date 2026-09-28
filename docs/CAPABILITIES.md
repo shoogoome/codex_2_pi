@@ -87,7 +87,7 @@
 
 | 扩展 | 一句话能力 | 主要命令 / 工具 |
 |---|---|---|
-| `diff` | 展示 Git 工作树变更；[会话文件审阅](extensions/session-git-review.md)支持确认隐藏与变更重现。 | `/diff` · `/changes` · `Ctrl+R` |
+| `diff` | 展示 Git 工作树变更；[会话文件审阅](extensions/session-git-review.md)支持确认隐藏、变更重现、目录和跨目录仓库模式。 | `/diff` · `/changes` · `Ctrl+R` |
 | `review` | Codex 风格评审预设：对比基准分支 / 未提交变更 / 某提交 / 自定义指令。 | `/review [instructions]` |
 | `init` | 通过主 agent 检查项目并创建简洁的 `AGENTS.md` 指南（已存在则跳过）。 | `/init` |
 | `imagegen` | Codex 订阅生图：复刻 codex 内置 `image_gen.imagegen`，走 openai-codex OAuth 直连 ChatGPT 图片 API（gpt-image-2），结果保存到 `~/.pi/agent/generated_images/<session>/` 并默认回传模型迭代。 | 工具 `generate_image` |

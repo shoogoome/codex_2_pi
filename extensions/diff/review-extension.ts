@@ -9,10 +9,41 @@ import { REVIEW_OVERLAY_OPTIONS, suspendReviewBackground } from "./review-screen
 import { REVIEW_ENTRY_TYPE } from "./review-state.js";
 import { reviewOperationForTool } from "./review-tools.js";
 import { SessionReview, type SessionReviewReader } from "./review-session.js";
+import { SIDE_REQUEST_CHANNEL } from "../shared/side-protocol.js";
 
 export interface ReviewExtensionOptions {
   createReader?(cwd: string): SessionReviewReader;
   getActivity?(): TaskActivityHandle | undefined;
+}
+
+function selectionPrompt(selection: string, note: string, target: "side" | "main"): string {
+  const intro = target === "side" ? "请在 side 问询中分析下面选中的 Git diff 代码。" : "请在主会话中分析下面选中的 Git diff 代码。";
+  const fence = "```";
+  return [intro, "", `${fence}diff`, selection, fence, note.trim() ? `\n用户附加说明：${note.trim()}` : ""].join("\n");
+}
+
+async function askWithSelection(ctx: ExtensionContext, pi: ExtensionAPI, selection: string, target: "side" | "main"): Promise<void> {
+  const note = await ctx.ui.input(`${target === "side" ? "Side" : "主会话"}问询（可选附加说明）`, "例如：解释这里的潜在问题");
+  if (note === undefined) return;
+  const question = selectionPrompt(selection, note, target);
+  if (target === "side") pi.events.emit(SIDE_REQUEST_CHANNEL, { question, ctx });
+  else pi.sendUserMessage(question);
+}
+
+async function editReviewFile(ctx: ExtensionContext, pi: ExtensionAPI, review: SessionReview, path: string, repoKey?: string): Promise<void> {
+  try {
+    const original = await review.readText(path, repoKey);
+    const edited = await ctx.ui.editor(`编辑 ${path}`, original);
+    if (edited === undefined || edited === original) return;
+    await review.writeText(path, edited, repoKey);
+    const send = await ctx.ui.confirm("编辑完成", `是否将 ${path} 的编辑信息发送给主会话？`);
+    if (!send) return;
+    const note = await ctx.ui.input("编辑附加说明（可选）", "例如：请检查这个修复是否完整");
+    if (note === undefined) return;
+    pi.sendUserMessage(`我刚刚编辑了文件 ${path}，请基于当前工作区检查这次修改。${note.trim() ? `\n\n用户附加说明：${note.trim()}` : ""}`);
+  } catch (error) {
+    ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+  }
 }
 
 /** Keep the original /diff message command unchanged; this adds a separate UI workflow. */
@@ -119,6 +150,9 @@ export function installSessionReview(pi: ExtensionAPI, options: ReviewExtensionO
             onClose: finish,
             height: () => Math.max(1, tui.terminal.rows),
             theme,
+            onEdit: async (path, file) => { finish(); await editReviewFile(ctx, pi, current, path, file?.repoKey); },
+            onAskSide: async (selection) => { finish(); await askWithSelection(ctx, pi, selection, "side"); },
+            onAskMain: async (selection) => { finish(); await askWithSelection(ctx, pi, selection, "main"); },
           });
           restoreBackground = suspendReviewBackground(tui);
           closePanel = finish;

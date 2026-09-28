@@ -3,6 +3,9 @@ import type { ReviewFile, ReviewRepository } from "./review-types.js";
 export interface ReviewReader {
   resolve(signal?: AbortSignal): Promise<ReviewRepository | null>;
   snapshot(extraPaths?: string[], signal?: AbortSignal): Promise<Map<string, ReviewFile>>;
+  listFiles?(cwd: string, signal?: AbortSignal): Promise<Map<string, ReviewFile>>;
+  readText?(path: string, signal?: AbortSignal): Promise<string>;
+  writeText?(path: string, text: string, signal?: AbortSignal): Promise<void>;
 }
 export type ReviewSource = "direct" | "window";
 export interface ReviewTrackerOptions {

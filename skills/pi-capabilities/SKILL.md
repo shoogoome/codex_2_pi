@@ -25,7 +25,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 | `/fast [on\|off\|status]` | fast-mode | 为支持的 openai-codex OAuth 模型切换 priority service tier（更快但更耗额度） |
 | `/local-models [list\|pull\|ensure_ready]`, `/ollama`, `/lm` | local-models | 发现/拉取/就绪检查本地模型(Ollama/LM Studio) |
 | `/mcp [list\|status\|add\|remove\|reconnect]` | mcp | 管理 MCP server 连接 |
-| `/channel [status\|restart\|auth\|send]` | channel | 管理具名 HTTP/微信 Channel；默认多会话挂载，每个 Pi 会话可独立设置通信方向 |
+| `/channel [status\|restart\|auth\|send]` | channel | 管理 HTTP/微信及本机 Pi 双人/群频道；Pi 配对加入并展示成员职责，外部频道保留独立通信方向 |
 | `/plugin`, `/plugin marketplace …`, `/plugin install\|remove\|update …` | plugin-loader | 管理 Marketplace 与 user/project/local scope 的 Claude 风格插件 |
 | `/hooks` | hooks-runner | 列出已配置生命周期 hook |
 | `/agents [list\|show <name>\|use <name>]` | agents | 查看/应用 subagent 角色 |
@@ -36,7 +36,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 | `/speed` | token-speed | 底部 token 生成速度(tok/s)面板；footer 实时估算 + 精确测量 |
 | `/cost`, `/usage` | cost-usage | 会话成本与 token 用量面板 |
 | `/diff` | diff | git 工作树变更(含未跟踪) |
-| `/changes`（`Ctrl+R`） | diff | 本会话文件的完整 Git 差异；逐文件确认后隐藏，再次修改重现，详见 `docs/extensions/session-git-review.md` |
+| `/changes`（`Ctrl+R`） | diff | 本会话文件的完整 Git 差异；逐文件确认后隐藏，再次修改重现；支持目录与跨目录仓库模式，详见 `docs/extensions/session-git-review.md` |
 | `/review [指令]` | review | Codex 风格评审预设 |
 | `/init` | init | 生成项目 AGENTS.md |
 | `/side [message]` | side | 基于当前 leaf 上下文的临时 side 会话 overlay |
@@ -67,12 +67,14 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **exit_plan_mode**（plan-mode）：模型提交计划并请求退出只读规划。
 - **mcp__<server>__<tool>**（mcp）：远端 MCP 工具注册成的 Pi 原生工具。
 - **webfetch**（webfetch）：联网抓取公开 URL → HTML 转 markdown 交模型阅读；SSRF 防护 + 10MB/100K 上限 + 15min 缓存。`--webfetch` 默认开。
+- **channel_manage**（channel）：创建/配对加入本机 Pi 双人或群频道，查询成员、维护本人职责、退出、创建者销毁及配对码管理；支持无 TUI 的模型操作。
+- **channel_send**（channel）：按精确本地路由名向 HTTP/微信/Pi 发送文本；Pi 返回逐成员已入队/失败/未知结果，不代表已处理，`message_id` 支持同 ID 查询。
 
 ## 何时用哪个
 
 - **上下文快满 / 想压缩**：`/prune`（软清理或手动全量压缩）；想看构成占比用 `/monitor`；context-pipeline 会自动截断 tool_result，并为 Pi 原生自动压缩生成结构化摘要；compact-continue 会在阈值压缩确实切断未完成工作时保守续跑一次。
 - **控制“能不能执行某工具/命令”**：`/approvals`（规则 + default/acceptEdits/bypass 模式，保护 .git/.pi/~/.ssh，拦 rm -rf/sudo 等）。
-- **人工检查本会话代码修改**：对话界面 `Ctrl+R` 或 `/changes`，逐文件看相对 HEAD 的完整差异，`d` 确认完成仅隐藏当前版本、不是提交；下次修改重新出现。想让模型评审则用 `/review`，整个工作树文本差异用 `/diff`。
+- **人工检查本会话代码修改**：对话界面 `Ctrl+R` 或 `/changes`，逐文件看相对 HEAD 的完整差异，`d` 确认完成仅隐藏当前版本、不是提交；下次修改重新出现。按 `o` 可切换当前目录和跨目录仓库模式；想让模型评审则用 `/review`，整个工作树文本差异用 `/diff`。
 - **想先看方案再动手**：`/plan`（只读探查→提交计划→批准后恢复写工具）。
 - **想让 agent 不停手连续推进长任务**：`/autopilot on [目标]`（有预算/轮数/收益递减停止）。
 - **想定时轮询状态或重复执行命令**：`/loop [interval] <prompt>`（会立即执行一次，后续仅在空闲时触发）。
@@ -80,6 +82,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **常用配置组合一键切换**：`/profile save` 后 `/profile <name>`，或 `--profile` 启动应用。
 - **接外部工具 / 第三方能力**：`/mcp add`（Pi 主动调用 MCP server）；Claude 风格插件用 `/plugin marketplace add` 后 `/plugin install`。
 - **让告警、CI、IDE、微信等外部系统与 Pi 通信**：用 `/channel` 管理具名 Channel；新建默认多会话，各会话可独立设为入站、出站或双向。旧 HTTP 可继续配置 `PI_CHANNEL_TOKEN` 并调用 `POST /v1/messages`。
+- **让两个独立 Pi 或同项目多模块 Pi 协作**：使用 `/channel` 的 Pi 双人/群频道与配对码；先读相邻技能 `../pi-channel-collaboration/SKILL.md`，通过 `channel_manage` 维护工作身份，用 `channel_send` 主动通知接口/共享文件变更、阻塞和交接。仅 macOS/Linux、同机器同 OS 用户；创建者退出/切换会话/reload 即关群，没有自动接管。需要父代理启动和调度工作时用 task_agent/teammate，不要把频道当调度器。
 - **复用已有 Claude/Cursor 配置**：`/migrate`。
 - **跨会话记住偏好/事实**：memory 默认自动初始化、召回和按需提炼；`/remember`、`/memory` 只在需要强制记录、查看或纠错时使用。
 - **调模型推理强度 / 开 Codex Ultra 编排**：`/effort` 或 `/model` 两级选择器；Sol/Terra 的 Ultra 会自动激活 `task_agent`，在适合时并行委派并等待自动终态结果综合。

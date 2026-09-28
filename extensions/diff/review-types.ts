@@ -6,6 +6,9 @@ export interface ReviewRepository {
 
 export interface ReviewFile {
   path: string;
+  /** Set by SessionReview when aggregating more than one Git worktree. */
+  repoKey?: string;
+  repoRoot?: string;
   oldPath?: string;
   status: string;
   fingerprint: string;
@@ -15,6 +18,8 @@ export interface ReviewFile {
   binary?: boolean;
   conflicted?: boolean;
 }
+
+export type ReviewViewMode = "git" | "folder" | "workspaces";
 
 export interface ReviewDetail {
   file: ReviewFile;

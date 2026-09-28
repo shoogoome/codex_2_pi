@@ -19,8 +19,11 @@ function fixture(branch: unknown[] = [], sessionId = "s1") {
     }),
     detail: vi.fn(async (path: string): Promise<ReviewDetail> => {
       const current = disk.get(path)!;
-      return { file: current, token: current.fingerprint, text: "full diff", truncated: false };
+      return { file: current, token: current.fingerprint, text: current.dirty ? "full diff" : "", truncated: false };
     }),
+    listFiles: vi.fn(async () => new Map(disk)),
+    readText: vi.fn(async (path: string) => `text:${path}`),
+    writeText: vi.fn(async (path: string, text: string) => { disk.set(path, file(path, text)); }),
   };
   const persist = vi.fn((event: ReviewEvent) => { entries.push({ type: "custom", customType: REVIEW_ENTRY_TYPE, data: event }); });
   const readerForCwd = vi.fn((cwd: string) => ({ ...git, resolve: async () => cwd.startsWith("/other") ? { root: "/other", gitDir: "/other/.git", key: "other" } : repo }));
@@ -45,6 +48,18 @@ describe("session review integration", () => {
     expect(f.session.getView().files.map((entry) => [entry.path, entry.initialDirty])).toEqual([["a.ts", true]]);
     expect((await f.session.detail("a.ts")).text).toBe("full diff");
     expect(JSON.stringify(f.entries)).not.toContain("full diff");
+  });
+
+  it("lists the whole cwd in folder mode and attributes panel edits", async () => {
+    const f = fixture();
+    f.disk.set("clean.ts", file("clean.ts", "clean", false));
+    await f.session.initialize();
+    await f.session.setMode("folder");
+    expect(f.session.getView().files.map((entry) => entry.path)).toEqual(["clean.ts"]);
+    await f.session.writeText("clean.ts", "edited");
+    await f.session.setMode("git");
+    expect(f.session.getView().files.map((entry) => entry.path)).toEqual(["clean.ts"]);
+    expect(f.git.writeText).toHaveBeenCalledWith("clean.ts", "edited", expect.any(AbortSignal));
   });
 
   it("hides acknowledged versions, reappears after external changes, and retains clean ownership", async () => {
@@ -136,7 +151,42 @@ describe("session review integration", () => {
     expect(resumed.session.getView().files).toHaveLength(1);
   });
 
-  it("tracks background work after parent returns and ignores other sessions/worktrees", async () => {
+  it("tracks background work in a second repository and exposes it in workspaces mode", async () => {
+    const f = fixture();
+    const otherRepo = { root: "/other", gitDir: "/other/.git", key: "other" };
+    f.readerForCwd.mockImplementation((cwd) => ({ ...f.git, resolve: async () => cwd.startsWith("/other") ? otherRepo : { root: "/repo", gitDir: "/repo/.git", key: "repo" } }));
+    await f.session.initialize();
+    const activity = { taskId: "cross", operationId: "1", originSessionId: "s1", cwd: "/other", phase: "before-start" as const };
+    await f.session.taskActivity(activity);
+    f.disk.set("other.ts", file("other.ts", "cross"));
+    await f.session.taskActivity({ ...activity, phase: "end" });
+    expect(f.session.getView().files).toEqual([]);
+    await f.session.setMode("workspaces");
+    expect(f.session.getView().files.map((entry) => [entry.repoKey, entry.path])).toEqual([["other", "other.ts"]]);
+    expect((await f.session.detail("other.ts", undefined, "other")).file.repoRoot).toBe("/other");
+  });
+
+  it("attributes explicit absolute writes outside the primary repository", async () => {
+    const f = fixture();
+    await f.session.initialize();
+    await f.session.beforeTool("cross-write", "write", { path: "/other/other.ts" });
+    f.disk.set("other.ts", file("other.ts", "written"));
+    await f.session.afterTool("cross-write");
+    await f.session.setMode("workspaces");
+    expect(f.session.getView().files.map((entry) => [entry.repoKey, entry.path])).toEqual([["other", "other.ts"]]);
+  });
+
+  it("discovers a second repository from common shell directory hints", async () => {
+    const f = fixture();
+    await f.session.initialize();
+    await f.session.beforeTool("shell-cross", "bash", { command: "cd /other && echo changed" });
+    f.disk.set("shell.ts", file("shell.ts", "shell"));
+    await f.session.afterTool("shell-cross");
+    await f.session.setMode("workspaces");
+    expect(f.session.getView().files.map((entry) => [entry.repoKey, entry.path])).toEqual([["other", "shell.ts"], ["repo", "shell.ts"]]);
+  });
+
+  it("tracks background work after parent returns and keeps unrelated session work isolated", async () => {
     const f = fixture();
     await f.session.initialize();
     const activity = { taskId: "t", operationId: "1", originSessionId: "s1", cwd: "/repo/sub", phase: "before-start" as const };

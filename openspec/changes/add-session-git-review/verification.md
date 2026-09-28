@@ -58,6 +58,17 @@
 - 新增 `review-screen.test.ts` 使用真实 regular/fullscreen renderer，覆盖长流、宽窄视口、resize、输入焦点、最新文档恢复、额外根组件保留以及旧树不复活。
 - 打包产物通过两种模式的真实 PTY 流式验收：离线 provider 每 30ms 发出一行，面板打开期间持续生成 20+ 行但无背景穿透或反复清屏；h/l/q 可操作，关闭后最新模型输出和草稿恢复。记录：`/tmp/pi-session-review-smoke/stream-result.log`；驱动：`stream-run.py`、`stream-provider.ts`。
 
+## Follow-up: Cross-directory repository mode
+
+- 新增“跨目录仓库”模式，`o` 在 Git 差异、当前目录文件、跨目录仓库三种视图间循环。
+- 会话按 `repoKey` 为已发现仓库维护独立 tracker/state/reader；后台任务 cwd、绝对路径 write/edit 以及常见 `cd`/`git -C` Shell 提示可发现其他工作树。
+- 跨仓库文件显示仓库目录名前缀，详情、编辑和确认传递对应 repoKey；新增显式跨仓库、后台活动和 Shell hint 测试。
+- 本轮专项 `npx vitest run extensions/diff`：13 个测试文件、117 项测试通过。
+- 相关后台归属回归 `npx vitest run extensions/diff extensions/tasks extensions/localshell extensions/async extensions/localagent extensions/teammate`：108 个测试文件、1244 项测试通过。
+- `npm run build:extensions` 成功构建全部 43 个可打包扩展；`openspec validate add-session-git-review --strict` 和 `git diff --check` 通过。
+- 最终 `npm test`：283 个测试文件通过，2845 项测试通过，5 项跳过；剩余 3 个既有失败文件为 `extensions/side/side-overlay.tui.test.ts`（SDK 的 TUI 仅类型导出）、`extensions/resume-picker/index.test.ts`（夹具排序基线）和 `extensions/web/src/smoke-fast.test.ts`（环境探针），均不由本次审阅改动引入。
+- `npm run typecheck` 仍受仓库既有 SDK 兼容诊断影响（ProviderHeaders、completeSimple、SessionHandleHost/EventBus、TUI、web flag 等）；过滤审阅相关路径后，本轮没有新增类型诊断。
+
 ## Follow-up: Explicit Git diff row backgrounds
 
 - 发现 `vague-codex` 的 `toolSuccessBg` 是中性 `#1b1b1c`，不能直接作为新增行背景，因此新增 `review-colors.ts`：依据主题明暗模式选择亮/暗对比度，但使用独立明确的绿/红 ANSI 背景，不复用工具状态背景色。

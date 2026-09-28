@@ -128,6 +128,21 @@ describe("ReviewGit real repositories", () => {
     await expect(new ReviewGit(race, r.root).detail("a")).rejects.toThrow("changing");
   });
 
+  it("lists current-directory files and safely edits ordinary text files", async () => {
+    const r = await repo();
+    await r.put("a.ts", "base\n"); await mkdir(join(r.root, "sub")); await r.put("sub/b.ts", "nested\n");
+    await r.commit();
+    await r.put("a.ts", "changed\n"); await r.put("new.ts", "new\n"); await r.put("ignored.ts", "ignored\n");
+    await writeFile(join(r.root, ".gitignore"), "ignored.ts\n");
+    const files = await r.review.listFiles!(r.root);
+    expect([...files.keys()]).toEqual([".gitignore", "a.ts", "new.ts", "sub/b.ts"]);
+    expect(files.get("sub/b.ts")?.dirty).toBe(false);
+    expect(await r.review.readText("a.ts")).toBe("changed\n");
+    await r.review.writeText("a.ts", "edited\n");
+    expect(await readFile(join(r.root, "a.ts"), "utf8")).toBe("edited\n");
+    await expect(r.review.readText("missing.ts")).rejects.toThrow();
+  });
+
   it("tracks rename source recreation and changed HEAD blobs, and excludes nested repositories", async () => {
     const r = await repo(); await r.put("old", "base\n"); await r.commit();
     await r.git("mv", "old", "new");

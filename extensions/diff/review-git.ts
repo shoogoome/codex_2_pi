@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, open, readlink, realpath } from "node:fs/promises";
+import { lstat, open, readlink, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { DEFAULT_GIT_TIMEOUT_MS, runGit } from "../shared/git.js";
 import type { CommandRunner } from "../shared/types.js";
@@ -174,6 +174,33 @@ export class ReviewGit {
     if (before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || before.mode !== after.mode) throw new Error("File is changing; refresh and retry");
     signal?.throwIfAborted();
     return { hash: hash.digest("hex"), binary, preview: Buffer.concat(chunks).toString("utf8"), mode: before.mode, kind, truncated: size > MAX_BYTES };
+  }
+
+  async listFiles(cwd: string, signal?: AbortSignal): Promise<Map<string, ReviewFile>> {
+    const repo = await this.requireRepo(signal);
+    const relativeCwd = relative(repo.root, await realpath(resolve(cwd))).split(sep).join("/");
+    if (relativeCwd === ".." || relativeCwd.startsWith("../") || isAbsolute(relativeCwd)) throw new Error("目录在工作树外");
+    const prefix = relativeCwd || ".";
+    const listed = await this.git(["ls-files", "-z", "-c", "-o", "--exclude-standard", "--", prefix], signal);
+    const paths = listed.split("\0").filter(Boolean).filter((path) => !path.split("/").includes(".git"));
+    return this.snapshot(paths, signal);
+  }
+
+  async readText(path: string, signal?: AbortSignal): Promise<string> {
+    const content = await this.content(path, signal);
+    if (content.kind === "missing") throw new Error("文件不存在，无法编辑。");
+    if (content.kind !== "file" || content.binary) throw new Error("二进制文件或特殊文件不能在审阅面板中编辑。");
+    if (content.truncated) throw new Error("文件超过 1 MiB，暂不支持在审阅面板中编辑。");
+    return content.preview;
+  }
+
+  async writeText(path: string, text: string, signal?: AbortSignal): Promise<void> {
+    const absolute = await this.safePath(path, signal);
+    signal?.throwIfAborted();
+    const before = await lstat(absolute);
+    if (!before.isFile() || before.isSymbolicLink()) throw new Error("仅支持编辑普通文件。");
+    await writeFile(absolute, text, { encoding: "utf8", mode: before.mode & 0o777 });
+    signal?.throwIfAborted();
   }
 
   async snapshot(extraPaths: string[] = [], signal?: AbortSignal): Promise<Map<string, ReviewFile>> {

@@ -234,6 +234,72 @@ describe("review panel Vim navigation", () => {
     test.panel.dispose();
   });
 
+  it("selects diff lines, toggles sidebar with ,m and dispatches side/main actions", async () => {
+    const test = setup([file("a"), file("b")]);
+    const side = vi.fn(async () => {});
+    const main = vi.fn(async () => {});
+    const edit = vi.fn(async () => {});
+    // Replace the panel's action hooks without making the model aware of UI concerns.
+    const panel = new ReviewPanel(test.model, {
+      requestRender: test.requestRender, onClose: test.onClose, height: () => 20,
+      onAskSide: side, onAskMain: main, onEdit: edit,
+    });
+    await settle();
+    panel.render(120);
+    panel.handleInput("l");
+    panel.handleInput("v");
+    panel.handleInput("j");
+    panel.handleInput("s");
+    await settle();
+    expect(side).toHaveBeenCalledWith(expect.stringContaining("@@"));
+    panel.handleInput("v");
+    panel.handleInput("j");
+    panel.handleInput("m");
+    await settle();
+    expect(main).toHaveBeenCalledWith(expect.stringContaining("@@"));
+    panel.handleInput("e");
+    expect(edit).toHaveBeenCalledWith("a", expect.objectContaining({ path: "a" }));
+    panel.handleInput(",");
+    panel.handleInput("m");
+    expect(panel.render(120)[1]).toContain("焦点: 差异");
+    panel.handleInput(",");
+    panel.handleInput("m");
+    panel.dispose();
+    test.panel.dispose();
+  });
+
+  it("supports H/M/L/B Vim viewport commands", async () => {
+    const test = setup(Array.from({ length: 50 }, (_, n) => file(`file-${n}`)));
+    test.panel.render(120);
+    test.panel.handleInput("G");
+    test.panel.handleInput("H");
+    expect(test.panel.render(120).join("\n")).toContain("file-0");
+    test.panel.handleInput("M");
+    expect(test.panel.render(120).join("\n")).toContain("file-24");
+    test.panel.handleInput("B");
+    expect(test.panel.render(120).join("\n")).toContain("file-23");
+    test.panel.dispose();
+  });
+
+  it("switches to folder mode through the model", async () => {
+    const test = setup([file("a")]);
+    const setMode = vi.fn(async (mode: "git" | "folder") => {
+      test.update({ mode, files: mode === "folder" ? [file("a"), { ...file("clean", "2"), dirty: false, status: "  " }] : [file("a")] });
+    });
+    (test.model as ReviewPanelModel).setMode = setMode;
+    test.panel.render(120);
+    test.panel.handleInput("o");
+    await settle();
+    expect(setMode).toHaveBeenCalledWith("folder");
+    expect(test.panel.render(120).join("\n")).toContain("当前目录");
+    test.panel.handleInput("o");
+    await settle();
+    expect(setMode).toHaveBeenCalledWith("workspaces");
+    test.update({ mode: "workspaces", files: [{ ...file("other.ts"), repoRoot: "/other" }] });
+    expect(test.panel.render(120).join("\n")).toContain("other: other.ts");
+    test.panel.dispose();
+  });
+
   it("bounds huge counts, accepts enhanced keyboard keys and handles empty lists", () => {
     const test = setup([file("a"), file("b")]);
     test.panel.render(120);
