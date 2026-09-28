@@ -1,5 +1,6 @@
 // D1 InProcessTeammate type shapes — see specs/2026-06-03-d1-teammate-core-design.md §5.1 / §5.5.
 
+import type { TaskOrigin } from "../tasks/origin.js";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { TaskStateBase } from "../tasks/Task.js";
 import type { AgentCapacityLease } from "../tasks/agentCapacity.js";
@@ -129,12 +130,13 @@ export type TeammateEvent =
       createdAt: number;
     }
   | { kind: "team_delete"; teamName: string }
-  | {
+  | (TaskOrigin & {
+      cwd?: string;
       kind: "teammate_spawn";
       identity: TeammateIdentity;
       sessionFile: string;
       initialPrompt: string;
-    }
+    })
   | {
       kind: "teammate_terminal";
       agentId: string;

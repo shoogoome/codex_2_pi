@@ -98,7 +98,7 @@ describe("async_bash — submit and return without blocking", () => {
   it("returns immediately while the command is still running", async () => {
     const { pi } = fakePi();
     const t0 = Date.now();
-    const task = spawnAsyncShell(pi, store, {
+    const task = await spawnAsyncShell(pi, store, {
       command: "sleep 3; echo done",
       cwd: "/tmp",
       notify: true,
@@ -110,9 +110,9 @@ describe("async_bash — submit and return without blocking", () => {
     await killAsyncTask(task.id);
   });
 
-  it("registers the task in the tasks store so task_list/task_status see it", () => {
+  it("registers the task in the tasks store so task_list/task_status see it", async () => {
     const { pi } = fakePi();
-    const task = spawnAsyncShell(pi, store, {
+    const task = await spawnAsyncShell(pi, store, {
       command: "sleep 2",
       cwd: "/tmp",
       label: "my poll",
@@ -130,7 +130,7 @@ describe("async_bash — submit and return without blocking", () => {
 describe("async_bash — completion callback", () => {
   it("delivers an LLM-visible notice with triggerTurn:true (the wake-up)", async () => {
     const { pi, sent } = fakePi();
-    const task = spawnAsyncShell(pi, store, {
+    const task = await spawnAsyncShell(pi, store, {
       command: "echo hello-async",
       cwd: "/tmp",
       label: "greet",
@@ -152,7 +152,7 @@ describe("async_bash — completion callback", () => {
 
   it("marks a non-zero exit as failed and reports the code", async () => {
     const { pi, sent } = fakePi();
-    const task = spawnAsyncShell(pi, store, {
+    const task = await spawnAsyncShell(pi, store, {
       command: "exit 7",
       cwd: "/tmp",
       notify: true,
@@ -165,7 +165,7 @@ describe("async_bash — completion callback", () => {
 
   it("stays silent when notify=never", async () => {
     const { pi, sent } = fakePi();
-    const task = spawnAsyncShell(pi, store, {
+    const task = await spawnAsyncShell(pi, store, {
       command: "echo quiet",
       cwd: "/tmp",
       notify: false,
@@ -178,7 +178,7 @@ describe("async_bash — completion callback", () => {
 
   it("delivers exactly one notice (no duplicate) for one completion", async () => {
     const { pi, sent } = fakePi();
-    const task = spawnAsyncShell(pi, store, { command: "true", cwd: "/tmp", notify: true });
+    const task = await spawnAsyncShell(pi, store, { command: "true", cwd: "/tmp", notify: true });
     await until(() => task.endedAt !== undefined);
     await until(() => sent.length > 0, 3_000);
     await new Promise((r) => setTimeout(r, 50));
@@ -187,7 +187,7 @@ describe("async_bash — completion callback", () => {
 
   it("captures stderr in the delivered tail", async () => {
     const { pi, sent } = fakePi();
-    const task = spawnAsyncShell(pi, store, {
+    const task = await spawnAsyncShell(pi, store, {
       command: "echo oops >&2",
       cwd: "/tmp",
       notify: true,
@@ -201,7 +201,7 @@ describe("async_bash — completion callback", () => {
 describe("async — status transitions", () => {
   it("running → completed for exit 0", async () => {
     const { pi } = fakePi();
-    const task = spawnAsyncShell(pi, store, { command: "true", cwd: "/tmp", notify: false });
+    const task = await spawnAsyncShell(pi, store, { command: "true", cwd: "/tmp", notify: false });
     expect(statusOf(task)).toBe("running");
     await until(() => task.endedAt !== undefined);
     expect(statusOf(task)).toBe("completed");
@@ -209,14 +209,14 @@ describe("async — status transitions", () => {
 
   it("running → failed for a non-zero exit", async () => {
     const { pi } = fakePi();
-    const task = spawnAsyncShell(pi, store, { command: "exit 1", cwd: "/tmp", notify: false });
+    const task = await spawnAsyncShell(pi, store, { command: "exit 1", cwd: "/tmp", notify: false });
     await until(() => task.endedAt !== undefined);
     expect(statusOf(task)).toBe("failed");
   });
 
   it("running → killed after async_kill (SIGTERM path)", async () => {
     const { pi } = fakePi();
-    const task = spawnAsyncShell(pi, store, {
+    const task = await spawnAsyncShell(pi, store, {
       command: "sleep 30",
       cwd: "/tmp",
       notify: false,
@@ -228,7 +228,7 @@ describe("async — status transitions", () => {
 
   it("async_kill on an already-finished task is a no-op, not an error", async () => {
     const { pi } = fakePi();
-    const task = spawnAsyncShell(pi, store, { command: "true", cwd: "/tmp", notify: false });
+    const task = await spawnAsyncShell(pi, store, { command: "true", cwd: "/tmp", notify: false });
     await until(() => task.endedAt !== undefined);
     await expect(killAsyncTask(task.id)).resolves.toBe(true);
     expect(statusOf(task)).toBe("completed");
@@ -261,7 +261,7 @@ describe("async — registered tool surface", () => {
 describe("async — output handling", () => {
   it("writes command output into the task output file", async () => {
     const { pi } = fakePi();
-    const task = spawnAsyncShell(pi, store, {
+    const task = await spawnAsyncShell(pi, store, {
       command: "echo persisted-line",
       cwd: "/tmp",
       notify: false,
@@ -275,7 +275,7 @@ describe("async — output handling", () => {
   it("keeps only a bounded tail in memory", async () => {
     const { pi } = fakePi();
     // ~20KB of output; TAIL_MAX_CHARS is 4000.
-    const task = spawnAsyncShell(pi, store, {
+    const task = await spawnAsyncShell(pi, store, {
       command: "for i in $(seq 1 400); do echo line-$i-padding-padding-padding-padding; done",
       cwd: "/tmp",
       notify: false,
@@ -313,8 +313,8 @@ describe("async — registry isolation", () => {
 
   it("tracks multiple concurrent tasks independently", async () => {
     const { pi } = fakePi();
-    const a = spawnAsyncShell(pi, store, { command: "sleep 0.1", cwd: "/tmp", notify: false });
-    const b = spawnAsyncShell(pi, store, { command: "sleep 5", cwd: "/tmp", notify: false });
+    const a = await spawnAsyncShell(pi, store, { command: "sleep 0.1", cwd: "/tmp", notify: false });
+    const b = await spawnAsyncShell(pi, store, { command: "sleep 5", cwd: "/tmp", notify: false });
     expect(_internals.registry().size).toBe(2);
     await until(() => a.endedAt !== undefined);
     expect(statusOf(a)).toBe("completed");
@@ -353,7 +353,7 @@ describe("async — completion path must never crash the host process", () => {
         return typeof value === "function" ? value.bind(target) : value;
       },
     }) as never;
-    const task = spawnAsyncShell(pi, dying, {
+    const task = await spawnAsyncShell(pi, dying, {
       command: "sleep 0.3; echo must-not-crash",
       cwd: "/tmp",
       notify: true,
@@ -374,7 +374,7 @@ describe("async — completion path must never crash the host process", () => {
         throw new Error("session is gone");
       },
     } as unknown as ExtensionAPI;
-    const task = spawnAsyncShell(badPi, store, {
+    const task = await spawnAsyncShell(badPi, store, {
       command: "echo still-fine",
       cwd: "/tmp",
       notify: true,
@@ -385,7 +385,7 @@ describe("async — completion path must never crash the host process", () => {
 
   it("propagates a spawn failure as a failed task rather than throwing", async () => {
     const { pi } = fakePi();
-    const task = spawnAsyncShell(pi, store, {
+    const task = await spawnAsyncShell(pi, store, {
       command: "echo x",
       cwd: "/nonexistent-directory-xyz",
       notify: false,
@@ -448,7 +448,7 @@ describe("abort epoch — 中止后抑制唤醒（两条路径）", () => {
     const epoch = createAbortEpoch();
     epoch.noteAgentEnd({ messages: [{ role: "assistant", stopReason: "aborted" }] });
 
-    const task = spawnAsyncShell(pi, store, {
+    const task = await spawnAsyncShell(pi, store, {
       command: "echo suppressed",
       cwd: "/tmp",
       label: "suppressed-job",
@@ -474,7 +474,7 @@ describe("abort epoch — 中止后抑制唤醒（两条路径）", () => {
     const epoch = createAbortEpoch();
     epoch.noteAgentEnd({ messages: [{ role: "assistant", stopReason: "aborted" }] });
 
-    const task = spawnAsyncShell(pi, store, {
+    const task = await spawnAsyncShell(pi, store, {
       command: "echo busy-suppressed",
       cwd: "/tmp",
       label: "busy-job",
@@ -494,7 +494,7 @@ describe("abort epoch — 中止后抑制唤醒（两条路径）", () => {
     const { pi, sent } = fakePi();
     const epoch = createAbortEpoch();
     // 未置位。
-    const task = spawnAsyncShell(pi, store, {
+    const task = await spawnAsyncShell(pi, store, {
       command: "echo normal",
       cwd: "/tmp",
       label: "normal-job",
@@ -510,7 +510,7 @@ describe("abort epoch — 中止后抑制唤醒（两条路径）", () => {
 
   it("不给 wakeup 时行为等同改动前（向后兼容）", async () => {
     const { pi, sent } = fakePi();
-    const task = spawnAsyncShell(pi, store, { command: "true", cwd: "/tmp", notify: true });
+    const task = await spawnAsyncShell(pi, store, { command: "true", cwd: "/tmp", notify: true });
     await until(() => task.endedAt !== undefined);
     await until(() => sent.length > 0, 3_000);
     expect(sent[0]!.options).toMatchObject({ triggerTurn: true });
@@ -609,7 +609,7 @@ describe("abort epoch — 系统续跑不算恢复（最易写错处）", () => 
     // 本用例只用状态机验证语义；事件接线由下面的扩展级用例覆盖。
     expect(epoch.wakeup.isUserAborted()).toBe(true);
 
-    const task = spawnAsyncShell(pi, store, {
+    const task = await spawnAsyncShell(pi, store, {
       command: "echo after-continue",
       cwd: "/tmp",
       label: "after-continue",
@@ -777,5 +777,36 @@ describe("abort epoch — 记账 entry 不进 LLM 上下文", () => {
       },
     });
     expect(epoch.snapshot().delivered).toEqual(["b-yes"]);
+  });
+});
+
+describe("async review activity", () => {
+  it.each([false, true])("awaits baseline and closes once after failure/kill (kill=%s)", async (kill) => {
+    const { getTaskActivityHandle } = await import("../tasks/activity.js");
+    const hub = getTaskActivityHandle();
+    const { pi, sent } = fakePi();
+    const phases: string[] = [];
+    let release!: () => void;
+    const baseline = new Promise<void>((r) => { release = r; });
+    const unsubscribe = hub.subscribe(async (e) => {
+      if (e.originSessionId !== "async-review-root") return;
+      phases.push(e.phase);
+      if (e.phase === "before-start") await baseline;
+    });
+    try {
+      const spawning = spawnAsyncShell(pi, store, { originSessionId: "async-review-root", originSessionFile: "/root", originCwd: "/repo", cwd: "/tmp", command: kill ? "sleep 30" : "exit 7", notify: false, ownerAgentId: "worker@team" });
+      expect(phases).toEqual(["before-start"]);
+      expect(store.get()).toEqual({});
+      release();
+      const task = await spawning;
+      store._setSessionId("new-session");
+      expect(hub.getActive()).toContainEqual(expect.objectContaining({ taskId: task.id, originSessionId: "async-review-root", cwd: "/tmp" }));
+      expect(store.getTask(task.id)).toMatchObject({ originSessionId: "async-review-root", ownerAgentId: "worker@team" });
+      if (kill) await killAsyncTask(task.id);
+      await until(() => task.endedAt !== undefined);
+      await vi.waitFor(() => expect(phases).toEqual(["before-start", "end"]));
+      expect(hub.getActive().some((a) => a.taskId === task.id)).toBe(false);
+      expect(sent).toEqual([]);
+    } finally { unsubscribe(); }
   });
 });

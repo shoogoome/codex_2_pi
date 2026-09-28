@@ -11,6 +11,7 @@
 // Task 4.2 wraps this with the actual respawn flow (calling SessionManager.open
 // for each running teammate). Task 4.3 wires it into session_start.
 
+import { copyTaskOrigin, registerTaskOrigin } from "../tasks/origin.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -246,7 +247,7 @@ async function createResumedAgentSession(
 ): Promise<{ session: AgentSession; pendingApprovals: PendingApprovals }> {
   const sm = await _hydrateSdk.SessionManagerOpen(replayed.sessionFile);
   const services = await _hydrateSdk.createAgentSessionServices({
-    cwd: ctx.cwd,
+    cwd: replayed.cwd ?? ctx.cwd,
     appendSystemPrompt: agentDef.systemPrompt ? [agentDef.systemPrompt] : undefined,
   });
   const allToolNames = ctx.pi.getAllTools().map((tool) => tool.name);
@@ -414,6 +415,8 @@ export async function respawnTeammates(
 
     // Open the persisted session and wire up an AgentSession on top of it.
     // A failed SDK setup must return the reserved root-session slot.
+    const origin = copyTaskOrigin(replayed);
+    const unregisterOrigin = registerTaskOrigin(replayed.sessionFile, origin);
     let session: AgentSession;
     let pendingApprovals: PendingApprovals;
     try {
@@ -423,6 +426,7 @@ export async function respawnTeammates(
         ctx,
       ));
     } catch (error) {
+      unregisterOrigin();
       residentLease.release();
       retireTeammate(ctx.handle, replayed.identity, replayed.sessionFile);
       const message = error instanceof Error ? error.message : String(error);
@@ -450,6 +454,7 @@ export async function respawnTeammates(
     const outputFile = getTaskOutputPath(taskId);
     const initial: InProcessTeammateTaskState = {
       ...createTaskStateBase({
+        ...origin,
         id: taskId,
         type: "in_process_teammate",
         description: `${replayed.identity.agentName}@${replayed.identity.teamName}`,
@@ -524,6 +529,7 @@ export async function respawnTeammates(
     };
 
     startTeammateLoop({
+      activity: { ...origin, taskId, cwd: replayed.cwd ?? ctx.cwd },
       identity: replayed.identity,
       initialPrompt: undefined, // resume — go straight to idle
       session,
@@ -621,6 +627,7 @@ export async function respawnTeammates(
         );
       },
       onTerminal: (reason) => {
+        unregisterOrigin();
         residentLease.release();
         unregisterApprovalSession(replayed.sessionFile);
         // Drop the session-event listener regardless of whether killTeammate

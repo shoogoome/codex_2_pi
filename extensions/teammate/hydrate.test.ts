@@ -1076,3 +1076,45 @@ describe("hydrateTeamTaskStore", () => {
     expect(handle.teamTaskStore.list()).toEqual([]);
   });
 });
+
+describe("review attribution restore", () => {
+  it.each([true, false])("restores only recorded root attribution (new format: %s)", async (modern) => {
+    const { taskOriginFromContext } = await import("../tasks/origin.js");
+    const { getTaskActivityHandle } = await import("../tasks/activity.js");
+    const hub = getTaskActivityHandle();
+    const origin = modern ? { originSessionId: "restored-root", originSessionFile: "/root.jsonl", originCwd: "/repo" } : {};
+    const sessionFile = modern ? "/tmp/review-modern.jsonl" : "/tmp/review-legacy.jsonl";
+    const state = hydrateTeammateState([
+      { type: "custom_message", customType: TEAMMATE_EVENT_CUSTOM_TYPE, details: { kind: "team_create", teamName: "t1", createdAt: 1 } },
+      { type: "custom_message", customType: TEAMMATE_EVENT_CUSTOM_TYPE, details: { ...origin, cwd: "/other-worktree", kind: "teammate_spawn", identity: t1id, sessionFile, initialPrompt: "go" } },
+    ]);
+    const session = { prompt: vi.fn().mockResolvedValue(undefined), abort: vi.fn(), dispose: vi.fn(), subscribe: vi.fn(() => () => {}) };
+    const services = vi.fn().mockResolvedValue({});
+    _setHydrateSdkForTest({ createAgentSessionServices: services, SessionManagerOpen: vi.fn().mockReturnValue({}),
+      createAgentSessionFromServices: vi.fn(async () => {
+        expect(taskOriginFromContext({ cwd: "/current", sessionManager: { getSessionFile: () => sessionFile, getSessionId: () => "current-child" } } as never)).toEqual(origin);
+        return { session };
+      }),
+    });
+    const taskStore = createTaskStore();
+    _setDefaultTaskStoreForTest(taskStore); _resetTaskOutputDirForTest();
+    const handle = buildHandle();
+    const events: string[] = [];
+    const unsub = hub.subscribe((e) => { if (e.originSessionId === "restored-root") events.push(e.phase); });
+    try {
+      await respawnTeammates(state, { pi: buildPi() as never, taskStore, handle, cwd: "/current" });
+      expect(services).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/other-worktree" }));
+      const task = Object.values(taskStore.get())[0]!;
+      expect(task.originSessionId).toBe(modern ? "restored-root" : undefined);
+      expect(hub.getActive().some((a) => a.taskId === task.id)).toBe(false);
+      handle.mailbox.send({ id: "resume-review", from: "leader", to: t1id.agentId, body: "continue", timestamp: 1, isProtocol: false });
+      await vi.waitFor(() => expect(session.prompt).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect((taskStore.getTask(task.id) as { isIdle?: boolean }).isIdle).toBe(true));
+      expect(events).toEqual(modern ? ["before-start", "end"] : []);
+      (taskStore.getTask(task.id) as unknown as { abortController: AbortController }).abortController.abort();
+      await vi.waitFor(() => expect(session.dispose).toHaveBeenCalled());
+    } finally {
+      unsub(); _setHydrateSdkForTest({}); await _clearOutputsForTest(); _resetTaskOutputDirForTest(); _setDefaultTaskStoreForTest(undefined);
+    }
+  });
+});

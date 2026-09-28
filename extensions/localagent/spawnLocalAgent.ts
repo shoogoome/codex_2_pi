@@ -5,6 +5,8 @@
 // repair any in-flight tool calls, and run the delegated prompt in background.
 // Recursive forks are rejected by the boilerplate guard.
 
+import { copyTaskOrigin, registerTaskOrigin, type TaskOrigin } from "../tasks/origin.js";
+import { getTaskActivityHandle } from "../tasks/activity.js";
 import type {
   AgentSession,
   ExtensionAPI,
@@ -63,7 +65,7 @@ function boundedFinalMessage(text: string): string | undefined {
 
 // ---------- public types ----------
 
-export interface SpawnLocalAgentOptions {
+export interface SpawnLocalAgentOptions extends TaskOrigin {
   prompt: string;
   ctxMessages: readonly unknown[];
   cwd: string;
@@ -181,6 +183,8 @@ export async function spawnLocalAgent(
   store: TaskStore,
   opts: SpawnLocalAgentOptions,
 ): Promise<SpawnLocalAgentResult> {
+  const origin = copyTaskOrigin(opts);
+  let unregisterOrigin: (() => void) | undefined;
   // 1. recursion guard — bail if we are already inside a fork child.
   if (isInForkChild(opts.ctxMessages)) {
     throw new Error(
@@ -221,6 +225,8 @@ export async function spawnLocalAgent(
   try {
     const services = await _sdk.createAgentSessionServices({ cwd: opts.cwd });
     const sm = await _sdk.SessionManagerForkFrom(opts.parentSessionFile, opts.cwd);
+    const childFile = (sm as { getSessionFile?: () => string | undefined }).getSessionFile?.();
+    if (childFile) unregisterOrigin = registerTaskOrigin(childFile, origin);
     const wrapped: ForkSessionManagerLike = {
       getEntries: () =>
         (sm as { getEntries: () => readonly unknown[] }).getEntries(),
@@ -240,6 +246,7 @@ export async function spawnLocalAgent(
     });
     session = sessionUnknown as AgentSession;
   } catch (error) {
+    unregisterOrigin?.();
     releaseCapacity();
     throw error;
   }
@@ -250,6 +257,7 @@ export async function spawnLocalAgent(
   initProgress(taskId, Date.now());
   const initial: LocalAgentTaskState = {
     ...createTaskStateBase({
+      ...origin,
       id: taskId,
       type: "local_agent",
       description: opts.description ?? opts.prompt.slice(0, 60),
@@ -266,6 +274,19 @@ export async function spawnLocalAgent(
     forkParentSessionFile: opts.parentSessionFile,
     session,
   };
+  const activity = { ...origin, taskId, operationId: taskId, cwd: opts.cwd };
+  const hub = getTaskActivityHandle();
+  try {
+    if (origin.originSessionId) await hub.begin(activity);
+    opts.abortSignal?.throwIfAborted();
+  } catch (error) {
+    await hub.end(activity).catch((e) => logError(e, "localagent activity end"));
+    removeProgress(taskId);
+    unregisterOrigin?.();
+    releaseCapacity();
+    session.dispose();
+    throw error;
+  }
   registerTask(initial, store);
 
   // 4. counters + agent_end signal — declared early so pushProgress can read them.
@@ -441,6 +462,8 @@ export async function spawnLocalAgent(
   const cleanup = (): void => {
     if (cleanedUp) return;
     cleanedUp = true;
+    unregisterOrigin?.();
+    void hub.end(activity).catch((e) => logError(e, "localagent activity end"));
     try {
       unsub();
     } catch {

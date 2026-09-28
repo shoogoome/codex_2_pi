@@ -461,3 +461,41 @@ describe("spawnLocalShell — PI_TASK_BASH_TIMEOUT_MS", () => {
     }
   });
 });
+
+describe("session review shell lifecycle", () => {
+  it("awaits baseline then retains a stable window beyond the tool return", async () => {
+    const { getTaskActivityHandle } = await import("../tasks/activity.js");
+    const hub = getTaskActivityHandle();
+    const fake = createFakeBashOps();
+    let release!: () => void;
+    const baseline = new Promise<void>((r) => { release = r; });
+    const phases: string[] = [];
+    const unsubscribe = hub.subscribe(async (event) => {
+      if (event.originSessionId !== "shell-root") return;
+      phases.push(event.phase);
+      if (event.phase === "before-start") await baseline;
+    });
+    try {
+      const resultPromise = spawnLocalShell(pi as never, store, {
+        originSessionId: "shell-root", originSessionFile: "/root.jsonl", originCwd: "/repo",
+        cwd: "/actual-worktree", command: "change later", description: "review", timeoutMs: 1,
+        operations: fake.ops, ownerAgentId: "alice@team", toolUseId: "call",
+      });
+      expect(store.get()).toEqual({});
+      expect(phases).toEqual(["before-start"]);
+      release();
+      const result = await resultPromise;
+      expect(result.backgrounded).toBe(true);
+      store._setSessionId("replacement");
+      expect(hub.getActive()).toContainEqual(expect.objectContaining({ taskId: result.taskId, originSessionId: "shell-root", cwd: "/actual-worktree" }));
+      expect(store.getTask(result.taskId)).toMatchObject({ originSessionId: "shell-root", ownerAgentId: "alice@team", toolUseId: "call" });
+      fake.emit(Buffer.from("late write"));
+      fake.finish(1);
+      await vi.waitFor(() => expect(phases).toEqual(["before-start", "end"]));
+      expect(hub.getActive().some((a) => a.taskId === result.taskId)).toBe(false);
+      // Activity listeners themselves add no model notification; shell retains
+      // its existing default non-waking terminal notification policy.
+      expect(pi.sendMessage.mock.calls.every((call) => call[1]?.triggerTurn !== true)).toBe(true);
+    } finally { unsubscribe(); }
+  });
+});

@@ -1,3 +1,4 @@
+import { taskOriginFromContext } from "../../tasks/origin.js";
 import type {
   AgentToolResult,
   ExtensionAPI,
@@ -195,6 +196,7 @@ export function buildTaskAgentTool(
         );
       }
 
+      const origin = taskOriginFromContext(ctx);
       const cwd = params.cwd ?? ctx.cwd;
 
       // Route to the long-lived teammate path when team_name / name are present.
@@ -226,6 +228,7 @@ export function buildTaskAgentTool(
         try {
           const runtime = resolveAgentRuntime(pi, ctx, undefined, teammateAgentDef.model);
           const result = await resolveTeammateSpawner()(pi, store, teammateHandle, {
+            ...origin,
             teamName,
             agentName,
             agentDef: teammateAgentDef,
@@ -334,6 +337,7 @@ export function buildTaskAgentTool(
       try {
         const runtime = inheritParentRuntime(pi, ctx);
         const result = await _spawner(pi, store, {
+          ...origin,
           prompt: params.prompt,
           ctxMessages: (ctx as { messages?: readonly unknown[] }).messages ?? [],
           cwd,

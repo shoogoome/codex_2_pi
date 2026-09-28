@@ -15,6 +15,7 @@
 //   6. start the teammateLoop with onTerminal wired to flip status +
 //      remove member + dispose session
 
+import { copyTaskOrigin, registerTaskOrigin, type TaskOrigin } from "../tasks/origin.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -117,7 +118,7 @@ export function _setSdkForTest(bindings: Partial<TeammateSdkBindings>): void {
 
 // ---------- public types ----------
 
-export interface SpawnTeammateOptions {
+export interface SpawnTeammateOptions extends TaskOrigin {
   teamName: string;
   agentName: string;
   agentDef?: AgentDefinition;
@@ -167,6 +168,7 @@ export async function spawnTeammate(
   handle: TeammateHandle,
   opts: SpawnTeammateOptions,
 ): Promise<SpawnTeammateResult> {
+  opts = { ...opts, ...copyTaskOrigin(opts) };
   const capacity = getAgentCapacity(pi);
   const residentLease = capacity.reserveResident();
   try {
@@ -295,6 +297,7 @@ async function spawnTeammateWithLease(
     postLeaderNotification(pi, details, triggerTurn, isLeaderIdle);
   };
 
+  const unregisterOrigin = registerTaskOrigin(sessionFile, opts);
   const { session: sessionUnknown } = await _sdk.createAgentSessionFromServices({
     services,
     sessionManager: sm,
@@ -321,7 +324,7 @@ async function spawnTeammateWithLease(
     ],
     model: resolvedModel,
     thinkingLevel: opts.thinkingLevel,
-  });
+  }).catch((error) => { unregisterOrigin(); throw error; });
   const session = sessionUnknown as AgentSession;
 
   // 4. register task
@@ -330,6 +333,7 @@ async function spawnTeammateWithLease(
 
   const initial: InProcessTeammateTaskState = {
     ...createTaskStateBase({
+      ...copyTaskOrigin(opts),
       id: taskId,
       type: "in_process_teammate",
       description: `${opts.agentName}@${opts.teamName}`,
@@ -372,6 +376,8 @@ async function spawnTeammateWithLease(
 
   // 5. event + member registration
   emitTeammateEvent(pi, {
+    ...copyTaskOrigin(opts),
+    cwd: opts.cwd,
     kind: "teammate_spawn",
     identity,
     sessionFile,
@@ -427,6 +433,7 @@ async function spawnTeammateWithLease(
   };
 
   startTeammateLoop({
+    activity: { ...copyTaskOrigin(opts), taskId, cwd: opts.cwd },
     identity,
     initialPrompt: augmentedPrompt,
     session,
@@ -519,6 +526,7 @@ async function spawnTeammateWithLease(
       }));
     },
     onTerminal: (reason) => {
+      unregisterOrigin();
       residentLease.release();
       unregisterApprovalSession(sessionFile);
       // Drop the session-event listener regardless of whether killTeammate

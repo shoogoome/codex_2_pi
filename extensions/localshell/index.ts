@@ -5,6 +5,7 @@
 //
 // session_shutdown 内先 kill 自己的 running task,再 unregisterTaskType。
 
+import { taskOriginFromContext } from "../tasks/origin.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -167,6 +168,8 @@ export default function localshellExtension(pi: ExtensionAPI): void {
         };
 
         const result = await spawnLocalShell(pi, handle.store, {
+          ...taskOriginFromContext(ctx),
+          cwd: ctx.cwd,
           command,
           description,
           timeoutMs: timeout_ms,

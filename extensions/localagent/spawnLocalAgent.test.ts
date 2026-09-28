@@ -260,3 +260,41 @@ describe("spawnLocalAgent — progress and terminal delivery", () => {
     expect(store.getTask(result.taskId)).toMatchObject({ error: "401 invalid child auth" });
   });
 });
+
+describe("fork review activity", () => {
+  it("registers root inheritance before child SDK startup and stays active after return", async () => {
+    const { getTaskActivityHandle } = await import("../tasks/activity.js");
+    const { taskOriginFromContext } = await import("../tasks/origin.js");
+    const hub = getTaskActivityHandle();
+    const session = makeFakeSession();
+    const store = createTaskStore();
+    const origin = { originSessionId: "fork-review-root", originSessionFile: "/parent", originCwd: "/repo" };
+    _setSdkForTest({
+      createAgentSessionFromServices: vi.fn(async () => {
+        expect(taskOriginFromContext({ cwd: "/other", sessionManager: forkSessionManager() } as never)).toEqual(origin);
+        return { session };
+      }),
+    });
+    let release!: () => void;
+    const baseline = new Promise<void>((r) => { release = r; });
+    const events: string[] = [];
+    const unsubscribe = hub.subscribe(async (e) => {
+      if (e.originSessionId !== origin.originSessionId) return;
+      events.push(e.phase);
+      if (e.phase === "before-start") await baseline;
+    });
+    try {
+      const spawning = spawnLocalAgent(fakePi, store, forkOptions({ ...origin, cwd: "/other" }));
+      await vi.waitFor(() => expect(events).toEqual(["before-start"]));
+      expect(session.prompt).not.toHaveBeenCalled();
+      release();
+      const result = await spawning;
+      expect(result.backgrounded).toBe(true);
+      expect(hub.getActive()).toContainEqual(expect.objectContaining({ taskId: result.taskId, originSessionId: origin.originSessionId, cwd: "/other" }));
+      store._setSessionId("replacement");
+      session.emit({ type: "agent_end" });
+      await vi.waitFor(() => expect(events).toEqual(["before-start", "end"]));
+      expect(store.getTask(result.taskId)?.originSessionId).toBe(origin.originSessionId);
+    } finally { unsubscribe(); }
+  });
+});

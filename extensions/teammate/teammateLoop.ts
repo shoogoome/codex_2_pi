@@ -16,6 +16,8 @@
 // non-event — not a completed turn, not a failed one — because the redirect
 // the leader sends becomes the very next turn.
 
+import { getTaskActivityHandle, type TaskActivity } from "../tasks/activity.js";
+import { logError } from "../tasks/logging.js";
 import { randomBytes } from "node:crypto";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type {
@@ -100,6 +102,8 @@ export function consumeInterruptMarker(agentId: string): boolean {
 }
 
 export interface TeammateLoopOptions {
+  /** Root attribution; each real prompt gets a distinct activity window. */
+  activity?: Omit<TaskActivity, "operationId">;
   identity: TeammateIdentity;
   /** Either an initial prompt (first run) or undefined (resume — go straight to idle). */
   initialPrompt: string | undefined;
@@ -215,6 +219,13 @@ export function startTeammateLoop(
   }
 
   async function promptWithErrorDetection(text: string): Promise<string> {
+    const activity = opts.activity && { ...opts.activity, operationId: makeMessageId() };
+    const hub = getTaskActivityHandle();
+    if (activity) await hub.begin(activity);
+    if (opts.abortSignal.aborted) {
+      if (activity) await hub.end(activity).catch((e) => logError(e, "teammate activity end"));
+      throw new TeammateTurnAbortedError();
+    }
     let assistantError: string | undefined;
     let aborted = false;
     let lastAssistantText = "";
@@ -302,6 +313,7 @@ export function startTeammateLoop(
       throw error;
     } finally {
       unsubscribe();
+      if (activity) await hub.end(activity).catch((e) => logError(e, "teammate activity end"));
     }
     if (assistantError) throw new Error(assistantError);
     // Surface the abort to the loop rather than returning normally: a cancelled

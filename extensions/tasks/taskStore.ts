@@ -44,10 +44,28 @@ export function createTaskStore(): TaskStore {
     getTask: (id) => snapshot[id],
     set(updater) {
       const prev = snapshot;
-      const next = updater(prev);
+      let next = updater(prev);
       if (next === prev) {
         // 早返回 — listener 不触发,与 Claude AppState 一致。
         return;
+      }
+      // Origins are write-once, including unknown legacy origins. State
+      // updaters cannot accidentally reattribute a task after session switch.
+      for (const [id, task] of Object.entries(next)) {
+        const original = prev[id];
+        if (!original || original === task) continue;
+        if (
+          task.originSessionId !== original.originSessionId ||
+          task.originSessionFile !== original.originSessionFile ||
+          task.originCwd !== original.originCwd
+        ) {
+          next = { ...next, [id]: {
+            ...task,
+            originSessionId: original.originSessionId,
+            originSessionFile: original.originSessionFile,
+            originCwd: original.originCwd,
+          } };
+        }
       }
       snapshot = next;
       // Array.from 避免 listener 在通知期间反向 mutate set。

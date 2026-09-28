@@ -6,7 +6,8 @@
 //   - timeout 命中 → state.isBackgrounded=true，工具返回 taskId/outputFile。
 //   - 真后台自然结束 → notifyTaskTerminal(CAS) 即时更新 TUI；默认不唤醒/注入 LLM。
 //
-// 实现注意:spawnLocalShell 是普通函数(非 async),保证 registerTask 和 ops.exec
+// 实现注意:无 origin 的 legacy 调用在首个 await 前执行 registerTask 和 ops.exec；有归属调用先等待基线。
+// 原同步约定保留于 legacy 调用，使 registerTask 和 ops.exec
 // 在调用方看到 Promise 之前同步执行完毕,使测试中 `await Promise.resolve()` 即可
 // 读到已注册的 task 且 fake.finish 已就绪。initTaskOutput fire-and-forget,
 // appendTaskOutput 内部 O_CREAT 兜底创建文件。
@@ -41,6 +42,9 @@ import { killLocalShellTask } from "./kill.js";
 import { readTruncatedOutput } from "./outputBuffer.js";
 import { getDefaultTaskStore } from "../tasks/taskStore.js";
 
+import { copyTaskOrigin, type TaskOrigin } from "../tasks/origin.js";
+import { getTaskActivityHandle } from "../tasks/activity.js";
+
 export interface LocalShellTaskState extends TaskStateBase {
   type: "local_bash";
   command: string;
@@ -53,7 +57,7 @@ export interface LocalShellTaskState extends TaskStateBase {
   result?: { exitCode: number | null; killed: boolean };
 }
 
-export interface SpawnLocalShellOptions {
+export interface SpawnLocalShellOptions extends TaskOrigin {
   command: string;
   description: string;
   toolUseId?: string;
@@ -140,17 +144,22 @@ function shouldWakeOnBackgroundTerminal(): boolean {
 /**
  * 启动一个 local bash 任务,返回 SpawnLocalShellResult。
  *
- * 注意:本函数是普通函数(非 async),确保 registerTask 和 ops.exec 同步执行,
+ * 注意:有归属调用必须先等待 activity 基线；无归属 legacy 调用的注册和 exec 同步执行,
  * 测试里 `await Promise.resolve()` 即可看到已注册的 task 且 fake.finish 已就绪。
  */
-export function spawnLocalShell(
+export async function spawnLocalShell(
   pi: ExtensionAPI,
   store: TaskStore,
   opts: SpawnLocalShellOptions,
 ): Promise<SpawnLocalShellResult> {
   const taskId = generateTaskId("local_bash");
   const cwd = opts.cwd ?? process.cwd();
+  const origin = copyTaskOrigin(opts);
+  const activity = { ...origin, taskId, operationId: taskId, cwd };
+  const hub = getTaskActivityHandle();
   const outputFile = getTaskOutputPath(taskId);
+  if (origin.originSessionId) await hub.begin(activity);
+  const endActivity = () => hub.end(activity).catch((e) => logError(e, "shell activity end"));
   const abort = new AbortController();
   const ops = opts.operations ?? createLocalBashOperations();
 
@@ -159,6 +168,7 @@ export function spawnLocalShell(
 
   const initial: LocalShellTaskState = {
     ...createTaskStateBase({
+      ...origin,
       id: taskId,
       type: "local_bash",
       description: opts.description,
@@ -200,40 +210,45 @@ export function spawnLocalShell(
   let bytesReceived = 0;
 
   // 同步启动 exec(使 fake.finish/emit 立即可用)
-  const execPromise = ops
-    .exec(opts.command, cwd, {
-      onData: (buf) => {
-        const chunk = buf.toString("utf8");
-        bytesReceived += buf.length;
-        streamTail += chunk;
-        if (streamTail.length > STREAM_DISPLAY_MAX_CHARS) {
-          streamTail = streamTail.slice(-STREAM_DISPLAY_MAX_CHARS);
-        }
-        try {
-          appendTaskOutput(taskId, chunk);
-        } catch (e) {
-          logError(e, "spawnLocalShell appendTaskOutput");
-        }
-        const tailBytes = Buffer.byteLength(streamTail, "utf8");
-        const omittedBytes = Math.max(0, bytesReceived - tailBytes);
-        const cumulative =
-          omittedBytes > 0
-            ? `[${omittedBytes} bytes of earlier output omitted]\n${streamTail}`
-            : streamTail;
-        try {
-          opts.onProgress?.({
-            taskId,
-            description: opts.description,
-            cumulative,
-            chunk,
-            bytesReceived,
-          });
-        } catch (e) {
-          logError(e, "spawnLocalShell onProgress");
-        }
-      },
-      signal: abort.signal,
-    })
+  const execPromise = (() => {
+    try {
+      return ops.exec(opts.command, cwd, {
+        onData: (buf) => {
+          const chunk = buf.toString("utf8");
+          bytesReceived += buf.length;
+          streamTail += chunk;
+          if (streamTail.length > STREAM_DISPLAY_MAX_CHARS) {
+            streamTail = streamTail.slice(-STREAM_DISPLAY_MAX_CHARS);
+          }
+          try {
+            appendTaskOutput(taskId, chunk);
+          } catch (e) {
+            logError(e, "spawnLocalShell appendTaskOutput");
+          }
+          const tailBytes = Buffer.byteLength(streamTail, "utf8");
+          const omittedBytes = Math.max(0, bytesReceived - tailBytes);
+          const cumulative =
+            omittedBytes > 0
+              ? `[${omittedBytes} bytes of earlier output omitted]\n${streamTail}`
+              : streamTail;
+          try {
+            opts.onProgress?.({
+              taskId,
+              description: opts.description,
+              cumulative,
+              chunk,
+              bytesReceived,
+            });
+          } catch (e) {
+            logError(e, "spawnLocalShell onProgress");
+          }
+        },
+        signal: abort.signal,
+      });
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  })()
     .then((r) => {
       resultRef = r;
     })
@@ -254,6 +269,7 @@ export function spawnLocalShell(
 
     void execPromise.then(async () => {
       clearTimeout(timer);
+      await endActivity();
       const r = resultRef ?? { exitCode: 1 };
       if (resolved) {
         // timeout 已 resolve → 走后台 terminal 路径

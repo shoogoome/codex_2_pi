@@ -10,7 +10,7 @@
 
 | 扩展 | 能力 | 主要命令 / 工具 |
 |---|---|---|
-| `extensions/diff` | 展示已跟踪和未跟踪的 git 变更。 | `/diff` |
+| `extensions/diff` | 展示 Git 变更；按会话逐文件审阅，确认后隐藏、再次修改重现。 | `/diff` · `/changes` · `Ctrl+R` |
 | `extensions/review` | 提供 Codex 风格的评审预设（基准分支 / 未提交 / 某提交 / 自定义）。 | `/review [instructions]` |
 | `extensions/user-input` | 向用户提问 1-3 个带选项的问题（UI 自动加 `Other` 自由文本项）。 | `request_user_input` / `ask_user_question` / `askUserQuestion` |
 | `extensions/side` | 在 Pi overlay 中从当前 leaf 启动临时 fork subagent，关闭窗口即关闭 side 会话。 | `/side [message]` |
@@ -90,6 +90,16 @@ curl "http://<机器IP>:4317/v1/messages" \
 ```text
 `/diff` — _not inside a git repository_
 ```
+
+### `/changes` · `Ctrl+R`
+
+在对话界面打开当前会话的 Git 文件审阅面板：选择文件查看相对 HEAD 的完整差异（含暂存、未暂存和新增文件），按 `d` **确认完成**后隐藏当前版本；文件再次变化会重新出现。确认不会暂存、提交或还原文件，也不会唤醒模型。
+
+覆盖本会话的直接编辑、Shell、后台任务和子 Agent；未被本会话改变的初始脏文件不自动纳入。保留选择器内原有 Ctrl+R 重命名行为。快捷键可用 `--changes-key alt+v` 改绑，`--changes-key=''` 禁用。
+
+支持 Vim 导航：`j/k` 移动、`h/l` 切栏、`gg/G` 首尾、`Ctrl+u/d` 半页、`Ctrl+b/f` 翻页、`q` 关闭，以及 `5j` / `10gg` 次数前缀。
+
+完整操作、会话恢复、并发归因限制和故障处理见 [会话 Git 审阅](docs/extensions/session-git-review.md)。
 
 ### `/review`
 

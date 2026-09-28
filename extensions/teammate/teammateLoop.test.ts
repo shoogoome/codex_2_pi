@@ -599,3 +599,41 @@ describe("teammateLoop — plan_approval_response routing", () => {
     await handle.done;
   });
 });
+
+describe("teammate review activity", () => {
+  it("awaits each busy baseline, excludes idle, and keeps nested background windows open", async () => {
+    const { getTaskActivityHandle } = await import("../tasks/activity.js");
+    const hub = getTaskActivityHandle();
+    const session = makeFakeSession();
+    const mailbox = createMailbox();
+    const abort = new AbortController();
+    const origin = { originSessionId: "team-review-root", originSessionFile: "/root", originCwd: "/repo" };
+    const nested = { ...origin, taskId: "nested-shell", operationId: "nested-run", cwd: "/repo" };
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const events: string[] = [];
+    const unsubscribe = hub.subscribe(async (e) => {
+      if (e.taskId !== "review-member") return;
+      events.push(e.phase);
+      if (e.phase === "before-start") await gate;
+    });
+    session.prompt.mockImplementationOnce(async () => { await hub.begin(nested); });
+    const onIdle = vi.fn();
+    const loop = startTeammateLoop({ identity: id, initialPrompt: "go", session, mailbox,
+      activity: { ...origin, taskId: "review-member", cwd: "/repo" }, onIdle, abortSignal: abort.signal });
+    try {
+      await vi.waitFor(() => expect(events).toEqual(["before-start"]));
+      expect(session.prompt).not.toHaveBeenCalled();
+      release();
+      await vi.waitFor(() => expect(onIdle).toHaveBeenCalledTimes(1));
+      expect(events).toEqual(["before-start", "end"]);
+      expect(hub.getActive().filter((a) => a.originSessionId === origin.originSessionId)).toEqual([nested]);
+      mailbox.send({ id: "again", from: "leader", to: id.agentId, body: "continue", timestamp: Date.now(), isProtocol: false });
+      await vi.waitFor(() => expect(onIdle).toHaveBeenCalledTimes(2));
+      expect(events).toEqual(["before-start", "end", "before-start", "end"]);
+      expect(hub.getActive().filter((a) => a.originSessionId === origin.originSessionId)).toEqual([nested]);
+    } finally {
+      abort.abort(); await loop.done; await hub.end(nested); unsubscribe();
+    }
+  });
+});

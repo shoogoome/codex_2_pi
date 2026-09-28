@@ -7,6 +7,7 @@
 // `updateTaskState` / `evictTerminalTask` 接入。
 
 import { randomBytes } from "node:crypto";
+import { copyTaskOrigin, type TaskOrigin } from "./origin.js";
 
 /**
  * 所有支持的 task 类型。
@@ -47,7 +48,7 @@ export function isTerminalTaskStatus(status: TaskStatus): boolean {
 /**
  * 所有 task state 共享的字段。具体 task type 在此基础上加自己的字段。
  */
-export interface TaskStateBase {
+export interface TaskStateBase extends TaskOrigin {
   id: string;
   type: TaskType;
   status: TaskStatus;
@@ -141,7 +142,7 @@ export function generateTaskId(type: TaskType): string {
  * outputFile 不在这里通过 `getTaskOutputPath(id)` 自动算 — 因为本文件不应循环 import
  * `outputPath.js`。spawn 函数自己算后传入。
  */
-export function createTaskStateBase(args: {
+export function createTaskStateBase(args: TaskOrigin & {
   id: string;
   type: TaskType;
   description: string;
@@ -151,6 +152,7 @@ export function createTaskStateBase(args: {
   ownerAgentId?: string;
 }): TaskStateBase {
   return {
+    ...copyTaskOrigin(args),
     id: args.id,
     type: args.type,
     status: "pending",

@@ -15,9 +15,12 @@ import { attachSessionHandle, getSessionHandle } from "../shared/sessionHandle.j
 import type { Task, TaskType } from "./Task.js";
 import { setDefaultTaskStore, type TaskStore } from "./taskStore.js";
 
+import { getTaskActivityHandle, type TaskActivityHandle } from "./activity.js";
+
 const HANDLE_KEY = "__pi_tasks_handle__";
 
 export interface TasksHandle {
+  activity: TaskActivityHandle;
   store: TaskStore;
   registerTaskType(type: TaskType, task: Task): void;
   getTaskType(type: TaskType): Task | undefined;
@@ -25,8 +28,8 @@ export interface TasksHandle {
 }
 
 /** Publish the handle so cross-extension consumers can find it. */
-export function attachTasksHandle(pi: ExtensionAPI, handle: TasksHandle): void {
-  attachSessionHandle(pi, HANDLE_KEY, handle);
+export function attachTasksHandle(pi: ExtensionAPI, handle: Omit<TasksHandle, "activity"> & Partial<Pick<TasksHandle, "activity">>): void {
+  attachSessionHandle(pi, HANDLE_KEY, { ...handle, activity: handle.activity ?? getTaskActivityHandle() });
 }
 
 /** Read the handle; throws if tasks extension hasn't attached yet. */
@@ -89,6 +92,9 @@ export function lazyTaskStore(pi: ExtensionAPI): TaskStore {
 export function lazyTasksHandle(pi: ExtensionAPI): TasksHandle {
   const resolve = (): TasksHandle => getTasksHandle(pi);
   return {
+    get activity() {
+      return resolve().activity;
+    },
     get store() {
       return resolve().store;
     },

@@ -36,6 +36,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 | `/speed` | token-speed | 底部 token 生成速度(tok/s)面板；footer 实时估算 + 精确测量 |
 | `/cost`, `/usage` | cost-usage | 会话成本与 token 用量面板 |
 | `/diff` | diff | git 工作树变更(含未跟踪) |
+| `/changes`（`Ctrl+R`） | diff | 本会话文件的完整 Git 差异；逐文件确认后隐藏，再次修改重现，详见 `docs/extensions/session-git-review.md` |
 | `/review [指令]` | review | Codex 风格评审预设 |
 | `/init` | init | 生成项目 AGENTS.md |
 | `/side [message]` | side | 基于当前 leaf 上下文的临时 side 会话 overlay |
@@ -71,6 +72,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 
 - **上下文快满 / 想压缩**：`/prune`（软清理或手动全量压缩）；想看构成占比用 `/monitor`；context-pipeline 会自动截断 tool_result，并为 Pi 原生自动压缩生成结构化摘要；compact-continue 会在阈值压缩确实切断未完成工作时保守续跑一次。
 - **控制“能不能执行某工具/命令”**：`/approvals`（规则 + default/acceptEdits/bypass 模式，保护 .git/.pi/~/.ssh，拦 rm -rf/sudo 等）。
+- **人工检查本会话代码修改**：对话界面 `Ctrl+R` 或 `/changes`，逐文件看相对 HEAD 的完整差异，`d` 确认完成仅隐藏当前版本、不是提交；下次修改重新出现。想让模型评审则用 `/review`，整个工作树文本差异用 `/diff`。
 - **想先看方案再动手**：`/plan`（只读探查→提交计划→批准后恢复写工具）。
 - **想让 agent 不停手连续推进长任务**：`/autopilot on [目标]`（有预算/轮数/收益递减停止）。
 - **想定时轮询状态或重复执行命令**：`/loop [interval] <prompt>`（会立即执行一次，后续仅在空闲时触发）。
@@ -96,5 +98,6 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 ## 详情文档
 
 - 新增扩展文档：`docs/extensions/{claude-ui,input-history,session-summary,context-pipeline,compact-continue,agents-context,settings-env,channel,memory,approvals,plan-mode,profiles,resume-picker,autopilot,loop,effort,fast-mode,ultra,multi-agent,local-models,mcp,plugin-loader,hooks-runner,agents,migrate,monitor,token-speed,cost-usage}.md`
+- 会话 Git 审阅：`docs/extensions/session-git-review.md`（`/changes`、`Ctrl+R`、版本确认、范围及恢复限制）。
 - 原有基础扩展（diff/review/init/imagegen/todo/compact-ui/pets/goal/side/localagent/localshell/tasks/teammate/user-input）：见仓库 `README.md`
 - 总表：`docs/CAPABILITIES.md`

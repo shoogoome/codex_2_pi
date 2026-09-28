@@ -19,6 +19,8 @@
 //
 // 落盘复用 tasks 的输出文件契约，所以 task_list / task_status 开箱即用。
 
+import { copyTaskOrigin, taskOriginFromContext, type TaskOrigin } from "../tasks/origin.js";
+import { getTaskActivityHandle } from "../tasks/activity.js";
 import { spawn } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -356,10 +358,10 @@ export function createAbortEpoch(
  * 退出回调里 notifyTaskTerminal(triggerTurn:true) —— 会话空闲则直接开新轮，
  * 忙则进队列（不丢）。
  */
-export function spawnAsyncShell(
+export async function spawnAsyncShell(
   pi: ExtensionAPI,
   store: TaskStoreLike,
-  opts: {
+  opts: TaskOrigin & {
     command: string;
     cwd: string;
     label?: string;
@@ -373,19 +375,29 @@ export function spawnAsyncShell(
      */
     wakeup?: WakeupControl;
   },
-): AsyncTaskState {
+): Promise<AsyncTaskState> {
   const id = generateTaskId("async_shell");
+  const origin = copyTaskOrigin(opts);
+  const activity = { ...origin, taskId: id, operationId: id, cwd: opts.cwd };
+  const hub = getTaskActivityHandle();
   const outputFile = getTaskOutputPath(id);
+  if (origin.originSessionId) await hub.begin(activity);
   const ownerAgentId = opts.ownerAgentId;
-  const child = spawn("/bin/bash", ["-lc", opts.command], {
-    cwd: opts.cwd,
-    env: process.env,
-    stdio: ["ignore", "pipe", "pipe"],
-    // Own process group, so killing can target the GROUP rather than one pid.
-    // Without this a `nohup … &` / `cmd1 && cmd2` grandchild survives the kill
-    // (pi's own bash tool does the same, then killProcessTree(-pid)).
-    detached: process.platform !== "win32",
-  });
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn("/bin/bash", ["-lc", opts.command], {
+      cwd: opts.cwd,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+      // Own process group, so killing can target the GROUP rather than one pid.
+      // Without this a `nohup … &` / `cmd1 && cmd2` grandchild survives the kill
+      // (pi's own bash tool does the same, then killProcessTree(-pid)).
+      detached: process.platform !== "win32",
+    });
+  } catch (error) {
+    await hub.end(activity).catch((e) => logError(e, "async activity end"));
+    throw error;
+  }
 
   const task: AsyncTaskState = {
     id,
@@ -415,6 +427,7 @@ export function spawnAsyncShell(
   registerTask(
     {
       ...createTaskStateBase({
+        ...origin,
         id,
         type: "async_shell",
         description,
@@ -448,6 +461,7 @@ export function spawnAsyncShell(
   const finish = (): void => {
     if (task.endedAt !== undefined) return;
     task.endedAt = Date.now();
+    void hub.end(activity).catch((e) => logError(e, "async activity end"));
     if (task.exitCode === undefined) task.exitCode = child.exitCode;
     task.signal = child.signalCode;
     const status = statusOf(task);
@@ -799,7 +813,8 @@ export default function asyncExtension(pi: ExtensionAPI): void {
       const store = captured ?? getTasksHandle(pi).store;
       captured = store;
       try {
-        const task = spawnAsyncShell(pi, store, {
+        const task = await spawnAsyncShell(pi, store, {
+          ...taskOriginFromContext(ctx),
           command,
           cwd: cwd ?? ctx?.cwd ?? process.cwd(),
           label,

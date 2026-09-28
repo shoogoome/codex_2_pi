@@ -7,6 +7,7 @@
 // emit one event via emitTeammateEvent (Task 0.6). The reducer is pure and
 // idempotent so replaying the same prefix yields the same state.
 
+import { copyTaskOrigin, type TaskOrigin } from "../tasks/origin.js";
 import { parseAgentId } from "./mailbox.js";
 import type {
   MailboxMessage,
@@ -16,7 +17,8 @@ import type {
 } from "./types.js";
 import type { TeamTask } from "./teamTasks/types.js";
 
-export interface ReplayedTeammate {
+export interface ReplayedTeammate extends TaskOrigin {
+  cwd?: string;
   identity: TeammateIdentity;
   sessionFile: string;
   initialPrompt: string;
@@ -92,6 +94,8 @@ function applyEvent(state: ReplayedState, event: TeammateEvent): ReplayedState {
       // Idempotent: if already present, leave it
       if (!teammatesCopy[event.identity.agentId]) {
         teammatesCopy[event.identity.agentId] = {
+          ...copyTaskOrigin(event),
+          ...(typeof event.cwd === "string" ? { cwd: event.cwd } : {}),
           identity: event.identity,
           sessionFile: event.sessionFile,
           initialPrompt: event.initialPrompt,

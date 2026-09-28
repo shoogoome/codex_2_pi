@@ -43,6 +43,7 @@ import {
   unregisterTaskType,
 } from "./taskTypeRegistry.js";
 import { attachTasksHandle, type TasksHandle } from "./handle.js";
+import { getTaskActivityHandle } from "./activity.js";
 import { createAgentCapacity } from "./agentCapacity.js";
 import { attachAgentCapacity } from "./agentCapacityHandle.js";
 import { logError } from "./logging.js";
@@ -79,6 +80,7 @@ export default function tasksExtension(
   // (localshell, localagent, teammate) can find this store + registry even
   // though each extension gets its own pi.events facade and jiti realm.
   const handle: TasksHandle = {
+    activity: getTaskActivityHandle(),
     store,
     registerTaskType,
     getTaskType,
