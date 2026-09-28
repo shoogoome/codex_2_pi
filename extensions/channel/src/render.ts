@@ -15,6 +15,7 @@ interface ChannelDisplayMessage {
   receivedAt?: string;
   sessionName?: string;
   sessionId?: string;
+  sender?: ChannelMessage["sender"];
   content: string;
 }
 
@@ -71,6 +72,7 @@ function displayMessage(
       receivedAt: details.receivedAt,
       sessionName: details.session?.name,
       sessionId: details.session?.id,
+      sender: details.sender,
       content: details.content,
     };
   }
@@ -91,12 +93,17 @@ export function renderChannelMessage(
   const content = sanitizeChannelDisplayText(display.content);
   const box = new Box(1, 0, (value) => theme.bg("customMessageBg", value));
   const title = `${theme.fg("accent", "◆")} ${theme.bold(theme.fg("customMessageLabel", channelName))}` +
-    (protocol ? ` ${theme.fg("dim", `· ${protocol}`)}` : "");
+    (protocol ? ` ${theme.fg("dim", `· ${protocol}`)}` : "") +
+    (display.sender ? ` · ${sanitizeChannelDisplayText(display.sender.displayName)}` : "");
   box.addChild(new Text(title, 0, 0));
   box.addChild(new Text(theme.fg("customMessageText", content), 0, 0));
 
   if (options.expanded) {
     const metadata = [
+      display.sender ? `成员: ${sanitizeChannelDisplayText(display.sender.memberId)}` : undefined,
+      display.sender ? `职责: ${sanitizeChannelDisplayText(display.sender.introduction)}` : undefined,
+      display.sender?.modules?.length ? `模块: ${sanitizeChannelDisplayText(display.sender.modules.join(", "))}` : undefined,
+      display.sender ? `项目: ${sanitizeChannelDisplayText(display.sender.cwd)}` : undefined,
       display.source ? `来源: ${sanitizeChannelDisplayText(display.source)}` : undefined,
       display.receivedAt ? `时间: ${sanitizeChannelDisplayText(display.receivedAt)}` : undefined,
       display.messageId ? `消息 ID: ${sanitizeChannelDisplayText(display.messageId)}` : undefined,

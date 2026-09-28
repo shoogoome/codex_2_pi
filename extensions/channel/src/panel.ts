@@ -5,6 +5,8 @@ import {
   type Component,
 } from "@earendil-works/pi-tui";
 import { effectiveChannelDirection } from "./store.js";
+import type { PiPanelAction, PiPanelRow } from "./piPanel.js";
+import { sanitizeChannelDisplayText } from "./render.js";
 import type {
   ChannelDefinition,
   ChannelDelivery,
@@ -31,6 +33,7 @@ export interface ChannelPanelDeps {
   sessionId: string;
   sessionName: string;
   listChannels(): ChannelPanelRow[];
+  listPiChannels?(): PiPanelRow[];
   saveChannel(channel: ChannelDefinition): Promise<void>;
   removeChannel(id: string): Promise<void>;
   restartChannel(id?: string): Promise<void>;
@@ -39,6 +42,7 @@ export interface ChannelPanelDeps {
 
 type View =
   | { kind: "list" }
+  | { kind: "add-type" }
   | { kind: "details"; id: string }
   | { kind: "form"; id?: string }
   | { kind: "confirm-remove"; id: string };
@@ -127,12 +131,15 @@ export class ChannelPanel implements Component {
   requestRender?: () => void;
   /** Channel id or __select__ for the outer generic auth target picker. */
   requestedAuthTarget?: string;
+  requestedPiAction?: PiPanelAction;
   lastOp?: Promise<void>;
 
   private view: View = { kind: "list" };
   private cursor = 0;
   private rows: ChannelPanelRow[] = [];
+  private piRows: PiPanelRow[] = [];
   private status?: string;
+  private statusColor = "dim";
   private form?: ChannelForm;
 
   constructor(
@@ -147,13 +154,14 @@ export class ChannelPanel implements Component {
     // No render cache.
   }
 
-  snapshot(): { view: View; cursor: number; status?: string; form?: ChannelForm; requestedAuthTarget?: string } {
+  snapshot(): { view: View; cursor: number; status?: string; form?: ChannelForm; requestedAuthTarget?: string; requestedPiAction?: PiPanelAction } {
     return {
       view: this.view,
       cursor: this.cursor,
       status: this.status,
       form: this.form ? { ...this.form } : undefined,
       requestedAuthTarget: this.requestedAuthTarget,
+      requestedPiAction: this.requestedPiAction,
     };
   }
 
@@ -163,7 +171,18 @@ export class ChannelPanel implements Component {
     } catch {
       this.rows = [];
     }
-    this.cursor = Math.min(this.cursor, Math.max(0, this.rows.length - 1));
+    try {
+      this.piRows = (this.deps.listPiChannels?.() ?? []).sort((a, b) => a.name.localeCompare(b.name));
+    } catch {
+      this.piRows = [];
+    }
+    if (this.view.kind === "list") this.cursor = Math.min(this.cursor, Math.max(0, this.rows.length + this.piRows.length - 1));
+  }
+
+  /** Runtime changes refresh data only, never restart or reconnect channels. */
+  refresh(): void {
+    this.reload();
+    this.requestRender?.();
   }
 
   private rowFor(id: string): ChannelPanelRow | undefined {
@@ -175,14 +194,17 @@ export class ChannelPanel implements Component {
   }
 
   private run(pending: string, operation: () => Promise<void>, success: string): void {
-    this.status = this.theme.fg("warning", `… ${pending}`);
+    this.status = `… ${pending}`;
+    this.statusColor = "warning";
     this.requestRender?.();
     this.lastOp = (async () => {
       try {
         await operation();
-        this.status = this.theme.fg("success", `✓ ${success}`);
+        this.status = `✓ ${success}`;
+        this.statusColor = "success";
       } catch (error) {
-        this.status = this.theme.fg("error", error instanceof Error ? error.message : String(error));
+        this.status = error instanceof Error ? error.message : String(error);
+        this.statusColor = "error";
       } finally {
         this.reload();
         this.requestRender?.();
@@ -195,7 +217,8 @@ export class ChannelPanel implements Component {
       this.done();
       return;
     }
-    if (this.view.kind === "list") this.handleList(data);
+    if (this.view.kind === "list") { this.reload(); this.handleList(data); }
+    else if (this.view.kind === "add-type") this.handleAddType(data);
     else if (this.view.kind === "details") this.handleDetails(data);
     else if (this.view.kind === "form") this.handleForm(data);
     else this.handleRemove(data);
@@ -212,15 +235,34 @@ export class ChannelPanel implements Component {
       return;
     }
     if (matchesKey(data, "down")) {
-      this.cursor = Math.min(Math.max(0, this.rows.length - 1), this.cursor + 1);
+      this.cursor = Math.min(Math.max(0, this.rows.length + this.piRows.length - 1), this.cursor + 1);
       this.requestRender?.();
       return;
     }
+    if (matchesKey(data, "j") && this.deps.listPiChannels) {
+      this.requestedPiAction = { action: "join" };
+      this.done();
+      return;
+    }
     if (matchesKey(data, "a")) {
+      if (this.deps.listPiChannels) {
+        this.view = { kind: "add-type" };
+        this.cursor = 0;
+        this.requestRender?.();
+        return;
+      }
       this.form = initialForm(undefined, this.deps.sessionId);
       this.view = { kind: "form" };
       this.cursor = 0;
       this.requestRender?.();
+      return;
+    }
+    const peer = this.piRows[this.cursor - this.rows.length];
+    if (peer) {
+      if (matchesKey(data, "return")) {
+        this.requestedPiAction = { action: "details", channel: peer.id };
+        this.done();
+      }
       return;
     }
     if (matchesKey(data, "l")) {
@@ -246,6 +288,23 @@ export class ChannelPanel implements Component {
       this.cursor = 1;
       this.requestRender?.();
     }
+  }
+
+  private handleAddType(data: string): void {
+    if (matchesKey(data, "escape")) {
+      this.view = { kind: "list" }; this.cursor = 0;
+    } else if (matchesKey(data, "up")) this.cursor = Math.max(0, this.cursor - 1);
+    else if (matchesKey(data, "down")) this.cursor = Math.min(3, this.cursor + 1);
+    else if (matchesKey(data, "return")) {
+      if (this.cursor >= 2) {
+        this.requestedPiAction = { action: "create", mode: this.cursor === 2 ? "direct" : "group" };
+        this.done(); return;
+      }
+      this.form = initialForm(undefined, this.deps.sessionId);
+      this.form.protocol = this.cursor === 0 ? "http" : "wechat";
+      this.view = { kind: "form" }; this.cursor = 0;
+    }
+    this.requestRender?.();
   }
 
   private handleDetails(data: string): void {
@@ -296,7 +355,8 @@ export class ChannelPanel implements Component {
 
   private toggleMounted(row: ChannelPanelRow): void {
     if (row.channel.scope.kind !== "selected") {
-      this.status = this.theme.fg("warning", "只有“多会话”范围可在面板中挂载/卸载；当前会话与全部会话范围是固定的。");
+      this.status = "只有“多会话”范围可在面板中挂载/卸载；当前会话与全部会话范围是固定的。";
+      this.statusColor = "warning";
       this.requestRender?.();
       return;
     }
@@ -423,12 +483,14 @@ export class ChannelPanel implements Component {
       updatedAt: now,
     };
     if (!candidate.name) {
-      this.status = this.theme.fg("error", "Name is required.");
+      this.status = "Name is required.";
+      this.statusColor = "error";
       this.requestRender?.();
       return;
     }
     if (candidate.protocol === "http" && !Number.isInteger(port)) {
-      this.status = this.theme.fg("error", "Bind port must be an integer.");
+      this.status = "Bind port must be an integer.";
+      this.statusColor = "error";
       this.requestRender?.();
       return;
     }
@@ -471,11 +533,20 @@ export class ChannelPanel implements Component {
   }
 
   render(width: number): string[] {
-    const w = Math.max(56, Math.floor(width) - 2);
-    if (this.view.kind === "list") return this.renderList(w);
-    if (this.view.kind === "details") return this.renderDetails(w);
-    if (this.view.kind === "form") return this.renderForm(w);
-    return this.renderRemove(w);
+    const w = Math.max(0, Math.floor(width) - 2);
+    this.reload();
+    let lines: string[];
+    if (this.view.kind === "list") lines = this.renderList(w);
+    else if (this.view.kind === "add-type") lines = this.renderAddType(w);
+    else if (this.view.kind === "details") lines = this.renderDetails(w);
+    else if (this.view.kind === "form") lines = this.renderForm(w);
+    else lines = this.renderRemove(w);
+    return lines.map((line) => truncateToWidth(line, Math.max(0, Math.floor(width)), "", true));
+  }
+
+  private renderAddType(width: number): string[] {
+    const options = ["HTTP Channel", "微信 Channel", "Pi 双人频道（最多 2 人）", "Pi 群频道（最多 32 人）"];
+    return [this.top("创建 Channel 类型", width), ...options.map((option, index) => this.row(`${index === this.cursor ? "❯" : " "} ${option}`, width)), this.hint("↑↓选择 · Enter 创建 · Esc 返回", width), this.bottom(width)];
   }
 
   private top(title: string, width: number): string {
@@ -501,22 +572,33 @@ export class ChannelPanel implements Component {
   }
 
   private hint(text: string, width: number): string {
-    return this.row(this.status ? ` ${this.status}` : this.theme.fg("dim", ` ${text}`), width);
+    return this.row(this.status ? this.theme.fg(this.statusColor, ` ${sanitizeChannelDisplayText(this.status)}`) : this.theme.fg("dim", ` ${text}`), width);
   }
 
   private renderList(width: number): string[] {
-    const active = this.rows.filter((row) => row.runtime?.mounted && ["connected", "listening", "ready"].includes(row.runtime.status)).length;
+    const total = this.rows.length + this.piRows.length;
+    const active = this.rows.filter((row) => row.runtime?.mounted && ["connected", "listening", "ready"].includes(row.runtime.status)).length + this.piRows.filter((row) => row.status === "connected").length;
     const lines = [this.top("Channels", width)];
-    lines.push(this.row(this.pad(` 会话: ${this.deps.sessionName}`, this.theme.fg("dim", `${this.rows.length} configured · ${active} active`), width - 1), width));
+    lines.push(this.row(this.pad(` 会话: ${this.deps.sessionName}`, this.theme.fg("dim", `${total} configured · ${active} active`), width - 1), width));
     lines.push(this.sep(width));
-    if (this.rows.length === 0) {
+    if (total === 0) {
       lines.push(this.row(this.theme.fg("dim", "  No channels configured. Press a to add one."), width));
     } else {
       let start = Math.max(0, this.cursor - Math.floor(MAX_VISIBLE / 2));
-      start = Math.min(start, Math.max(0, this.rows.length - MAX_VISIBLE));
-      const end = Math.min(this.rows.length, start + MAX_VISIBLE);
+      start = Math.min(start, Math.max(0, total - MAX_VISIBLE));
+      const end = Math.min(total, start + MAX_VISIBLE);
       if (start > 0) lines.push(this.row(this.theme.fg("dim", "  ↑ more"), width));
       for (let index = start; index < end; index += 1) {
+        const peer = this.piRows[index - this.rows.length];
+        if (peer) {
+          const marker = index === this.cursor ? this.theme.fg("accent", "❯") : " ";
+          const owner = peer.members.find((member) => member.memberId === peer.ownerMemberId);
+          const state = this.theme.fg(peer.status === "connected" ? "success" : "warning", sanitizeChannelDisplayText(peer.status));
+          const name = sanitizeChannelDisplayText(peer.name);
+          const ownerName = sanitizeChannelDisplayText(owner?.identity.displayName ?? peer.ownerMemberId);
+          lines.push(this.row(`${marker} ${name} · pi ${peer.mode === "direct" ? "双人" : "群"} · ${peer.members.length}人 · 创建者:${ownerName} · ${state}`, width));
+          continue;
+        }
         const item = this.rows[index]!;
         const state = statusDisplay(item);
         const marker = index === this.cursor ? this.theme.fg("accent", "❯") : " ";
@@ -526,10 +608,12 @@ export class ChannelPanel implements Component {
         const right = `${mounted}  ${scopeLabel(item.channel.scope.kind)}  ${state.text}`;
         lines.push(this.row(this.pad(left, right, width - 1), width));
       }
-      if (end < this.rows.length) lines.push(this.row(this.theme.fg("dim", "  ↓ more"), width));
+      if (end < total) lines.push(this.row(this.theme.fg("dim", "  ↓ more"), width));
     }
     lines.push(this.sep(width));
-    lines.push(this.hint("↑↓ move · Enter detail · l 登录/认证 · Space enable · m mount · r restart · a add · x remove · Esc close", width));
+    lines.push(this.hint(this.deps.listPiChannels
+      ? "↑↓ move · Enter detail · a add · j Pi配对加入 · l 认证 · r 外部重启 · Esc close"
+      : "↑↓ move · Enter detail · l 登录/认证 · Space enable · m mount · r restart · a add · x remove · Esc close", width));
     lines.push(this.bottom(width));
     return lines;
   }

@@ -87,3 +87,16 @@ describe("Channel custom-message renderer", () => {
     expect(sanitizeChannelDisplayText("title\u001b]0;owned\u0007text")).toBe("titletext");
   });
 });
+
+it("renders Pi sender identity safely without exposing the envelope", () => {
+  const input = { ...details(), protocol: "pi" as const, sender: {
+    memberId: "m1", instanceId: "i1", sessionId: "s1", cwd: "/repo/api", displayName: "API\x1b[31m",
+    introduction: "负责接口\n维护兼容", modules: ["server"],
+  } };
+  const output = render(renderChannelMessage({ content: "envelope", details: input }, { expanded: true }, theme));
+  expect(output).toContain("API");
+  expect(output).toContain("职责: 负责接口");
+  expect(output).toContain("模块: server");
+  expect(output).toContain("成员: m1");
+  expect(output).not.toContain("\x1b");
+});

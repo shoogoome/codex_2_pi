@@ -34,7 +34,7 @@ export interface AuthTargetOption {
 
 export function uniqueDefaultChannelName(
   base: string,
-  channels: ChannelDefinition[],
+  channels: Pick<ChannelDefinition, "name">[],
 ): string {
   const names = new Set(channels.map((channel) => channel.name.toLocaleLowerCase()));
   if (!names.has(base.toLocaleLowerCase())) return base;

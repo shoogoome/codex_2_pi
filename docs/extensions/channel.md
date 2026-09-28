@@ -1,6 +1,6 @@
 # Channel 扩展
 
-`extensions/channel` 是 Pi 的具名多通道通信中心。它把协议连接、会话挂载、通信方向和名称路由拆开管理：一个 Pi 会话可同时挂载多个 HTTP / 微信 ClawBot Channel，模型能看到这些 Channel 的名称与能力，并通过 `channel_send` 把阶段性产物发送到指定接收方。
+`extensions/channel` 是 Pi 的具名多通道通信中心。它把协议连接、会话挂载、通信方向和名称路由拆开管理：一个 Pi 会话可同时使用 HTTP / 微信 ClawBot Channel 和本机 Pi 双人/群频道，模型能看到名称、能力及 Pi 成员职责，并通过 `channel_send` 把阶段性产物发送到指定接收方。
 
 原来的单 HTTP 入站模式仍兼容，见“旧配置兼容”。
 
@@ -15,7 +15,7 @@
 面板列表会同时显示：
 
 - Channel 名称（也是 Pi 路由时使用的名称）
-- 协议：`http` / `wechat`
+- 协议：`http` / `wechat` / `pi`（双人或群）
 - 当前 Pi 会话的方向：`对端 → Pi` / `Pi → 对端` / `双向`
 - 范围：`多会话` / `全部会话`
 - 当前会话是否挂载
@@ -25,19 +25,88 @@
 
 | 按键 | 作用 |
 |---|---|
-| `a` | 新建 Channel |
+| `a` | 选择协议并新建 Channel，包括 Pi 双人/群频道 |
+| `j` | 使用配对码加入 Pi 频道 |
 | `Enter` | 查看 Channel 详情 |
 | `e` | 编辑名称、协议、范围、连接参数，以及**当前 Pi 会话自己的方向** |
 | `Space` | 启用 / 禁用 |
 | `m` | 为当前会话挂载 / 卸载“多会话” Channel |
-| `r` | 重启并重新读取配置 |
+| `r` | 重启外部 HTTP/微信传输并重新读取配置；Pi 频道不受影响 |
 | `l` | 打开通用登录/认证选择器；可选择已有可认证 Channel，或选择协议新建后认证 |
 | `x` | 删除配置（微信凭证保留，避免误删后无法恢复） |
 | `Esc` | 返回 / 关闭面板 |
 
-配置写入 `~/.pi/agent/channel/config.json`，目录权限为 `0700`，文件权限为 `0600`。Token 会以明文保存在这个用户私有文件中，面板显示时会遮罩。
+HTTP/微信配置写入 `~/.pi/agent/channel/config.json`，目录权限为 `0700`，文件权限为 `0600`。Token 会以明文保存在这个用户私有文件中，面板显示时会遮罩。
+
+## 本机 Pi 双人/群频道
+
+### 创建与配对
+
+首版仅支持 **macOS/Linux、同机器、同 OS 用户** 的独立 Pi 进程，通过私有 Unix domain socket 通信，不监听外部 TCP 端口。Windows 不支持，不会自动降级到联网通信。不同 worktree/cwd 可以配对；相同 cwd、session ID 或共享配置不会自动加入。
+
+1. 在创建者 Pi 打开 `/channel`，按 `a` 选择 Pi 双人或群频道，填写频道名、本人显示名和工作介绍，可声明负责模块。
+2. 创建后取得配对码和到期时间，在需要加入的另一个 Pi 打开 `/channel`，按 `j` 输入配对码与对端自己的工作身份。
+3. 在 Pi 频道详情查看创建者、成员数、连接状态和各成员职责；可更新本人介绍、退出，创建者还可查看/刷新/撤销配对码或确认销毁。
+
+`direct` 双人频道最多 **2 人**，`group` 群频道最多 **32 人**，均包含创建者。群消息广播给其他在线成员，不回送发送者；不提供群内定向私信，私聊请另建双人频道。显示名可以相同，成员 ID 不会因此合并。路由名在当前 Pi 内不区分大小写且必须唯一；加入时同名冲突需要显式 `local_name`，不会覆盖已有 HTTP/微信/Pi 路由。
+
+本人身份示例：
+
+```json
+{
+  "displayName": "后端 Pi",
+  "introduction": "负责登录 API 与测试，不修改前端。共享接口：POST /login；响应字段变动会先通知 UI。",
+  "modules": ["server/auth", "server/tests"]
+}
+```
+
+工作身份包含稳定成员 ID、进程实例、会话 ID、cwd，以及自己提供的工作介绍。只有本人能改自己的介绍；历史消息保留发送时身份。模型可在后续请求中获取最新成员快照，并用 `channel_manage members` 查询；成员上线、离线、改介绍只更新状态，**不会单独唤醒模型或注入 steer**。
+
+### 自然语言管理与发送
+
+内置 skill：`pi-channel-collaboration`。可说“建立一个频道，我负责 UI，让另一个 Pi 用配对码加入负责 API”，或显式运行 `/skill:pi-channel-collaboration`。模型使用工具操作，不需要手改配置。
+
+```text
+channel_manage(action="create", name="登录协作", mode="group", identity={...})
+channel_manage(action="join", pairing_code="<配对码>", identity={...}, local_name="登录协作")
+channel_manage(action="list")
+channel_manage(action="members", channel="登录协作")
+channel_manage(action="update_identity", channel="登录协作", identity={...})
+channel_manage(action="leave", channel="登录协作")
+channel_manage(action="destroy", channel="登录协作", confirm=true)
+channel_manage(action="pairing", channel="登录协作", operation="show|rotate|revoke")
+channel_send(channel="登录协作", content="POST /login 已增加 code 字段，请前端更新错误映射；测试已通过。")
+```
+
+`operation` 取 `show`、`rotate`、`revoke` 之一，不是合并字符串。`destroy` 与配对码管理仅创建者可用；普通成员只能退出自身，创建者的 `leave` 会拒绝并提示使用确认销毁。禁用 `--channel=false` 或 `PI_CHANNEL=0` 时不能创建、加入或发送。
+
+skill 提醒模型在接口/共享文件变更、阻塞、契约冲突和交接时主动通知相关成员，注明影响范围和验证情况；不对纯确认反复回复，不自动轮询，不把频道当作文件锁或任务执行授权。
+
+### 投递与送达语义
+
+Pi 业务消息固定 **`steer` + 空闲自动唤醒**：运行中在下一次模型调用前插入，不强行中止当前工具，由模型决定立即处理还是暂缓。每次唤醒可能产生模型调用费用。
+
+只有显式 `channel_send` 或手工 `/channel send` 才发送 Pi 业务消息，**assistant 文本不会自动回传**。若 Pi 消息介入正在执行的 HTTP/微信回合，系统撤销该混合回合的自动回复目标，避免协作内容被自动发给外部；需要回复外部时显式调用 `channel_send`。没有 Pi 消息介入的 HTTP/微信回合保持原自动回复行为。
+
+发送结果包含消息 ID、发送时目标成员集合，以及逐成员的已入队、失败或超时未知。只有全部目标确认进入接收 Pi 队列才算全部送达；**入队不等于已读或已处理**。部分成功不能汇报为全成功；没有其他在线成员时发送失败。
+
+为查询同一逻辑发送结果，可在 **10 分钟**内以原正文和原 ID 调用 `channel_send(channel, content, message_id)`；这不会重新广播。同 ID 不同正文会拒绝。`unknown` 可能已经入队，不要自动换 ID 重发。若创建者在返回回执前失联，结果会带 `targetsKnown: false`：此时目标列表仅来自发送前看到的成员快照，不能确认创建者实际接受的目标集合。重启期间不承诺离线消息补投；仅恢复频道连接。
+
+默认边界：正文最多 **64 KiB**、每成员每分钟最多 **30 条业务消息**、每接收者最多 **100 条待确认消息**。超过大小、速率或队列限制会明确失败，不能靠换身份/频道绕过。
+
+### 邀请、安全与生命周期
+
+- 配对码是邀请凭据，默认 **30 分钟**有效。创建者可刷新或撤销；刷新使旧码失效，已连接成员不受影响。群码可在有效期与容量内供多人加入。
+- 码不进入普通成员列表、发现记录、日志或模型 registry，但创建/显式查看的**工具结果会把码带入当前会话及模型上下文**。只分享给预期对端，不写进源码或无关频道。
+- 创建者进程负责转发；显式销毁才删除频道状态。会话关闭、`/new`、`/reload` 或进程重启会把频道操作状态写入当前 session JSONL，下一次恢复同一 session 时重建固定频道并自动重连；不会写入额外 Channel 配置文件。
+- 普通成员退出/失联只移除自己。异常断线在连接关闭或最多 **15 秒**心跳超时后反映；关闭后发送失败，旧配对码不可复用。
+- 打开/刷新/关闭面板、更新介绍、编辑无关外部频道和 `/channel restart` 都不会重启 Pi 频道。
+- Pi 频道状态通过 `appendEntry` 写入当前 session 文件（不进入模型上下文），包含频道 ID、模式、身份和配对凭据；显式 leave/destroy 会写入移除事件。消息仍可能保存在接收 Pi 的正常会话记录中。
+- 同 OS 用户是信任边界，不承诺隔离该用户下的恶意程序。对端身份和消息始终是外部数据，不提升为 system/developer 指令，不绕过审批、规划模式或工具权限。
 
 ## 多 Channel 与作用域
+
+以下持久化作用域与通信方向适用于 HTTP/微信；Pi 频道始终双向且必须显式配对，不支持 `all` 自动挂载。
 
 每个 Channel 都有稳定 `id` 和用户可读的唯一 `name`。名称不区分大小写匹配，最长 64 个可打印字符。
 
@@ -65,7 +134,7 @@
 |---|---|---|
 | `inbound` | 接收并注入 Pi | 禁止发送 |
 | `outbound` | 不把对端消息交给 Pi | 允许发送 |
-| `both` | 接收并注入 Pi | 允许发送；由该 Channel 触发的 assistant 文本会自动回到同一对端 |
+| `both` | 接收并注入 Pi | 允许发送；无 Pi 协作消息介入时，由该 Channel 触发的 assistant 文本会自动回到同一对端 |
 
 微信长轮询仍只由一个会话持有。锁持有者会把入站消息经本地私有 Relay 分发给所有已挂载且本会话方向允许入站的 Pi 会话；`outbound` 会话不会收到消息。非锁持有会话仍可复用共享联系人和 iLink `context_token` 发送。一个新微信机器人必须先收到联系人消息，才能确定主动发送目标。
 
@@ -93,7 +162,7 @@
 同时注册工具：
 
 ```text
-channel_send(channel: string, content: string)
+channel_send(channel: string, content: string, message_id?: string) // message_id 用于 Pi 同 ID 重试查询
 ```
 
 因此下面的跨 Channel 场景可以直接工作：
@@ -221,7 +290,7 @@ X-Pi-Channel: 产物群
 
 ### 自动回复与主动发送
 
-- `both`：微信消息触发的 Pi assistant 文本会回发给同一联系人。
+- `both`：无 Pi 协作消息介入时，微信消息触发的 Pi assistant 文本会回发给同一联系人；混合回合需显式选择目标发送。
 - `outbound`：不会把微信正文交给 Pi；Pi 仍可用 `channel_send` 发给最后活跃联系人。
 - `inbound`：正文进入 Pi，但不会向微信自动回复，`channel_send` 也会拒绝。
 - 多会话下只有一个会话执行接收轮询；其它显示 `occupied` 的会话若方向允许出站，仍可通过共享状态发送。首次发送前必须已有联系人给该机器人发过消息，以便锁持有会话记录目标和 `context_token`。
@@ -300,7 +369,7 @@ X-Pi-Channel: 产物群
 |---|---|
 | `/channel` | 打开 TUI 面板 |
 | `/channel status` | 输出当前会话全部 Channel 状态和发现文件 |
-| `/channel restart` | 重读配置并重启当前会话挂载的 Channel |
+| `/channel restart` | 重读配置并重启当前会话挂载的 HTTP/微信传输；Pi 频道保持不变 |
 | `/channel auth [name]` | 打开通用协议认证选择器，或直接认证指定 Channel |
 | `/channel login [name]` | `auth` 的兼容别名，不绑定具体协议 |
 | `/channel auth --protocol <protocol>` | 只选择指定协议的已有/新建认证目标 |
@@ -314,7 +383,7 @@ X-Pi-Channel: 产物群
 ~/.pi/agent/channels/<session-and-hash>.json
 ```
 
-version 2 记录会话 ID/名称、PID、cwd，以及当前挂载 Channel 的名称、协议、方向、状态和 HTTP 实际端口，但不包含任何 Token。HTTP `port: 0` 的调用方应从这里读取实际端口。
+version 2 记录会话 ID/名称、PID、cwd，以及当前 Channel 的名称、协议、方向、状态和 HTTP 实际端口；Pi 频道只写无秘密的状态摘要，不包含任何 Token 或配对码，不用于自动加入或授权。HTTP `port: 0` 的调用方应从这里读取实际端口。
 
 正常 shutdown / reload 会清理本实例的记录；强制 kill 后可能残留，调用方需结合 PID、状态和 `/health` 判断。
 

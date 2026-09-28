@@ -1,5 +1,7 @@
 import { ChannelPanel, type ChannelPanelDeps, type ChannelPanelTheme } from "./panel.js";
 import { createChannelDefinition } from "./store.js";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import type { PiPanelRow } from "./piPanel.js";
 
 const theme: ChannelPanelTheme = {
   fg: (_color, text) => text,
@@ -131,5 +133,74 @@ describe("Channel TUI panel", () => {
     panel.handleInput("l");
     expect(panel.requestedAuthTarget).toBeTruthy();
     expect(done).toHaveBeenCalled();
+  });
+});
+
+function piRow(): PiPanelRow {
+  return { id: "pi1", name: "项目协作", protocol: "pi", mode: "group", status: "connected", ownerMemberId: "owner", selfMemberId: "self", revision: 1,
+    members: [{ memberId: "owner", instanceId: "i", sessionId: "s", cwd: "/repo", identity: { displayName: "界面负责人", introduction: "私有介绍" } }],
+  };
+}
+
+describe("Pi Channel TUI integration", () => {
+  it("requests direct/group creation only after type selection", () => {
+    const done = vi.fn();
+    const panel = new ChannelPanel(theme, { ...buildDeps().deps, listPiChannels: () => [] }, done);
+    panel.handleInput("a");
+    expect(panel.snapshot().view.kind).toBe("add-type");
+    panel.handleInput("\x1b[B"); panel.handleInput("\x1b[B"); panel.handleInput("\r");
+    expect(panel.requestedPiAction).toEqual({ action: "create", mode: "direct" });
+    expect(done).toHaveBeenCalledOnce();
+  });
+  it("opens pair-join outside overlay and cancellation leaves state intact", () => {
+    const deps = buildDeps();
+    const done = vi.fn();
+    const panel = new ChannelPanel(theme, { ...deps.deps, listPiChannels: () => [] }, done);
+    panel.handleInput("a"); panel.handleInput("\x1b");
+    expect(panel.snapshot().view.kind).toBe("list");
+    expect(done).not.toHaveBeenCalled();
+    panel.handleInput("j");
+    expect(panel.requestedPiAction).toEqual({ action: "join" });
+    expect(deps.restart).not.toHaveBeenCalled();
+  });
+  it("displays Pi type/owner/count/state without credentials and delegates details", () => {
+    const row = piRow();
+    const deps = buildDeps();
+    const done = vi.fn();
+    const panel = new ChannelPanel(theme, { ...deps.deps, listChannels: () => [], listPiChannels: () => [row] }, done);
+    const text = panel.render(140).join("\n");
+    expect(text).toContain("pi 群"); expect(text).toContain("1人");
+    expect(text).toContain("创建者:界面负责人"); expect(text).toContain("connected");
+    expect(text).not.toContain("私有介绍");
+    for (const key of ["r", "m", "x", " ", "l"]) panel.handleInput(key);
+    expect(deps.restart).not.toHaveBeenCalled();
+    panel.handleInput("\r");
+    expect(panel.requestedPiAction).toEqual({ action: "details", channel: "pi1" });
+    expect(done).toHaveBeenCalledOnce();
+  });
+  it("refreshes live status without restarting channels and sanitizes peer labels", () => {
+    const row = piRow();
+    const deps = buildDeps();
+    const panel = new ChannelPanel(theme, { ...deps.deps, listChannels: () => [], listPiChannels: () => [row] }, vi.fn());
+    const requestRender = vi.fn(); panel.requestRender = requestRender;
+    row.status = "closed"; row.name = "协作\x1b[31m";
+    panel.refresh();
+    const text = panel.render(120).join("\n");
+    expect(text).toContain("closed"); expect(text).not.toContain("\x1b");
+    expect(requestRender).toHaveBeenCalled(); expect(deps.restart).not.toHaveBeenCalled();
+  });
+  it.each([1, 2, 12, 24, 48, 80])("fits every line into a %s-column terminal", (width) => {
+    const panel = new ChannelPanel(theme, { ...buildDeps().deps, listPiChannels: () => [piRow()] }, vi.fn());
+    for (const key of ["", "a", "\x1b", "\r"]) {
+      if (key) panel.handleInput(key);
+      for (const line of panel.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
+  });
+  it("re-renders using the current theme rather than cached colored labels", () => {
+    let prefix = "A";
+    const liveTheme = { ...theme, fg: (_c: string, text: string) => prefix + text };
+    const panel = new ChannelPanel(liveTheme, { ...buildDeps().deps, listPiChannels: () => [piRow()] }, vi.fn());
+    expect(panel.render(100)[0]).toContain("A"); prefix = "B"; panel.invalidate();
+    expect(panel.render(100)[0]).toContain("B");
   });
 });

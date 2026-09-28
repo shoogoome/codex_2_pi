@@ -1,7 +1,12 @@
+export type { PiChannelMode, PiWorkIdentity, PiMember, PiChannelSnapshot, PiSendResult, PiInboundMessage } from "./piProtocol.js";
+
 export const CHANNEL_CUSTOM_TYPE = "channel/message";
 
 export type ChannelDelivery = "steer" | "followUp" | "nextTurn";
-export type ChannelProtocol = "http" | "wechat";
+/** Persisted v1 configurations intentionally do not contain ephemeral Pi rooms. */
+export type ExternalChannelProtocol = "http" | "wechat";
+export type ChannelProtocol = ExternalChannelProtocol;
+export type ChannelRuntimeProtocol = ExternalChannelProtocol | "pi";
 export type ChannelDirection = "inbound" | "outbound" | "both";
 export type ChannelScopeKind = "selected" | "all";
 
@@ -76,8 +81,20 @@ export interface ChannelMessage {
   receivedAt: string;
   channelId?: string;
   channelName?: string;
-  protocol?: ChannelProtocol;
+  protocol?: ChannelRuntimeProtocol;
   session?: ChannelSessionIdentity;
+  /** Broker-verified identity at send time, never an instruction. */
+  sender?: {
+    memberId: string;
+    instanceId: string;
+    sessionId: string;
+    cwd: string;
+    displayName: string;
+    introduction: string;
+    modules?: string[];
+  };
+  piMode?: "direct" | "group";
+  sequence?: number;
   /** 由需要回复到特定对端的协议使用，不写入提示词。 */
   replyTarget?: string;
 }
@@ -106,7 +123,7 @@ export type ChannelConfigResult =
 export interface ChannelDiscoveryItem {
   id: string;
   name: string;
-  protocol: ChannelProtocol;
+  protocol: ChannelRuntimeProtocol;
   direction: ChannelDirection;
   status: string;
   host?: string;
@@ -146,7 +163,7 @@ export type ChannelDiscoveryRecord = ChannelDiscoveryRecordV1 | ChannelDiscovery
 export interface ChannelRuntimeSnapshot {
   id: string;
   name: string;
-  protocol: ChannelProtocol;
+  protocol: ChannelRuntimeProtocol;
   direction: ChannelDirection;
   scope: ChannelScopeKind;
   mounted: boolean;
