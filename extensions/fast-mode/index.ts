@@ -1,43 +1,65 @@
 import type { Model } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { loadFastModeSettings } from "./settings.js";
 import {
   FAST_MODE_STATE_ENTRY,
+  FAST_SERVICE_TIER,
+  ULTRAFAST_SERVICE_TIER,
   applyFastServiceTier,
   getFastAvailability,
   restoreFastModeState,
   type FastAvailability,
   type FastModeState,
   type FastModel,
+  type SpeedServiceTier,
 } from "./core.js";
 
 const STATUS_KEY = "fast-mode";
 const COMMAND_ARGS = ["status", "on", "off"] as const;
+const ULTRAFAST_NOTICE = "Account entitlement is not verified: UltraFast requires Pro $500 or eligible Enterprise/Edu; Pro $200 is not supported. Included usage is consumed at 8x Standard (purchased credits: 6x). Server authorization still applies; no automatic fallback.";
 
 type CurrentModel = Model<any> | undefined;
+
+function modeName(tier: SpeedServiceTier): string {
+  return tier === ULTRAFAST_SERVICE_TIER ? "UltraFast" : "Fast";
+}
 
 function modelLabel(model: CurrentModel): string {
   return model ? `${model.provider}/${model.id}` : "no active model";
 }
 
-function availabilityMessage(model: CurrentModel, availability: FastAvailability): string {
+function availabilityMessage(model: CurrentModel, availability: FastAvailability, tier: SpeedServiceTier): string {
+  const name = modeName(tier);
   if (availability.active) {
-    return `Fast mode is on for ${modelLabel(model)} (service tier: priority; increased usage).`;
+    return `${name} mode is configured on for ${modelLabel(model)} (service tier: ${tier}; increased usage).${tier === ULTRAFAST_SERVICE_TIER ? ` ${ULTRAFAST_NOTICE}` : ""}`;
   }
   switch (availability.reason) {
     case "no-model":
-      return "Fast mode requires an active Codex model.";
+      return `${name} mode requires an active Codex model.`;
     case "unsupported-model":
-      return `Fast mode is unavailable for ${modelLabel(model)}. It requires an OpenAI Codex Responses model.`;
+      return `${name} mode is unavailable for ${modelLabel(model)}. It requires an OpenAI Codex Responses model.`;
     case "oauth-required":
-      return "Fast mode requires openai-codex ChatGPT subscription OAuth; API-key requests are left unchanged.";
+      return `${name} mode requires openai-codex ChatGPT subscription OAuth; API-key requests are left unchanged.`;
+    case "ultrafast-model-required":
+      return "UltraFast subscription routing currently requires GPT-6 Astra (gpt-6-astra).";
   }
 }
 
-export default function fastModeExtension(pi: ExtensionAPI): void {
+export default function fastModeExtension(
+  pi: ExtensionAPI,
+  dependencies: { loadSettings?: typeof loadFastModeSettings } = {},
+): void {
+  const loadSettings = dependencies.loadSettings ?? loadFastModeSettings;
   let enabled = false;
+  let tier: SpeedServiceTier = FAST_SERVICE_TIER;
 
   pi.registerFlag("fast", {
     description: "Start this Pi session with Codex Fast mode enabled (priority service tier; increased usage).",
+    type: "boolean",
+    default: false,
+  });
+  pi.registerFlag("ultrafast", {
+    description: "Request GPT-6 Astra UltraFast (requires eligible subscription; increased usage). Takes precedence over --fast.",
     type: "boolean",
     default: false,
   });
@@ -52,7 +74,7 @@ export default function fastModeExtension(pi: ExtensionAPI): void {
   }
 
   function availability(ctx: ExtensionContext, model: CurrentModel = ctx.model): FastAvailability {
-    return getFastAvailability(model as FastModel | undefined, isUsingOAuth(ctx, model));
+    return getFastAvailability(model as FastModel | undefined, isUsingOAuth(ctx, model), tier);
   }
 
   function updateStatus(ctx: ExtensionContext, model: CurrentModel = ctx.model): void {
@@ -60,10 +82,11 @@ export default function fastModeExtension(pi: ExtensionAPI): void {
     const active = enabled && availability(ctx, model).active;
     let label: string | undefined;
     if (active) {
+      const text = tier === ULTRAFAST_SERVICE_TIER ? "⚡ ultrafast (requested)" : "⚡ fast";
       try {
-        label = ctx.ui.theme.bold(ctx.ui.theme.fg("accent", "⚡ fast"));
+        label = ctx.ui.theme.bold(ctx.ui.theme.fg("accent", text));
       } catch {
-        label = "⚡ fast";
+        label = text;
       }
     }
     ctx.ui.setStatus(STATUS_KEY, label);
@@ -71,86 +94,82 @@ export default function fastModeExtension(pi: ExtensionAPI): void {
 
   function persist(): void {
     try {
-      pi.appendEntry<FastModeState>(FAST_MODE_STATE_ENTRY, { enabled });
+      const state: FastModeState = tier === FAST_SERVICE_TIER ? { enabled } : { enabled, tier };
+      pi.appendEntry<FastModeState>(FAST_MODE_STATE_ENTRY, state);
     } catch {
       // Runtime behavior should still work if session persistence is unavailable.
     }
   }
 
-  function setEnabled(next: boolean, ctx: ExtensionContext): void {
-    enabled = next;
-    persist();
-    updateStatus(ctx);
+  function report(ctx: ExtensionContext): void {
+    const currentAvailability = availability(ctx);
+    ctx.ui.notify(
+      currentAvailability.active
+        ? availabilityMessage(ctx.model, currentAvailability, tier)
+        : `${modeName(tier)} mode is configured on but inactive. ${availabilityMessage(ctx.model, currentAvailability, tier)}`,
+      currentAvailability.active ? "info" : "warning",
+    );
   }
 
-  function enable(ctx: ExtensionContext): boolean {
-    const currentAvailability = availability(ctx);
+  function enable(nextTier: SpeedServiceTier, ctx: ExtensionContext): void {
+    const currentAvailability = getFastAvailability(ctx.model as FastModel | undefined, isUsingOAuth(ctx, ctx.model), nextTier);
     if (!currentAvailability.active) {
-      ctx.ui.notify(availabilityMessage(ctx.model, currentAvailability), "warning");
-      return false;
+      ctx.ui.notify(availabilityMessage(ctx.model, currentAvailability, nextTier), "warning");
+      return;
     }
-    setEnabled(true, ctx);
-    ctx.ui.notify(availabilityMessage(ctx.model, currentAvailability), "info");
-    return true;
+    enabled = true;
+    tier = nextTier;
+    persist();
+    updateStatus(ctx);
+    ctx.ui.notify(availabilityMessage(ctx.model, currentAvailability, tier), tier === ULTRAFAST_SERVICE_TIER ? "warning" : "info");
   }
 
   function disable(ctx: ExtensionContext): void {
-    setEnabled(false, ctx);
-    ctx.ui.notify("Fast mode is off; Codex requests use the standard service tier.", "info");
+    const name = modeName(tier);
+    enabled = false;
+    persist();
+    updateStatus(ctx);
+    ctx.ui.notify(`${name} mode is off; this extension no longer overrides the service tier.`, "info");
   }
 
-  pi.registerCommand("fast", {
-    description: "Toggle Codex Fast mode, or use `/fast on|off|status`",
-    getArgumentCompletions: (prefix) => COMMAND_ARGS
-      .filter((value) => value.startsWith(prefix.trim().toLowerCase()))
-      .map((value) => ({ value, label: value })),
-    handler: async (args, ctx) => {
-      const action = args.trim().toLowerCase();
-      if (!action) {
-        if (enabled) disable(ctx);
-        else enable(ctx);
-        return;
-      }
-      if (action === "on") {
-        if (enabled) {
-          const currentAvailability = availability(ctx);
-          ctx.ui.notify(
-            currentAvailability.active
-              ? availabilityMessage(ctx.model, currentAvailability)
-              : `Fast mode is configured on but inactive. ${availabilityMessage(ctx.model, currentAvailability)}`,
-            currentAvailability.active ? "info" : "warning",
-          );
-        } else {
-          enable(ctx);
-        }
-        return;
-      }
-      if (action === "off") {
-        if (enabled) disable(ctx);
-        else ctx.ui.notify("Fast mode is already off.", "info");
-        return;
-      }
-      if (action === "status") {
-        if (!enabled) {
-          ctx.ui.notify("Fast mode is off.", "info");
+  for (const [command, commandTier] of [["fast", FAST_SERVICE_TIER], ["ultrafast", ULTRAFAST_SERVICE_TIER]] as const) {
+    pi.registerCommand(command, {
+      description: `Toggle Codex ${modeName(commandTier)} mode, or use \`/${command} on|off|status\``,
+      getArgumentCompletions: (prefix) => COMMAND_ARGS
+        .filter((value) => value.startsWith(prefix.trim().toLowerCase()))
+        .map((value) => ({ value, label: value })),
+      handler: async (args, ctx) => {
+        const action = args.trim().toLowerCase();
+        const selected = enabled && tier === commandTier;
+        if (!action) {
+          if (selected) disable(ctx);
+          else enable(commandTier, ctx);
           return;
         }
-        const currentAvailability = availability(ctx);
-        ctx.ui.notify(
-          currentAvailability.active
-            ? availabilityMessage(ctx.model, currentAvailability)
-            : `Fast mode is configured on but inactive. ${availabilityMessage(ctx.model, currentAvailability)}`,
-          currentAvailability.active ? "info" : "warning",
-        );
-        return;
-      }
-      ctx.ui.notify("Usage: /fast [on|off|status]", "warning");
-    },
-  });
+        if (action === "on") {
+          if (selected) report(ctx);
+          else enable(commandTier, ctx);
+          return;
+        }
+        if (action === "off") {
+          if (selected) disable(ctx);
+          else ctx.ui.notify(`${modeName(commandTier)} mode is already off.`, "info");
+          return;
+        }
+        if (action === "status") {
+          if (selected) report(ctx);
+          else ctx.ui.notify(`${modeName(commandTier)} mode is off.${enabled ? ` ${modeName(tier)} mode is configured on instead.` : ""}`, "info");
+          return;
+        }
+        ctx.ui.notify(`Usage: /${command} [on|off|status]`, "warning");
+      },
+    });
+  }
 
   pi.on("before_provider_request", (event, ctx) => {
     const nextPayload = applyFastServiceTier(event.payload, {
       enabled,
+      tier,
       model: ctx.model as FastModel | undefined,
       usingOAuth: isUsingOAuth(ctx, ctx.model),
     });
@@ -159,8 +178,24 @@ export default function fastModeExtension(pi: ExtensionAPI): void {
 
   function restore(ctx: ExtensionContext): void {
     const restored = restoreFastModeState(ctx.sessionManager.getBranch());
-    enabled = restored?.enabled === true || pi.getFlag("fast") === true;
+    if (restored) {
+      enabled = restored.enabled;
+      tier = restored.tier ?? FAST_SERVICE_TIER;
+    } else {
+      const settings = loadSettings(getAgentDir(), ctx.cwd);
+      if (ctx.hasUI) {
+        for (const warning of settings.warnings) ctx.ui.notify(warning, "warning");
+      }
+      const ultraFlag = pi.getFlag("ultrafast") === true;
+      const fastFlag = pi.getFlag("fast") === true;
+      const mode = ultraFlag ? "ultrafast" : fastFlag ? "fast" : settings.mode;
+      enabled = mode !== "off";
+      tier = mode === "ultrafast" ? ULTRAFAST_SERVICE_TIER : FAST_SERVICE_TIER;
+    }
     updateStatus(ctx);
+    if (enabled && tier === ULTRAFAST_SERVICE_TIER && ctx.hasUI) {
+      ctx.ui.notify(`${ULTRAFAST_NOTICE}${availability(ctx).active ? "" : ` ${availabilityMessage(ctx.model, availability(ctx), tier)}`}`, "warning");
+    }
   }
 
   pi.on("session_start", async (_event, ctx) => restore(ctx));

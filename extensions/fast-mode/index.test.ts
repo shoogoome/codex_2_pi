@@ -20,6 +20,8 @@ function createHarness(options: {
   oauth?: boolean;
   branch?: unknown[];
   flag?: boolean;
+  ultraFlag?: boolean;
+  defaultMode?: "off" | "fast" | "ultrafast";
 } = {}) {
   const handlers = new Map<string, Handler[]>();
   const commands = new Map<string, any>();
@@ -37,7 +39,7 @@ function createHarness(options: {
       handlers.set(event, list);
     }),
     appendEntry: vi.fn((customType: string, data: unknown) => entries.push({ customType, data })),
-    getFlag: vi.fn(() => options.flag === true),
+    getFlag: vi.fn((name: string) => name === "ultrafast" ? options.ultraFlag === true : options.flag === true),
   } as any;
 
   const ctx = {
@@ -59,7 +61,9 @@ function createHarness(options: {
     },
   } as any;
 
-  fastModeExtension(pi);
+  fastModeExtension(pi, {
+    loadSettings: () => ({ mode: options.defaultMode ?? "off", warnings: [] }),
+  });
   return { commands, ctx, entries, handlers, notifications, pi, statuses };
 }
 
@@ -117,6 +121,11 @@ describe("fast mode extension", () => {
     const harness = createHarness();
 
     expect(harness.commands.has("fast")).toBe(true);
+    expect(harness.commands.has("ultrafast")).toBe(true);
+    expect(harness.pi.registerFlag).toHaveBeenCalledWith("ultrafast", expect.objectContaining({
+      type: "boolean",
+      default: false,
+    }));
     expect(harness.pi.registerFlag).toHaveBeenCalledWith("fast", expect.objectContaining({
       type: "boolean",
       default: false,
@@ -203,5 +212,129 @@ describe("fast mode extension", () => {
       flagged.ctx,
     );
     expect(flaggedPayload).toEqual({ model: "gpt-5.6-sol", service_tier: "priority" });
+  });
+});
+
+const astraModel = { ...codexModel, id: "gpt-6-astra" };
+
+describe("UltraFast", () => {
+  it("injects ultrafast without mutation and is idempotent", () => {
+    const options = { enabled: true, model: astraModel as any, usingOAuth: true, tier: "ultrafast" as const };
+    const payload = { model: astraModel.id, input: [], service_tier: "priority" };
+    const result = applyFastServiceTier(payload, options);
+    expect(result).toEqual({ ...payload, service_tier: "ultrafast" });
+    expect(payload.service_tier).toBe("priority");
+    expect(applyFastServiceTier(result, options)).toBe(result);
+    expect(applyFastServiceTier({ model: codexModel.id }, options)).toEqual({ model: codexModel.id });
+    expect(applyFastServiceTier(null, options)).toBeNull();
+    expect(applyFastServiceTier([], options)).toEqual([]);
+  });
+
+  it("leaves unsupported models and auth untouched", () => {
+    const payload = { model: astraModel.id };
+    const options = { enabled: true, model: astraModel as any, usingOAuth: true, tier: "ultrafast" as const };
+    expect(applyFastServiceTier(payload, { ...options, model: codexModel as any })).toBe(payload);
+    expect(applyFastServiceTier(payload, { ...options, usingOAuth: false })).toBe(payload);
+    expect(applyFastServiceTier(payload, { ...options, model: undefined })).toBe(payload);
+    expect(applyFastServiceTier(payload, { ...options, model: { ...astraModel, provider: "openai" } as any })).toBe(payload);
+    expect(applyFastServiceTier(payload, { ...options, enabled: false })).toBe(payload);
+  });
+
+  it("restores UltraFast state and ignores invalid tiers", () => {
+    expect(restoreFastModeState([
+      { type: "custom", customType: FAST_MODE_STATE_ENTRY, data: { enabled: true, tier: "ultrafast" } },
+      { type: "custom", customType: FAST_MODE_STATE_ENTRY, data: { enabled: false, tier: "invalid" } },
+    ])).toEqual({ enabled: true, tier: "ultrafast" });
+  });
+
+  it("switches modes exclusively, warns about entitlement, and persists", async () => {
+    const h = createHarness({ model: astraModel });
+    await h.commands.get("fast").handler("on", h.ctx);
+    await h.commands.get("ultrafast").handler("on", h.ctx);
+    expect(h.entries.at(-1)?.data).toEqual({ enabled: true, tier: "ultrafast" });
+    expect(h.notifications.at(-1)).toEqual(expect.objectContaining({ level: "warning" }));
+    expect(h.notifications.at(-1)?.message).toContain("Pro $200 is not supported");
+    expect(h.statuses.at(-1)?.value).toContain("ultrafast (requested)");
+    const event = { payload: { model: astraModel.id } };
+    expect(await fire(h.handlers, "before_provider_request", event, h.ctx)).toEqual({ model: astraModel.id, service_tier: "ultrafast" });
+    await h.commands.get("fast").handler("off", h.ctx);
+    expect(h.entries.at(-1)?.data).toEqual({ enabled: true, tier: "ultrafast" });
+    await h.commands.get("fast").handler("status", h.ctx);
+    expect(h.notifications.at(-1)?.message).toContain("UltraFast mode is configured on instead");
+    await h.commands.get("fast").handler("on", h.ctx);
+    expect(await fire(h.handlers, "before_provider_request", event, h.ctx)).toEqual({ model: astraModel.id, service_tier: "priority" });
+    await h.commands.get("ultrafast").handler("", h.ctx);
+    await h.commands.get("ultrafast").handler("", h.ctx);
+    expect(await fire(h.handlers, "before_provider_request", event, h.ctx)).toBeUndefined();
+  });
+
+  it("rejects unsupported enable attempts without replacing Fast", async () => {
+    const h = createHarness();
+    await h.commands.get("fast").handler("on", h.ctx);
+    await h.commands.get("ultrafast").handler("on", h.ctx);
+    expect(h.entries).toHaveLength(1);
+    expect(h.notifications.at(-1)?.message).toContain("GPT-6 Astra");
+    const apiKey = createHarness({ model: astraModel, oauth: false });
+    await apiKey.commands.get("ultrafast").handler("on", apiKey.ctx);
+    expect(apiKey.entries).toEqual([]);
+    expect(apiKey.notifications.at(-1)?.message).toContain("OAuth");
+  });
+
+  it("restores flags and saved branch state, with saved off taking precedence", async () => {
+    const h = createHarness({ model: astraModel, flag: true, ultraFlag: true });
+    await fire(h.handlers, "session_start", {}, h.ctx);
+    const event = { payload: { model: astraModel.id } };
+    expect(await fire(h.handlers, "before_provider_request", event, h.ctx)).toEqual({ model: astraModel.id, service_tier: "ultrafast" });
+    for (const lifecycle of ["session_start", "session_tree", "session_compact"]) {
+      const restored = createHarness({ model: astraModel, branch: [
+        { type: "custom", customType: FAST_MODE_STATE_ENTRY, data: { enabled: true, tier: "ultrafast" } },
+      ] });
+      await fire(restored.handlers, lifecycle, {}, restored.ctx);
+      expect(await fire(restored.handlers, "before_provider_request", event, restored.ctx)).toEqual({ model: astraModel.id, service_tier: "ultrafast" });
+    }
+    const off = createHarness({ model: astraModel, ultraFlag: true, branch: [
+      { type: "custom", customType: FAST_MODE_STATE_ENTRY, data: { enabled: false } },
+    ] });
+    await fire(off.handlers, "session_start", {}, off.ctx);
+    expect(await fire(off.handlers, "before_provider_request", event, off.ctx)).toBeUndefined();
+  });
+
+  it("pauses on model switch and resumes on Astra without fallback", async () => {
+    const h = createHarness({ model: astraModel });
+    await h.commands.get("ultrafast").handler("on", h.ctx);
+    h.ctx.model = codexModel;
+    await fire(h.handlers, "model_select", { model: codexModel }, h.ctx);
+    expect(h.statuses.at(-1)?.value).toBeUndefined();
+    expect(await fire(h.handlers, "before_provider_request", { payload: { model: codexModel.id } }, h.ctx)).toBeUndefined();
+    await h.commands.get("ultrafast").handler("status", h.ctx);
+    expect(h.notifications.at(-1)?.message).toContain("inactive");
+    h.ctx.model = astraModel;
+    await fire(h.handlers, "model_select", { model: astraModel }, h.ctx);
+    expect(h.statuses.at(-1)?.value).toContain("ultrafast");
+    h.ctx.hasUI = false;
+    await fire(h.handlers, "model_select", { model: astraModel }, h.ctx);
+    expect(await fire(h.handlers, "before_provider_request", { payload: { model: astraModel.id } }, h.ctx)).toEqual({ model: astraModel.id, service_tier: "ultrafast" });
+  });
+});
+
+describe("Fast mode startup defaults", () => {
+  it("loads settings defaults, with flags and saved branch taking precedence", async () => {
+    const cases = [
+      { options: { defaultMode: "fast" as const }, expected: "priority" },
+      { options: { defaultMode: "ultrafast" as const }, expected: "ultrafast" },
+      { options: { defaultMode: "off" as const }, expected: undefined },
+      { options: { defaultMode: "ultrafast" as const, flag: true }, expected: "priority" },
+      { options: { defaultMode: "fast" as const, ultraFlag: true }, expected: "ultrafast" },
+      { options: { defaultMode: "fast" as const, branch: [
+        { type: "custom", customType: FAST_MODE_STATE_ENTRY, data: { enabled: false } },
+      ] }, expected: undefined },
+    ];
+    for (const { options, expected } of cases) {
+      const h = createHarness({ model: astraModel, ...options });
+      await fire(h.handlers, "session_start", {}, h.ctx);
+      const result = await fire(h.handlers, "before_provider_request", { payload: { model: astraModel.id } }, h.ctx);
+      if (expected) expect(result.service_tier).toBe(expected);
+      else expect(result).toBeUndefined();
+    }
   });
 });

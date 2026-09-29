@@ -8,6 +8,11 @@ import type { ReviewDetail, ReviewFile, ReviewRepository } from "./review-types.
 
 const MAX_BYTES = 1024 * 1024;
 const MAX_LINES = 10_000;
+// A review snapshot reads and fingerprints every changed/untracked path. Large
+// worktrees (for example a data-heavy Go checkout) can otherwise make startup
+// and tool cancellation appear frozen. Keep this opt-in UI bounded; users can
+// narrow the worktree with .gitignore or commit/generated-data exclusions.
+const MAX_REVIEW_FILES = 20_000;
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 export function displayReviewPath(path: string): string {
   return path.replace(/[\x00-\x1f\x7f-\x9f]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
@@ -183,6 +188,9 @@ export class ReviewGit {
     const prefix = relativeCwd || ".";
     const listed = await this.git(["ls-files", "-z", "-c", "-o", "--exclude-standard", "--", prefix], signal);
     const paths = listed.split("\0").filter(Boolean).filter((path) => !path.split("/").includes(".git"));
+    if (paths.length > MAX_REVIEW_FILES) {
+      throw new Error(`当前工作树包含 ${paths.length.toLocaleString()} 个文件，超过审阅面板上限 ${MAX_REVIEW_FILES.toLocaleString()} 个；请先用 .gitignore 排除数据/构建目录。`);
+    }
     return this.snapshot(paths, signal);
   }
 
@@ -208,6 +216,9 @@ export class ReviewGit {
     const statusArgs = ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=all"];
     const statusText = await this.git(statusArgs, signal);
     const statuses = parseReviewStatus(statusText);
+    if (statuses.size > MAX_REVIEW_FILES) {
+      throw new Error(`当前工作树有 ${statuses.size.toLocaleString()} 个变更文件，超过审阅面板上限 ${MAX_REVIEW_FILES.toLocaleString()} 个；请先用 .gitignore 排除数据/构建目录。`);
+    }
     const hasHead = await this.head(signal);
     const head = records(hasHead ? await this.git(["ls-tree", "-r", "-z", "HEAD"], signal) : "");
     const index = records(await this.git(["ls-files", "--stage", "-z"], signal));
