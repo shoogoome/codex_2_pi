@@ -24,6 +24,7 @@ import {
 } from "./vendor/stream/native-core.js";
 
 import { invalidateCursorModelCache } from "./vendor/stream/model-discovery.js";
+import { getCursorUsage } from "./usage.js";
 
 export const CURSOR_PROVIDER_ID = "cursor";
 export const CURSOR_API = "cursor-native";
@@ -130,6 +131,19 @@ export function createCursorProvider() {
   return {
     provider,
     catalogSource: () => liveCatalog ? "live" : "fallback",
+    async usage(getAccessToken: () => Promise<string | undefined>, signal?: AbortSignal) {
+      const operation = signalFor(signal);
+      operation.throwIfAborted();
+      let token: string | undefined;
+      try { token = await getAccessToken(); }
+      catch {
+        operation.throwIfAborted();
+        throw new Error("Cursor 登录凭据解析失败：请执行 /login cursor 后重试。");
+      }
+      operation.throwIfAborted();
+      return getCursorUsage(token ?? "", operation);
+    },
+    isActive: () => !stopped,
     stop() { stopped = true; lifetime.abort(); },
     start() { if (stopped) { lifetime = new AbortController(); stopped = false; } },
   };

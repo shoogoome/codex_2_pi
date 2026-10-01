@@ -51,7 +51,7 @@
 | `effort` | 通用 thinking 档位、两级高级选择器、模型+档位原子选择和推理升降快捷键。 | `/effort [status\|off\|minimal\|low\|medium\|high\|xhigh\|max\|ultra]` · `/model` · `Alt+,` / `Alt+.` | [effort.md](extensions/effort.md) |
 | `fast-mode` | Codex Fast service tier：对支持的 openai-codex OAuth 模型发送 `service_tier: "priority"`，约 1.5× 速度但增加额度消耗。 | `/fast [on\|off\|status]` · `--fast` | [fast-mode.md](extensions/fast-mode.md) |
 | `ultra` | Codex Ultra controller：Sol/Terra 会话态 Ultra、wire `max`，自动激活 `task_agent` 并注入可执行的并行 workflow；Plan 模式安全暂停。 | 由 `/effort ultra` / `/model` 进入 | [ultra.md](extensions/ultra.md) |
-| `cursor` | Cursor 订阅原生 provider：显式登录、实时模型目录、Pi 工具闭环；不执行 Cursor 原生文件/Shell/fetch。 | `/login cursor` · `/model cursor` · `/cursor [status\|models\|refresh]` | [cursor.md](extensions/cursor.md) |
+| `cursor` | Cursor 订阅原生 provider：显式登录、实时模型目录、Pi 工具闭环；不执行 Cursor 原生文件/Shell/fetch。 | `/login cursor` · `/model cursor` · `/cursor [status\|models\|refresh\|usage]` | [cursor.md](extensions/cursor.md) |
 | `local-models` | 发现本地大模型运行时（Ollama、LM Studio）并注册为指向 localhost 的 OpenAI 兼容 provider，支持列举/拉取/就绪检查。 | `/local-models`（`list`/`pull`/`ensure_ready`）· 别名 `/ollama` `/lm` | [local-models.md](extensions/local-models.md) |
 | `codebuddy-reasoning` | 对齐 CodeBuddy 原生 `gpt-5.6-sol` 请求参数，使 High thinking 返回并展示可见推理摘要。 | 无命令，自动生效 | — |
 

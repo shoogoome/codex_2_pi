@@ -14,6 +14,7 @@
 
 - `/login cursor`：打开 Cursor 浏览器认证，PKCE 轮询可取消。返回的 OAuth 凭据由 Pi 自己保存/刷新；扩展不直接读写 `auth.json`。
 - `/cursor status`：查看协议核心版本、端点、模型目录来源和执行边界。
+- `/cursor usage`：通过 Pi 解析/刷新当前登录凭据，查询官方 DashboardService 的本期用量：计费周期（UTC）、套餐百分比与 Auto/API 分类、套餐/按量消费和服务端公开的个人/团队额度。金额为 USD（服务端 cents 转换），缺失数据标记为“未提供”，不推断无限额度、Pro 套餐或按量开关状态。查询支持取消，10 秒超时，会话关闭会终止请求；不读取浏览器 Cookie，也不额外保存账单数据，不改变 Pi 的 token/cost 估算。
 - `/cursor models`：显示当前注册模型；`fallback` 是内置元数据，不表示你的账号拥有访问权限。
 - `/cursor refresh`：使用 Pi 的有效凭据重新发现实时模型。目录请求明确指定 `USER_AVAILABLE` scope，合并 Agent 与 AiService 的账号目录，包含服务端实际公开的 Claude/GPT/Gemini 等模型及无参数默认变体；不会请求管理端全量目录或用静态模型伪造权限。
 - `/thinking` 或本包 `/effort`：选择 Cursor 实际公开的推理档位；不根据模型名字擅自开放档位。
