@@ -68,12 +68,12 @@ function discoverExtensions() {
  * without installing that extension's nested package.json dependencies; leaving
  * these imports external would make an otherwise single-file bundle non-portable.
  */
-const BUNDLED_BARE_PACKAGES = new Set(["qrcode-terminal"]);
+const BUNDLED_BARE_PACKAGES = new Set(["qrcode-terminal", "@bufbuild/protobuf"]);
 const externalizeBare = {
   name: "externalize-bare",
   setup(b) {
     b.onResolve({ filter: /^[^./]/ }, (args) => {
-      if (BUNDLED_BARE_PACKAGES.has(args.path)) return undefined;
+      if ([...BUNDLED_BARE_PACKAGES].some((name) => args.path === name || args.path.startsWith(`${name}/`))) return undefined;
       return { path: args.path, external: true };
     });
   },

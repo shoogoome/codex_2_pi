@@ -1,0 +1,16 @@
+{
+  "name": "pi-cursor-subscription-extension",
+  "version": "0.1.0",
+  "description": "Native Cursor subscription provider with Pi-owned OAuth and tool execution.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.ts",
+  "files": ["index.ts", "provider.ts", "vendor", "dist", "package.json"],
+  "engines": { "node": ">=22.19.0" },
+  "dependencies": { "@bufbuild/protobuf": "2.13.0" },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": ">=0.84.3 <1.0.0",
+    "@earendil-works/pi-coding-agent": ">=0.84.3 <1.0.0"
+  },
+  "pi": { "extensions": ["dist/index.js"] }
+}
