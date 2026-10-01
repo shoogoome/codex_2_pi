@@ -332,7 +332,8 @@ export function modelsFromParameterizedMetadata(
       { effortParameterId?: "reasoning" | "effort"; variants: CursorParameterizedVariant[] }
     >();
     for (const variant of model.variants) {
-      if (variant.parameters.length === 0) continue;
+      // An advertised empty parameter set is a valid default variant (e.g. Gemini Pro),
+      // not an absent model. GetUsableModels may omit these scoped catalog entries.
       const effortParameterId = metadataEffortParameterId(variant);
       const key = parameterGroupKey(variant, effortParameterId);
       const group = groups.get(key) ?? { effortParameterId, variants: [] };

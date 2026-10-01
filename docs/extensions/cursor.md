@@ -15,7 +15,7 @@
 - `/login cursor`：打开 Cursor 浏览器认证，PKCE 轮询可取消。返回的 OAuth 凭据由 Pi 自己保存/刷新；扩展不直接读写 `auth.json`。
 - `/cursor status`：查看协议核心版本、端点、模型目录来源和执行边界。
 - `/cursor models`：显示当前注册模型；`fallback` 是内置元数据，不表示你的账号拥有访问权限。
-- `/cursor refresh`：使用 Pi 的有效凭据重新发现实时模型。
+- `/cursor refresh`：使用 Pi 的有效凭据重新发现实时模型。目录请求明确指定 `USER_AVAILABLE` scope，合并 Agent 与 AiService 的账号目录，包含服务端实际公开的 Claude/GPT/Gemini 等模型及无参数默认变体；不会请求管理端全量目录或用静态模型伪造权限。
 - `/thinking` 或本包 `/effort`：选择 Cursor 实际公开的推理档位；不根据模型名字擅自开放档位。
 - `--cursor=false`：关闭该扩展。
 
@@ -46,6 +46,8 @@ Cursor 协议需要可用的 **HTTP/2**；普通 OpenAI SSE 代理不能替代�
 ## 限制与验证
 
 `resource_exhausted` 等 Connect 错误会优先显示 Cursor protobuf 详情里的标题与说明；服务端未提供详情时保留原始错误，不擅自判断为额度或上下文问题。明确标为不可重试的错误不会自动重试。模型发现成功不表示订阅额度尚有剩余；套餐/额度限制需在 Cursor 侧处理，扩展不会绕过。
+
+`USER_AVAILABLE` 指定目录查询范围，不保证服务端始终返回所有厂商。排查模型缺失时，应核对 `/cursor refresh` 的实际结果；不能仅凭一次独立目录查询成功，就断言完整 Pi 刷新已修复。当前实连诊断曾观察到独立查询返回 43 个模型族，而完整刷新返回较少目录，差异仍待定位。
 
 协议来自社区逆向实现，不是 Cursor 官方稳定的通用 LLM API。端点、protobuf schema、账号地区、模型权限和套餐策略可能变化。订阅额度/按量费用仍由 Cursor 控制，Pi 显示的 usage/cost 可能是估算，不是账单。
 

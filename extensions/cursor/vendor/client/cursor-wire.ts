@@ -36,16 +36,23 @@ function encodeVarint(value: number): number[] {
   return out;
 }
 
-function encodeBoolField(fieldNo: number, value: boolean): number[] {
-  return [...encodeVarint(fieldNo << 3), value ? 1 : 0];
+function encodeVarintField(fieldNo: number, value: number): number[] {
+  return [...encodeVarint(fieldNo << 3), ...encodeVarint(value)];
 }
 
 export function encodeAvailableModelsRequest(): Uint8Array {
   // aiserver.v1.AvailableModelsRequest {
   //   optional bool use_model_parameters = 5;
   //   optional bool do_not_use_markdown = 7;
+  //   optional AvailableModelsScope scope = 10; // USER_AVAILABLE = 1
   // }
-  return new Uint8Array([...encodeBoolField(5, true), ...encodeBoolField(7, true)]);
+  // Unspecified scope can return a restricted catalog without Claude/GPT/Gemini.
+  // Request the current user's catalog, never the admin/all-application scope.
+  return new Uint8Array([
+    ...encodeVarintField(5, 1),
+    ...encodeVarintField(7, 1),
+    ...encodeVarintField(10, 1),
+  ]);
 }
 
 interface WireReader {
