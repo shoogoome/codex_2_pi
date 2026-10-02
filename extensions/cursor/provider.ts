@@ -24,6 +24,7 @@ import {
 } from "./vendor/stream/native-core.js";
 
 import { invalidateCursorModelCache } from "./vendor/stream/model-discovery.js";
+import { readCachedCatalog } from "./vendor/stream/model-cache.js";
 import { getCursorUsage } from "./usage.js";
 
 export const CURSOR_PROVIDER_ID = "cursor";
@@ -37,7 +38,21 @@ export function createCursorProvider() {
   const baseUrl = getCursorAgentUrl();
   let processed = processModels(augmentCursorModels(FALLBACK_MODELS));
   let stopped = false;
-  let liveCatalog = false;
+  let source: "fallback" | "cached" | "live" = "fallback";
+  // Pi restores the session model before session_start/network refresh. Hydrate
+  // the full raw catalog now, preserving effort variants and wire routing.
+  try {
+    const cached = readCachedCatalog();
+    if (cached) {
+      const restored = processModels(augmentCursorModels(cached.rawModels, cached.parameterizedModels));
+      if (restored.length > 0) {
+        processed = restored;
+        source = "cached";
+      }
+    }
+  } catch {
+    // A malformed optional metadata cache must never prevent provider loading.
+  }
   const signalFor = (signal?: AbortSignal) => signal
     ? AbortSignal.any([signal, lifetime.signal])
     : lifetime.signal;
@@ -48,7 +63,7 @@ export function createCursorProvider() {
 
   function installCatalog(catalog: CursorCatalog): void {
     processed = processModels(augmentCursorModels(catalog.rawModels, catalog.parameterizedModels));
-    liveCatalog = true;
+    source = "live";
   }
 
   function stream(model: Model<Api>, context: Parameters<Provider["streamSimple"]>[1], options?: SimpleStreamOptions) {
@@ -130,7 +145,7 @@ export function createCursorProvider() {
 
   return {
     provider,
-    catalogSource: () => liveCatalog ? "live" : "fallback",
+    catalogSource: () => source,
     async usage(getAccessToken: () => Promise<string | undefined>, signal?: AbortSignal) {
       const operation = signalFor(signal);
       operation.throwIfAborted();

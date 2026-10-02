@@ -8,6 +8,12 @@ vi.mock("./vendor/stream/model-discovery.js", async (original) => ({
   invalidateCursorModelCache: discovery.invalidate,
 }));
 
+// Catalog publication tests must not depend on the user's on-disk startup cache.
+vi.mock("./vendor/stream/model-cache.js", async (original) => ({
+  ...await original<typeof import("./vendor/stream/model-cache.js")>(),
+  readCachedCatalog: () => undefined,
+}));
+
 beforeEach(() => { vi.clearAllMocks(); });
 
 function refreshContext(publish: RefreshModelsContext["publish"]): RefreshModelsContext {

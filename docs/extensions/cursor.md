@@ -17,7 +17,7 @@
 - `/login cursor`：打开 Cursor 浏览器认证，PKCE 轮询可取消。返回的 OAuth 凭据由 Pi 自己保存/刷新；扩展不直接读写 `auth.json`。
 - `/cursor status`：查看协议核心版本、端点、模型目录来源和执行边界。
 - `/cursor usage`：通过 Pi 解析/刷新当前登录凭据，查询官方 DashboardService 的本期用量：计费周期（UTC）、套餐百分比与 Auto/API 分类、套餐/按量消费和服务端公开的个人/团队额度。金额为 USD（服务端 cents 转换），缺失数据标记为“未提供”，不推断无限额度、Pro 套餐或按量开关状态。查询支持取消，10 秒超时，会话关闭会终止请求；不读取浏览器 Cookie，也不额外保存账单数据，不改变 Pi 的 token/cost 估算。
-- `/cursor models`：显示当前注册模型；`fallback` 是内置元数据，不表示你的账号拥有访问权限。
+- `/cursor models`：显示当前注册模型；启动时先同步恢复最近一次发现的原始目录缓存（`cached`），在 Pi 恢复会话模型之前注册动态型号和完整路由参数。无缓存、缓存过期或损坏时使用内置元数据（`fallback`）；二者均不表示账号拥有访问权限。
 - `/cursor refresh`：使用 Pi 的有效凭据重新发现实时模型。目录请求明确指定 `USER_AVAILABLE` scope，合并 Agent 与 AiService 的账号目录，包含服务端实际公开的 Claude/GPT/Gemini 等模型及无参数默认变体；不会请求管理端全量目录或用静态模型伪造权限。
 - `/thinking` 或本包 `/effort`：选择 Cursor 实际公开的推理档位；不根据模型名字擅自开放档位。
 - `--cursor=false`：关闭该扩展。
@@ -45,7 +45,7 @@ Cursor 协议需要可用的 **HTTP/2**；普通 OpenAI SSE 代理不能替代�
 - switch、fork、tree、compaction 会清理本会话的协议状态；shutdown 取消进行中的认证/请求并关闭全部连接，下一次 session_start 可重新使用 provider。
 - 协议 checkpoint/blob 仅存内存，**不额外保存第二份对话 journal**；Pi 的正常会话持久化保持不变。
 - debug/lifecycle/metric 日志默认关闭。显式启用 `PI_CURSOR_PROVIDER_DEBUG=1` 时（`PI_CURSOR_LIFECYCLE_LOG` 仅指定文件路径），私有日志可能包含提示词、工具参数和返回内容，须按敏感资料管理；不建议日常启用。
-- 模型目录缓存仅含元数据。文本、图片、工具结果发送到 Cursor，仍受其模型路由和数据处理政策约束。
+- 模型目录缓存仅含元数据，启动恢复不联网、不刷新凭据；修复“手动可选新型号，重启会话却找不到并回退”的时序问题。文本、图片、工具结果发送到 Cursor，仍受其模型路由和数据处理政策约束。
 
 ## 限制与验证
 

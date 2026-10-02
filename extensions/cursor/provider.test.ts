@@ -1,12 +1,30 @@
 import { createModels, type AssistantMessageEvent, type Context, type Provider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import cursorExtension from "./index.js";
 import { createCursorProvider } from "./provider.js";
 import { getCursorAgentUrl } from "./vendor/config/index.js";
 import { withCursorRequest } from "./vendor/client/request-context.js";
 import { resolveCursorProxyUrl } from "./vendor/client/h2-proxy.js";
 
-afterEach(() => { vi.unstubAllEnvs(); });
+import { CATALOG_MAX_AGE_MS, resetCatalogCacheForTests, writeCachedCatalog } from "./vendor/stream/model-cache.js";
+import { resetCacheDirForTests } from "./vendor/utils/cache-dir.js";
+
+let cacheDir: string;
+beforeEach(() => {
+  cacheDir = mkdtempSync(join(tmpdir(), "cursor-provider-test-"));
+  vi.stubEnv("PI_CURSOR_CACHE_DIR", cacheDir);
+  resetCacheDirForTests();
+  resetCatalogCacheForTests();
+});
+afterEach(() => {
+  resetCatalogCacheForTests();
+  resetCacheDirForTests();
+  vi.unstubAllEnvs();
+  rmSync(cacheDir, { recursive: true, force: true });
+});
 
 const context = { messages: [{ role: "user", content: "hello", timestamp: 0 }] } as Context;
 
@@ -36,6 +54,57 @@ it("registers a native provider and supports disabling the extension", () => {
   expect(enabled.handlers.has("session_compact")).toBe(true);
   expect(enabled.commands.has("cursor")).toBe(true);
   enabled.handlers.get("session_shutdown")!();
+});
+
+it("registers cached Claude 5.5 before offline startup model selection and preserves wire routing", async () => {
+  const rawModels = [{ id: "claude-opus-5-5", name: "Claude Opus 5.5", reasoning: true,
+    contextWindow: 200_000, maxTokens: 64_000, requestedModelId: "claude-opus-5-5-wire",
+    parameters: [{ id: "context", value: "200k" }], requiresMaxMode: true }];
+  writeCachedCatalog({ tokenHash: "synthetic-cache-key", rawModels, parameterizedModels: [] });
+  // Emulate a fresh process reading metadata from disk, not just the cache memo.
+  resetCatalogCacheForTests();
+  const runtime = createCursorProvider();
+  const models = createModels({ credentials: {
+    read: async () => ({ type: "oauth" as const, access: "synthetic-access", refresh: "synthetic-refresh", expires: Date.now() + 3_600_000 }),
+    list: async () => [], modify: vi.fn(), delete: vi.fn(),
+  }, authContext: { env: async () => undefined, fileExists: async () => false } });
+  models.setProvider(runtime.provider);
+  try {
+    expect(runtime.catalogSource()).toBe("cached");
+    expect(models.getModel("cursor", "claude-opus-5-5")?.id).toBe("claude-opus-5-5");
+    const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected network"));
+    try {
+      const result = await models.refresh({ allowNetwork: false });
+      expect(result.errors.size).toBe(0);
+      expect(models.getModel("cursor", "claude-opus-5-5")?.id).toBe("claude-opus-5-5");
+      expect((await models.getAvailable("cursor")).some((model) => model.id === "claude-opus-5-5")).toBe(true);
+      expect(fetch).not.toHaveBeenCalled();
+    } finally { fetch.mockRestore(); }
+    const model = models.getModel("cursor", "claude-opus-5-5")!;
+    const stream = runtime.provider.streamSimple(model, context, {
+      apiKey: "synthetic-access", onPayload: (payload) => {
+        expect(payload).toMatchObject({ cursor_model_id: "claude-opus-5-5-wire",
+          cursor_model_parameters: [{ id: "context", value: "200k" }], cursor_requires_max_mode: true });
+        throw new Error("cached-routing-verified-before-network");
+      },
+    });
+    expect((await stream.result()).errorMessage).toBe("cached-routing-verified-before-network");
+  } finally { runtime.stop(); }
+});
+
+it.each(["missing", "invalid-json", "invalid-model", "expired"])("keeps bundled models when the optional startup cache is %s", (kind) => {
+  if (kind !== "missing") {
+    writeFileSync(join(cacheDir, "model-catalog.json"), kind === "invalid-json" ? "{" : JSON.stringify({
+      version: 1, savedAt: Date.now() - (kind === "expired" ? CATALOG_MAX_AGE_MS + 1_000 : 0),
+      rawModels: kind === "invalid-model" ? [null] : [{ id: "cache-only-model", name: "Cache Only", reasoning: false, contextWindow: 200_000, maxTokens: 64_000 }], parameterizedModels: [],
+    }));
+  }
+  const runtime = createCursorProvider();
+  try {
+    expect(runtime.catalogSource()).toBe("fallback");
+    expect(runtime.provider.getModels().length).toBeGreaterThan(0);
+    expect(runtime.provider.getModels().some((model) => model.id === "cache-only-model")).toBe(false);
+  } finally { runtime.stop(); }
 });
 
 it("derives request authentication only from the supplied Pi credential", async () => {
