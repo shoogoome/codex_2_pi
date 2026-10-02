@@ -91,7 +91,7 @@
 | Output styles | 约定目录及 manifest `outputStyles`，由启动 flag 选择。 |
 | Agents | `agents/` / manifest `agents` 通过事件桥接到 `agents` 扩展。 |
 | Hooks | `hooks/hooks.json` 通过事件桥接到 `hooks-runner`。 |
-| MCP | `.mcp.json` / `mcpServers` 通过 Pi 1.0 原生 `registerMcpServer` / `unregisterMcpServer` 注册并动态对账。 |
+| MCP | `.mcp.json` / `mcpServers` 通过 Pi 1.0 原生 `registerMcpServer` / `unregisterMcpServer` 注册并动态对账，默认 `codemode`，通过 `searchTools()` 发现工具。 |
 | LSP | 可以检测和展示，但 Pi 当前没有动态 LSP 注册 API，因此仍标为 deferred。 |
 
 Hooks 会替换 `${CLAUDE_PLUGIN_ROOT}`、`${CLAUDE_PLUGIN_DATA}` 和 `${user_config.X}`。插件数据目录独立于安装缓存，普通卸载默认删除，`--keep-data` 可保留。

@@ -81,10 +81,23 @@ export function buildMcpRegistrations(
   pluginData = "",
 ): McpRegistration[] {
   const vars = { CLAUDE_PLUGIN_ROOT: pluginRoot, CLAUDE_PLUGIN_DATA: pluginData };
-  return Object.entries(servers).map(([serverName, config]) => ({
-    name: sanitizeServerName(`${pluginName}_${serverName}`),
-    config: substituteDeep(config, vars),
-  }));
+  return Object.entries(servers).map(([serverName, config]) => {
+    const substituted = substituteDeep(config, vars);
+    // Pi 1.0's native MCP API defaults to codemode, where tools are found with
+    // searchTools() from codemode. Make that contract explicit while preserving
+    // an author's direct/deferred/hidden exposure override.
+    const normalizedConfig =
+      substituted && typeof substituted === "object" && !Array.isArray(substituted)
+        ? {
+            ...(substituted as Record<string, unknown>),
+            exposure: (substituted as Record<string, unknown>).exposure ?? "codemode",
+          }
+        : substituted;
+    return {
+      name: sanitizeServerName(`${pluginName}_${serverName}`),
+      config: normalizedConfig,
+    };
+  });
 }
 
 /**
