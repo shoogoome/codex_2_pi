@@ -65,6 +65,7 @@ import {
   nativeToolRejectReason,
 } from "./local-tool-policy.js";
 import { stripCursorMcpToolName } from "./root-prompt.js";
+import { addMcpContextMetadata, buildMcpStateResponse, isMcpStateExec } from "./mcp-compat.js";
 import {
   interactionUpdateProgress,
   MAX_ACTIVE_BLOB_BYTES,
@@ -174,7 +175,8 @@ export function processServerMessage(
   }
   if (msgCase === "execServerMessage") {
     const execMsg = msg.message.value as ExecServerMessage;
-    const execCase = (execMsg as { message?: { case?: string } }).message?.case;
+    const execCase = (execMsg as { message?: { case?: string } }).message?.case
+      ?? (isMcpStateExec(execMsg) ? "mcpStateExecArgs" : undefined);
     const handled = handleExecMessage(execMsg, mcpTools, sendFrame, onMcpExec, onLocalWork);
     if (execCase && isLocalToolExec(execCase)) {
       state.localToolRejections = (state.localToolRejections ?? 0) + 1;
@@ -375,6 +377,11 @@ function handleExecMessageInner(
   onMcpExec: (exec: PendingExec) => void,
   onLocalWork?: (work: Promise<void>) => void,
 ): boolean {
+  const stateResponse = buildMcpStateResponse(execMsg, mcpTools);
+  if (stateResponse) {
+    sendFrame(frameConnectMessage(stateResponse));
+    return true;
+  }
   const execCase = (execMsg as any).message.case;
   const REJECT_REASON = nativeToolRejectReason(execCase ?? "", mcpTools);
 
@@ -397,6 +404,7 @@ function handleExecMessageInner(
       fileContents: {},
       customSubagents: [],
     });
+    addMcpContextMetadata(requestContext, mcpTools);
     const result = create(RequestContextResultSchema, {
       result: { case: "success", value: create(RequestContextSuccessSchema, { requestContext }) },
     });

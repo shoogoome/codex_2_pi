@@ -22,6 +22,7 @@
 
 | 扩展 | 一句话能力 | 主要命令 / 入口 | 详情 |
 |---|---|---|---|
+| `context-viewer` | 只读查看当前有效系统提示词及隐藏注入内容，排除聊天历史和工具结果。 | `/context` · `/system-prompt` | [context-viewer.md](extensions/context-viewer.md) |
 | `context-pipeline` | 分层上下文管理：发送前按预算截断 tool_result、无 LLM 的 microcompact 清旧工具结果，并为 Pi 原生自动/手动压缩生成结构化摘要。 | `/prune`（`status`/`soft`/`hard`）· `/context-prune` | [context-pipeline.md](extensions/context-pipeline.md) |
 | `compact-continue` | Pi 阈值压缩后保守判断是否仍有可执行工作；仅在 toolResult、截断/tool-use 回合或未完成计划等强信号下隐藏续跑一次，真实用户/自动队列优先。 | `--compact-continue`（默认开）· `--compact-continue=false` 关闭 | [compact-continue.md](extensions/compact-continue.md) |
 | `agents-context` | 补充加载 Pi 原生不加载的 `AGENTS.md`/`CLAUDE.md`、`.claude/rules`、`@include`、条件 paths 规则，去重后隐藏注入。 | `--agents-context`（默认开）· 环境变量 `PI_AGENTS_CONTEXT=0` | [agents-context.md](extensions/agents-context.md) |

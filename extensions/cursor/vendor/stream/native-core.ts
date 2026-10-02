@@ -18,7 +18,6 @@ import {
 } from "@earendil-works/pi-ai";
 import {
   AgentClientMessageSchema,
-  AgentServerMessageSchema,
   ExecClientMessageSchema,
   McpResultSchema,
   McpSuccessSchema,
@@ -209,6 +208,7 @@ import {
   type LostToolContinuationDiagnosticInput as ExtractedLostToolContinuationDiagnosticInput,
 } from "./recovery.js";
 import { enhanceCursorStreamError, isAuthErrorMessage } from "./protocol.js";
+import { CompatibleAgentServerMessageSchema } from "../proto/mcp-state-compat.js";
 import {
   setLastIdleTimeout,
   setLastRecoverySkipReason,
@@ -1181,7 +1181,7 @@ function writeNativeStream(
     (messageBytes) => {
       if (cancelled || streamFinalized) return;
       try {
-        const serverMessage = fromBinary(AgentServerMessageSchema, messageBytes);
+        const serverMessage = fromBinary(CompatibleAgentServerMessageSchema, messageBytes);
         const progress = processServerMessage(
           serverMessage,
           blobStore,

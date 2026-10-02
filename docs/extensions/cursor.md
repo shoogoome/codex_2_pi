@@ -2,6 +2,8 @@
 
 `extensions/cursor` 将 Cursor 账号的模型接入 Pi 原生 provider。请求通过 HTTP/2 Connect/protobuf 发送，工具调用通过协议中的 MCP 声明返回给 **Pi 执行**；不启动 `cursor-agent`，也不启动本地 HTTP 代理。
 
+这里的 MCP 是 Cursor Agent 协议的自定义工具字段，并非要求另外安装/连接 MCP 服务器。扩展直接把 Pi 工具 schema 注入 `AgentService/Run.mcp_tools`，同时提供新版动态目录的内联描述与 MCP 状态查询；收到 `mcpArgs` 后转为 Pi `toolCall`，将 Pi 工具结果回写到同一连接。当前上游是 Agent RPC，不是直接接受 OpenAI `tools` JSON 的标准 chat-completions endpoint。
+
 ## 使用
 
 本包根目录已通过 `pi.extensions: ["./extensions"]` 自动发现该扩展。安装本包并重启 Pi（或 `/reload`）后：

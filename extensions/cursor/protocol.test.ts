@@ -1,6 +1,6 @@
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { BinaryWriter, WireType } from "@bufbuild/protobuf/wire";
-import type { Context, Model, Api, AssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { createModels, type Context, type Model, type Api, type AssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,9 +9,10 @@ import { frameConnectMessage, MAX_CONNECT_MESSAGE_BYTES, type BridgeHandle } fro
 import {
   AgentClientMessageSchema, AgentServerMessageSchema, ExecServerMessageSchema,
   InteractionUpdateSchema, McpArgsSchema, TextDeltaUpdateSchema,
-  ThinkingDeltaUpdateSchema, TurnEndedUpdateSchema,
+  ThinkingDeltaUpdateSchema, TurnEndedUpdateSchema, RequestContextArgsSchema,
 } from "./vendor/proto/agent_pb.js";
 import { encodeMcpArgsMap } from "./vendor/stream/request-build.js";
+import { CompatibleAgentClientMessageSchema } from "./vendor/proto/mcp-state-compat.js";
 import { cleanupAllSessionState, setBridgeFactoryForTests } from "./vendor/stream/native-core.js";
 import { resetCacheDirForTests } from "./vendor/utils/cache-dir.js";
 
@@ -53,12 +54,12 @@ function turnEnded(): Buffer {
   })));
 }
 
-function toolCall(): Buffer {
+function toolCall(name = "read", args: Record<string, unknown> = { path: "README.md" }, id = 7): Buffer {
   return frameConnectMessage(toBinary(AgentServerMessageSchema, create(AgentServerMessageSchema, {
     message: { case: "execServerMessage", value: create(ExecServerMessageSchema, {
-      id: 7, execId: "exec-7",
+      id, execId: `exec-${id}`,
       message: { case: "mcpArgs", value: create(McpArgsSchema, {
-        toolName: "mcp_pi_read", toolCallId: "call-7", args: encodeMcpArgsMap({ path: "README.md" }),
+        providerIdentifier: "pi", toolName: `mcp_pi_${name}`, toolCallId: `call-${id}`, args: encodeMcpArgsMap(args),
       }) },
     }) },
   })));
@@ -156,6 +157,71 @@ describe("Cursor native protocol through the real provider", () => {
     const result = await resumed.result();
     expect(result.stopReason).toBe("stop");
     expect(result.content).toContainEqual(expect.objectContaining({ type: "text", text: "README 已读。" }));
+  });
+
+  it("registers transcript tools, answers modern dynamic discovery, and completes ls → read through Pi", async () => {
+    const { bridge, factory, runtime, model, options } = fixture();
+    const models = createModels({ credentials: {
+      read: async () => ({ type: "api_key" as const, key: "synthetic-token" }),
+      list: async () => [], modify: vi.fn(), delete: vi.fn(),
+    }, authContext: { env: async () => undefined, fileExists: async () => false } });
+    models.setProvider(runtime.provider);
+    const transcript = (extra: unknown[] = []) => ({ messages: [
+      { role: "system", content: "", sections: { rules: "Use Pi tools." }, toolsAdded: [
+        { name: "ls", description: "List via Pi", parameters: { type: "object", properties: { path: { type: "string" } } } },
+        { name: "read", description: "Read via Pi", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
+      ] },
+      { role: "user", content: "List files, then read demo.md", timestamp: 1 }, ...extra,
+    ] }) as unknown as Context;
+    const first = models.streamSimple(model, transcript(), options);
+    await bridge.ready;
+    const run = fromBinary(AgentClientMessageSchema, bridge.writes[0]!.subarray(5));
+    if (run.message.case !== "runRequest") throw new Error("missing run");
+    expect(run.message.value.mcpTools?.mcpTools.map((tool) => tool.toolName)).toEqual(["ls", "read"]);
+    const contextExec = create(ExecServerMessageSchema, { id: 10, execId: "context-10", message: {
+      case: "requestContextArgs", value: create(RequestContextArgsSchema),
+    } });
+    bridge.send(frameConnectMessage(toBinary(AgentServerMessageSchema, create(AgentServerMessageSchema, {
+      message: { case: "execServerMessage", value: contextExec },
+    }))));
+    const contextReply = fromBinary(AgentClientMessageSchema, bridge.writes.at(-1)!.subarray(5));
+    if (contextReply.message.case !== "execClientMessage" || contextReply.message.value.message.case !== "requestContextResult") throw new Error("missing context reply");
+    const contextResult = contextReply.message.value.message.value;
+    if (contextResult.result.case !== "success") throw new Error("missing context success");
+    expect(contextResult.result.value.requestContext?.$unknown?.map((field) => field.no)).toEqual([34, 36]);
+    const stateExec = create(ExecServerMessageSchema, { id: 36, execId: "state-36" });
+    const stateArgs = new BinaryWriter().tag(1, WireType.LengthDelimited).string("pi").finish();
+    stateExec.$unknown = [{ no: 36, wireType: WireType.LengthDelimited, data: new BinaryWriter().bytes(stateArgs).finish() }];
+    bridge.send(frameConnectMessage(toBinary(AgentServerMessageSchema, create(AgentServerMessageSchema, {
+      message: { case: "execServerMessage", value: stateExec },
+    }))));
+    const stateReply = fromBinary(CompatibleAgentClientMessageSchema, bridge.writes.at(-1)!.subarray(5));
+    expect(stateReply.message.case).toBe("execClientMessage");
+    if (stateReply.message.case !== "execClientMessage") throw new Error("missing state reply");
+    expect(stateReply.message.value.execId).toBe("state-36");
+    expect((stateReply.message.value.message as { case?: string }).case).toBe("mcpStateExecResult");
+    bridge.send(toolCall("ls", { path: "." }, 8));
+    const lsAssistant = await first.result();
+    expect(lsAssistant.stopReason).toBe("toolUse");
+    expect(lsAssistant.content).toContainEqual(expect.objectContaining({ type: "toolCall", name: "ls", arguments: { path: "." } }));
+    const lsResult = { role: "toolResult", toolCallId: "call-8", toolName: "ls", content: [{ type: "text", text: "demo.md" }], isError: false, timestamp: 2 };
+    bridge.resetReady();
+    const second = models.streamSimple(model, transcript([lsAssistant, lsResult]), options);
+    await bridge.ready;
+    bridge.send(toolCall("read", { path: "demo.md" }));
+    const readAssistant = await second.result();
+    expect(readAssistant.stopReason).toBe("toolUse");
+    expect(readAssistant.content).toContainEqual(expect.objectContaining({ type: "toolCall", name: "read", arguments: { path: "demo.md" } }));
+    bridge.resetReady();
+    const third = models.streamSimple(model, transcript([lsAssistant, lsResult, readAssistant,
+      { role: "toolResult", toolCallId: "call-7", toolName: "read", content: [{ type: "text", text: "CURSOR_TOOL_BRIDGE_OK" }], isError: false, timestamp: 3 },
+    ]), options);
+    await bridge.ready;
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(Buffer.concat(bridge.writes.map((frame) => Buffer.from(frame))).toString()).toContain("CURSOR_TOOL_BRIDGE_OK");
+    bridge.send(Buffer.concat([delta("Tools finished."), turnEnded()]));
+    bridge.finish();
+    expect((await third.result()).stopReason).toBe("stop");
   });
 
   it("aborts a running request and terminates the bridge", async () => {
