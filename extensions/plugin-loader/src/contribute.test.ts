@@ -171,8 +171,8 @@ describe("discovery + contribution over a real temp dir", () => {
     // the payload shape the mcp extension listens for.
     const regs = buildMcpRegistrations(plugin.name, merged, root);
     const byName = Object.fromEntries(regs.map((r) => [r.name, r.config]));
-    expect(byName["srv_base"]).toEqual({ command: `${root}/bin/base` });
-    expect(byName["srv_shared"]).toEqual({ command: "inline-wins" });
+    expect(byName["srv_base"]).toEqual({ command: `${root}/bin/base`, exposure: "codemode" });
+    expect(byName["srv_shared"]).toEqual({ command: "inline-wins", exposure: "codemode" });
     for (const reg of regs) expect(reg.name).not.toContain(":");
     // Each registration is exactly { name, config } — consumed by Pi 1.0's native API.
     for (const reg of regs) {

@@ -61,10 +61,12 @@ describe("buildMcpRegistrations", () => {
       command: "/plug/demo/bin/server",
       args: ["--data", "/plug/demo/data"],
       env: { TOKEN: "static" },
+      exposure: "codemode",
     });
     expect(byName["demo_remote"]).toEqual({
       url: "https://x",
       headers: { Root: "/plug/demo" },
+      exposure: "codemode",
     });
     // No generated name may contain a colon (the original 400-causing bug).
     for (const r of regs) expect(r.name).not.toContain(":");
@@ -79,6 +81,15 @@ describe("buildMcpRegistrations", () => {
     const names = regs.map((r) => r.name);
     expect(names).toEqual(["zhiyan_zhiyan-log", "zhiyan_weird_name_v2"]);
     for (const n of names) expect(n).toMatch(/^[a-zA-Z][a-zA-Z0-9_-]*$/);
+  });
+
+  it("preserves explicit exposure overrides", () => {
+    const [registration] = buildMcpRegistrations(
+      "p",
+      { server: { command: "run", exposure: "deferred" } },
+      "/r",
+    );
+    expect(registration?.config).toEqual({ command: "run", exposure: "deferred" });
   });
 
   it("returns [] for no servers", () => {
