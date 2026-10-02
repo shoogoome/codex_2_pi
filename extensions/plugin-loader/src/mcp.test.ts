@@ -3,9 +3,8 @@ import {
   normalizeServersObject,
   mergeServers,
   buildMcpRegistrations,
-  detectMcpExtension,
+  reconcileMcpRegistrations,
   sanitizeServerName,
-  MCP_REGISTER_CHANNEL,
 } from "./mcp.js";
 
 describe("normalizeServersObject", () => {
@@ -19,8 +18,13 @@ describe("normalizeServersObject", () => {
     expect(out).toEqual({ web: { url: "u" } });
   });
 
-  it("drops non-object server values", () => {
-    const out = normalizeServersObject({ good: { url: "u" }, bad: "x", also: 3 });
+  it("drops non-object and array server values", () => {
+    const out = normalizeServersObject({
+      good: { url: "u" },
+      bad: "x",
+      also: 3,
+      array: ["not", "a", "config"],
+    });
     expect(out).toEqual({ good: { url: "u" } });
   });
 
@@ -90,19 +94,63 @@ describe("sanitizeServerName", () => {
   });
 });
 
-describe("detectMcpExtension", () => {
-  it("true when an mcp command is present", () => {
-    expect(detectMcpExtension([{ name: "diff" }, { name: "mcp" }])).toBe(true);
+describe("reconcileMcpRegistrations", () => {
+  it("unregisters removed servers and registers the desired set through Pi 1.0", () => {
+    const calls: string[] = [];
+    const registrar = {
+      registerMcpServer(name: string): void {
+        calls.push(`register:${name}`);
+      },
+      unregisterMcpServer(name: string): void {
+        calls.push(`unregister:${name}`);
+      },
+    };
+
+    const result = reconcileMcpRegistrations(
+      registrar,
+      new Set(["removed", "kept"]),
+      [
+        { name: "kept", config: { command: "new-command" } },
+        { name: "added", config: { url: "https://example.com/mcp" } },
+      ],
+    );
+
+    expect(calls).toEqual([
+      "unregister:removed",
+      "register:kept",
+      "register:added",
+    ]);
+    expect([...result.registeredNames]).toEqual(["kept", "added"]);
+    expect(result.errors).toEqual([]);
   });
 
-  it("false otherwise", () => {
-    expect(detectMcpExtension([{ name: "diff" }])).toBe(false);
-    expect(detectMcpExtension([])).toBe(false);
-  });
-});
+  it("isolates invalid registrations and removes a stale previous registration", () => {
+    const calls: string[] = [];
+    const registrar = {
+      registerMcpServer(name: string): void {
+        calls.push(`register:${name}`);
+        if (name === "broken") throw new Error("invalid config");
+      },
+      unregisterMcpServer(name: string): void {
+        calls.push(`unregister:${name}`);
+      },
+    };
 
-describe("MCP_REGISTER_CHANNEL", () => {
-  it("is the agreed channel name", () => {
-    expect(MCP_REGISTER_CHANNEL).toBe("mcp:register-server");
+    const result = reconcileMcpRegistrations(
+      registrar,
+      new Set(["broken"]),
+      [
+        { name: "broken", config: {} },
+        { name: "working", config: { command: "server" } },
+      ],
+    );
+
+    expect(calls).toEqual([
+      "register:broken",
+      "unregister:broken",
+      "register:working",
+    ]);
+    expect([...result.registeredNames]).toEqual(["working"]);
+    expect(result.errors).toEqual([{ name: "broken", error: "invalid config" }]);
   });
 });

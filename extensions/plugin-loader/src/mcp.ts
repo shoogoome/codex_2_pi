@@ -1,4 +1,4 @@
-// Pure builders for mcp:register-server payloads handed to the mcp extension.
+// Pure builders and reconciliation helpers for Pi's native MCP server API.
 //
 // A plugin declares MCP servers either inline in its manifest (normalized into a
 // { serverName: config } record by manifest.ts) and/or via a `.mcp.json` file.
@@ -9,8 +9,21 @@
 import { substituteDeep } from "./vars.js";
 import type { McpRegistration } from "./types.js";
 
-/** Channel the mcp extension listens on. */
-export const MCP_REGISTER_CHANNEL = "mcp:register-server";
+/** Subset of Pi 1.0's ExtensionAPI used to reconcile plugin-owned MCP servers. */
+export interface McpRegistrar {
+  registerMcpServer(name: string, config: unknown): void;
+  unregisterMcpServer(name: string): void;
+}
+
+export interface McpRegistrationError {
+  name: string;
+  error: string;
+}
+
+export interface McpReconcileResult {
+  registeredNames: Set<string>;
+  errors: McpRegistrationError[];
+}
 
 /**
  * Sanitize a namespaced server name to OpenAI's function-name charset
@@ -44,7 +57,7 @@ export function normalizeServersObject(obj: unknown): Record<string, unknown> {
       : record;
   const out: Record<string, unknown> = {};
   for (const [name, cfg] of Object.entries(inner)) {
-    if (cfg && typeof cfg === "object") out[name] = cfg;
+    if (cfg && typeof cfg === "object" && !Array.isArray(cfg)) out[name] = cfg;
   }
   return out;
 }
@@ -75,9 +88,36 @@ export function buildMcpRegistrations(
 }
 
 /**
- * Best-effort detection of a companion mcp extension by looking for an `mcp`
- * slash command. EventBus.emit has no ack, so command presence is our signal.
+ * Replace the plugin-loader registrations through Pi 1.0's native MCP API.
+ * Removed names are unregistered first so namespace-equivalent renames do not
+ * collide. Invalid registrations are isolated and reported without preventing
+ * the remaining plugin servers from being activated.
  */
-export function detectMcpExtension(commands: { name: string }[]): boolean {
-  return commands.some((c) => c.name === "mcp");
+export function reconcileMcpRegistrations(
+  registrar: McpRegistrar,
+  previousNames: ReadonlySet<string>,
+  registrations: McpRegistration[],
+): McpReconcileResult {
+  const desiredNames = new Set(registrations.map((registration) => registration.name));
+  const registeredNames = new Set<string>();
+  const errors: McpRegistrationError[] = [];
+
+  for (const name of previousNames) {
+    if (!desiredNames.has(name)) registrar.unregisterMcpServer(name);
+  }
+
+  for (const registration of registrations) {
+    try {
+      registrar.registerMcpServer(registration.name, registration.config);
+      registeredNames.add(registration.name);
+    } catch (error) {
+      if (previousNames.has(registration.name)) registrar.unregisterMcpServer(registration.name);
+      errors.push({
+        name: registration.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return { registeredNames, errors };
 }

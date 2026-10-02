@@ -16,7 +16,6 @@ import {
   buildMcpRegistrations,
   mergeServers,
   normalizeServersObject,
-  MCP_REGISTER_CHANNEL,
 } from "./mcp.js";
 import { transformCommand } from "./commandTransform.js";
 import type { DiscoveredPlugin } from "./types.js";
@@ -175,12 +174,10 @@ describe("discovery + contribution over a real temp dir", () => {
     expect(byName["srv_base"]).toEqual({ command: `${root}/bin/base` });
     expect(byName["srv_shared"]).toEqual({ command: "inline-wins" });
     for (const reg of regs) expect(reg.name).not.toContain(":");
-    // Each registration is exactly { name, config } — matches McpRegistration.
+    // Each registration is exactly { name, config } — consumed by Pi 1.0's native API.
     for (const reg of regs) {
       expect(Object.keys(reg).sort()).toEqual(["config", "name"]);
     }
-    // The bus channel is the exact string the mcp extension subscribes to.
-    expect(MCP_REGISTER_CHANNEL).toBe("mcp:register-server");
   });
 
   it("discovers a manifest-less plugin dir with graceful fallbacks", () => {

@@ -7,7 +7,7 @@
 //   - commands/*.md  → transformed to pi prompt templates written to a cache dir → promptPaths
 //   - themes/        → resources_discover themePaths
 //   - output-styles/ → applied on before_agent_start when one is selected (flag)
-//   - mcpServers     → emitted per server on the mcp:register-server bus channel
+//   - mcpServers     → registered through Pi 1.0's native MCP server API
 //
 // Deferred (surfaced in /plugin + README): hooks/hooks.json and agents/*.md —
 // these require a hooks-runner / subagent extension and are not hot-loadable via
@@ -41,10 +41,10 @@ import {
 import { discoverManagedPlugins, discoverPlugins, type FsFacade } from "./src/discover.js";
 import {
   buildMcpRegistrations,
-  detectMcpExtension,
   mergeServers,
   normalizeServersObject,
-  MCP_REGISTER_CHANNEL,
+  reconcileMcpRegistrations,
+  type McpRegistrar,
 } from "./src/mcp.js";
 import { buildSystemPrompt, parseOutputStyle, selectOutputStyle } from "./src/outputStyle.js";
 import type { DiscoveredPlugin, EntryLike, OutputStyle } from "./src/types.js";
@@ -237,12 +237,12 @@ export default function pluginLoaderExtension(pi: ExtensionAPI): void {
     plugins: DiscoveredPlugin[];
     toggles: Map<string, boolean>;
     contributions: Map<string, Contribution>;
-    mcpNotified: boolean;
+    mcpServerNames: Set<string>;
   } = {
     plugins: [],
     toggles: new Map(),
     contributions: new Map(),
-    mcpNotified: false,
+    mcpServerNames: new Set(),
   };
 
   pi.registerFlag(ROOTS_FLAG, {
@@ -314,13 +314,15 @@ export default function pluginLoaderExtension(pi: ExtensionAPI): void {
       const data = record ? manager.pluginEnvironment(record).CLAUDE_PLUGIN_DATA : "";
       return buildMcpRegistrations(plugin.name, collectServers(plugin), plugin.root, data);
     });
-    pi.events.emit("mcp:replace-plugin-servers", { registrations });
-    for (const reg of registrations) pi.events.emit(MCP_REGISTER_CHANNEL, reg);
-    if (registrations.length > 0 && !detectMcpExtension(pi.getCommands()) && !state.mcpNotified) {
-      state.mcpNotified = true;
+    const result = reconcileMcpRegistrations(
+      pi as unknown as McpRegistrar,
+      state.mcpServerNames,
+      registrations,
+    );
+    state.mcpServerNames = result.registeredNames;
+    for (const failure of result.errors) {
       ctx.ui.notify(
-        `plugin-loader: ${registrations.length} MCP server(s) declared by plugins, but no mcp ` +
-          `extension appears installed. Install/enable the mcp extension to activate them.`,
+        `plugin-loader: failed to register MCP server "${failure.name}": ${failure.error}`,
         "warning",
       );
     }
@@ -329,7 +331,6 @@ export default function pluginLoaderExtension(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx): void => {
     const branch = ctx.sessionManager.getBranch() as unknown as EntryLike[];
     state.toggles = reduceToggles(branch);
-    state.mcpNotified = false;
     rediscover(ctx.cwd);
     refreshContributions(ctx);
   });

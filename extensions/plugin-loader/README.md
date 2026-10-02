@@ -28,7 +28,7 @@ Bare `/plugin` opens a small interactive menu. Marketplaces may be local directo
 - themes and output styles
 - agents bridged to the agents extension
 - hooks bridged to hooks-runner, with plugin root/data/user-config variables
-- MCP servers reconciled through the mcp extension
+- MCP servers registered and reconciled through Pi 1.0's native `registerMcpServer` API
 - LSP is detected but deferred because Pi has no dynamic LSP API
 
 Installed state and caches are scope-aware (`user`, `project`, `local`). Manually discovered plugins under `~/.pi/agent/plugins/`, `.pi/plugins/`, and `--plugin-dir` remain supported.
