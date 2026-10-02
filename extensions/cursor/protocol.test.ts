@@ -10,6 +10,7 @@ import {
   AgentClientMessageSchema, AgentServerMessageSchema, ExecServerMessageSchema,
   InteractionUpdateSchema, McpArgsSchema, TextDeltaUpdateSchema,
   ThinkingDeltaUpdateSchema, TurnEndedUpdateSchema, RequestContextArgsSchema,
+  KvServerMessageSchema, GetBlobArgsSchema,
 } from "./vendor/proto/agent_pb.js";
 import { encodeMcpArgsMap } from "./vendor/stream/request-build.js";
 import { CompatibleAgentClientMessageSchema } from "./vendor/proto/mcp-state-compat.js";
@@ -157,6 +158,60 @@ describe("Cursor native protocol through the real provider", () => {
     const result = await resumed.result();
     expect(result.stopReason).toBe("stop");
     expect(result.content).toContainEqual(expect.objectContaining({ type: "text", text: "README 已读。" }));
+  });
+
+  it.each([
+    { label: "mixed-script continuation", text: "ok继续", history: false, memory: false },
+    { label: "historical approval", text: "ok", history: true, memory: false },
+    { label: "historical greeting", text: "hi", history: true, memory: false },
+    { label: "compacted approval", text: "ok", history: false, memory: true },
+    { label: "fresh greeting", text: "Hi!", history: false, memory: false },
+    { label: "fresh acknowledgement", text: "OK", history: false, memory: false },
+    { label: "fresh thanks", text: "thanks", history: false, memory: false },
+    { label: "fresh identity question", text: "who are you?", history: false, memory: false },
+  ])("always injects tools and the full prompt for $label", async ({ text, history, memory }) => {
+    const { bridge, runtime, model, options } = fixture();
+    const base = context();
+    const fullPrompt = memory ? "<provider_context>Pending task: deploy after confirmation.</provider_context>" : base.systemPrompt;
+    const messages = [
+      { role: "system", content: fullPrompt, toolsAdded: base.tools },
+      ...(history ? [
+        { role: "user", content: "Prepare a deployment and ask me before doing it", timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "Ready to deploy. May I proceed?" }], stopReason: "stop", timestamp: 2 },
+      ] : []),
+      { role: "user", content: text, timestamp: 3 },
+    ];
+    const stream = runtime.provider.streamSimple(model, { messages } as unknown as Context, options);
+    await bridge.ready;
+    const initial = fromBinary(AgentClientMessageSchema, bridge.writes[0]!.subarray(5));
+    if (initial.message.case !== "runRequest") throw new Error("missing run request");
+    expect(initial.message.value.mcpTools?.mcpTools.map((tool) => tool.toolName)).toEqual(["read"]);
+    // Ask for the actual system-prompt blob sent to Cursor, rather than just
+    // checking the adapter's pre-wire input. Greetings must not replace it.
+    const promptBlob = initial.message.value.conversationState!.rootPromptMessagesJson[0]!;
+    bridge.send(frameConnectMessage(toBinary(AgentServerMessageSchema, create(AgentServerMessageSchema, {
+      message: { case: "kvServerMessage", value: create(KvServerMessageSchema, {
+        id: 32, message: { case: "getBlobArgs", value: create(GetBlobArgsSchema, { blobId: promptBlob }) },
+      }) },
+    }))));
+    const blobReply = fromBinary(AgentClientMessageSchema, bridge.writes.at(-1)!.subarray(5));
+    if (blobReply.message.case !== "kvClientMessage" || blobReply.message.value.message.case !== "getBlobResult") throw new Error("missing prompt blob");
+    const blobData = blobReply.message.value.message.value.blobData;
+    if (!blobData) throw new Error("missing system-prompt blob data");
+    expect(JSON.parse(Buffer.from(blobData).toString("utf8"))).toEqual({ role: "system", content: fullPrompt });
+    bridge.send(frameConnectMessage(toBinary(AgentServerMessageSchema, create(AgentServerMessageSchema, {
+      message: { case: "execServerMessage", value: create(ExecServerMessageSchema, {
+        id: 9, execId: "context-9", message: { case: "requestContextArgs", value: create(RequestContextArgsSchema) },
+      }) },
+    }))));
+    const reply = fromBinary(AgentClientMessageSchema, bridge.writes.at(-1)!.subarray(5));
+    if (reply.message.case !== "execClientMessage" || reply.message.value.message.case !== "requestContextResult") throw new Error("missing context reply");
+    const result = reply.message.value.message.value.result;
+    if (result.case !== "success") throw new Error("missing context success");
+    expect(result.value.requestContext?.tools.map((tool) => tool.toolName)).toEqual(["read"]);
+    bridge.send(Buffer.concat([delta("synthetic response"), turnEnded()]));
+    bridge.finish();
+    expect((await stream.result()).stopReason).toBe("stop");
   });
 
   it("registers transcript tools, answers modern dynamic discovery, and completes ls → read through Pi", async () => {

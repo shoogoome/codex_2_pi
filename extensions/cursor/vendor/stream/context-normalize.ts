@@ -208,18 +208,6 @@ function sideChannelHasResumeMemory(text: string): boolean {
   return isResumeOrCompactionSideChannel(text);
 }
 
-/** True when the system prompt holds folded session/compaction memory that a greeting must not drop. */
-export function systemPromptHasSessionMemory(systemPrompt: string): boolean {
-  const t = systemPrompt ?? "";
-  if (!t) return false;
-  return (
-    /<provider_context\b/i.test(t) ||
-    /<session_state\b/i.test(t) ||
-    /<session_resume\b/i.test(t) ||
-    /<active_memory\b/i.test(t)
-  );
-}
-
 export function frameContextModeSideChannel(text: string): string {
   const priority = isResumeOrCompactionSideChannel(text)
     ? RESUME_CONTEXT_PRIORITY

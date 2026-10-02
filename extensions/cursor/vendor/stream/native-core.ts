@@ -84,15 +84,11 @@ export {
 import {
   buildCursorRequest,
   buildMcpSuccessContent,
-  isIdentityConversationalTurn,
-  isTrivialConversationalTurn,
   normalizeToolResultForTransport,
   summarizeRequestSize,
 } from "./request-build.js";
 export {
   buildCursorRequest,
-  isIdentityConversationalTurn,
-  isTrivialConversationalTurn,
   summarizeRequestSize,
   type BuildCursorRequestOptions,
 } from "./request-build.js";
@@ -111,14 +107,12 @@ import {
   parseMessages,
   parseToolCallArguments,
   stripInFlightResults,
-  systemPromptHasSessionMemory,
 } from "./message-parsing.js";
 export {
   frameContextModeSideChannel,
   isContextModeSideChannelText,
   normalizeMessagesForCursor,
   parseMessages,
-  systemPromptHasSessionMemory,
 } from "./message-parsing.js";
 export {
   callCursorUnaryRpc,
@@ -473,32 +467,7 @@ async function handleCursorNativeRequest(
   }
 
   const { systemPrompt, userText, userImages, turns, toolResults, inFlightTurn } = parsedMessages;
-  const omitToolsForTrivialTurn =
-    toolResolution.tools.length > 0 &&
-    toolResults.length === 0 &&
-    userImages.length === 0 &&
-    isTrivialConversationalTurn(userText);
-  const selectedTools = omitToolsForTrivialTurn ? [] : toolResolution.tools;
-  // Greetings do not need Pi's large agent prompt: sending it can cost tens of
-  // thousands of input tokens before the user text is even considered. Keep the
-  // full prompt for anything actionable, for identity/capability questions the
-  // prompt itself answers, and whenever it carries folded session/compaction
-  // memory.
-  const PI_IDENTITY_ONLY = "You are running inside Pi, not the Cursor IDE.";
-  const dropSystemPrompt =
-    omitToolsForTrivialTurn &&
-    !isIdentityConversationalTurn(userText) &&
-    !systemPromptHasSessionMemory(systemPrompt);
-  const effectiveSystemPrompt = dropSystemPrompt ? PI_IDENTITY_ONLY : systemPrompt;
-  if (omitToolsForTrivialTurn) {
-    setLastStreamEvent("tools_omitted_trivial_turn");
-    lifecycleLog("tools_omitted", {
-      requestId,
-      reason: "trivial_conversational_turn",
-      originalToolCount: toolResolution.tools.length,
-      systemPromptDropped: dropSystemPrompt,
-    });
-  }
+  // Pi owns the active tool set and prompt. Never prune either based on user text.
   const modelId = resolveRequestedModelId(body.model, body.reasoning_effort, body.cursor_model_id);
   const maxMode =
     typeof body.cursor_model_max_mode === "boolean"
@@ -609,7 +578,7 @@ async function handleCursorNativeRequest(
         recoveryPath: "stored_checkpoint",
         pendingToolCallIds: toolResults.map((r) => r.toolCallId),
       });
-      const mcpTools = buildMcpToolDefinitions(selectedTools);
+      const mcpTools = buildMcpToolDefinitions(toolResolution.tools);
       // Images ride the recovered user turn on this path too — dropping them here silently lost
       // screenshots that the rebuild path preserves.
       const recoveredUserImages = collectToolResultImages(toolResults);
@@ -664,7 +633,7 @@ async function handleCursorNativeRequest(
         modelId,
         decision,
       });
-      const mcpTools = buildMcpToolDefinitions(selectedTools);
+      const mcpTools = buildMcpToolDefinitions(toolResolution.tools);
       const rebuiltCompletedTurns = [...decision.completedTurns, decision.inFlightTurn];
       const recoveredUserImages = collectToolResultImages(decision.toolResults);
       const recoveredCurrentTurn: ParsedTurn = {
@@ -762,17 +731,17 @@ async function handleCursorNativeRequest(
   evictStaleConversations();
   discardStaleCheckpointIfNeeded(stored, turns, requestId, convKey);
 
-  const mcpTools = buildMcpToolDefinitions(selectedTools);
+  const mcpTools = buildMcpToolDefinitions(toolResolution.tools);
   const effectiveUserText = userText;
   const effectiveUserImages = userText || userImages.length > 0 ? userImages : [];
   // Pi rewrites its system prompt as a session evolves (context-mode folds
   // session memory into it). A checkpoint carries the prompt recorded when the
   // conversation started, so a changed prompt has to be re-published.
-  const systemPromptHash = hashSystemPrompt(effectiveSystemPrompt);
+  const systemPromptHash = hashSystemPrompt(systemPrompt);
   const refreshSystemPrompt = !!stored.checkpoint && stored.systemPromptHash !== systemPromptHash;
   const payload = buildCursorRequest({
     modelId,
-    systemPrompt: effectiveSystemPrompt,
+    systemPrompt: systemPrompt,
     userText: effectiveUserText,
     turns,
     conversationId: stored.conversationId,
@@ -794,9 +763,9 @@ async function handleCursorNativeRequest(
   };
 
   const size = summarizeRequestSize({
-    systemPrompt: effectiveSystemPrompt,
+    systemPrompt: systemPrompt,
     userText: effectiveUserText,
-    tools: selectedTools,
+    tools: toolResolution.tools,
     mcpTools,
     requestBytes: payload.requestBytes,
     blobStore: payload.blobStore,
@@ -841,7 +810,7 @@ async function handleCursorNativeRequest(
     requestId,
     getAccessToken,
     recoverBeforeRetry: true,
-    systemPrompt: effectiveSystemPrompt,
+    systemPrompt: systemPrompt,
     conversationId: stored.conversationId,
     maxMode,
     cursorModelParameters: body.cursor_model_parameters ?? [],

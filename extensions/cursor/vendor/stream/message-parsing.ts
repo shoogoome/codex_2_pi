@@ -10,7 +10,6 @@ import {
   frameContextModeSideChannel as frameContextModeSideChannelImpl,
   isContextModeSideChannelText as isContextModeSideChannelTextImpl,
   normalizeMessagesForCursor as normalizeMessagesForCursorImpl,
-  systemPromptHasSessionMemory as systemPromptHasSessionMemoryImpl,
   type OpenAIMessage as NormalizedOpenAIMessage,
 } from "./context-normalize.js";
 import { loadClipboardImagesFromText } from "./clipboard-images.js";
@@ -228,10 +227,6 @@ export function isContextModeSideChannelText(text: string): boolean {
 
 export function frameContextModeSideChannel(text: string): string {
   return frameContextModeSideChannelImpl(text);
-}
-
-export function systemPromptHasSessionMemory(systemPrompt: string): boolean {
-  return systemPromptHasSessionMemoryImpl(systemPrompt);
 }
 
 export function normalizeMessagesForCursor(messages: OpenAIMessage[]): OpenAIMessage[] {
