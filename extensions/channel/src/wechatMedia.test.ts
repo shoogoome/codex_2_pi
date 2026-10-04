@@ -1,7 +1,11 @@
 import { createCipheriv } from "node:crypto";
+import { mkdtemp, open, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   buildWechatCdnDownloadUrl,
   downloadWechatImage,
+  prepareWechatImage,
 } from "./wechatMedia.js";
 
 function encrypt(data: Buffer, keyHex: string): Buffer {
@@ -14,6 +18,22 @@ function encrypt(data: Buffer, keyHex: string): Buffer {
 }
 
 describe("WeChat image media", () => {
+  it("rejects missing, oversized, non-image and non-regular outbound files", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wx-media-"));
+    try {
+      await expect(prepareWechatImage(join(root, "missing"))).rejects.toThrow();
+      await expect(prepareWechatImage(root)).rejects.toThrow("普通文件");
+      const path = join(root, "fake.png");
+      await writeFile(path, "not an image");
+      await expect(prepareWechatImage(path)).rejects.toThrow("格式不受支持");
+      const file = await open(path, "w");
+      await file.truncate(10 * 1024 * 1024 + 1);
+      await file.close();
+      await expect(prepareWechatImage(path)).rejects.toThrow("10 MiB");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   it("accepts the base64-wrapped ASCII hex key used by iLink media", async () => {
     const keyHex = "00112233445566778899aabbccddeeff";
     const key = Buffer.from(keyHex, "utf8").toString("base64");

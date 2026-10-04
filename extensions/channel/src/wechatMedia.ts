@@ -1,4 +1,6 @@
-import { createDecipheriv } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
 
 const WECHAT_CDN_BASE = "https://novac2c.cdn.weixin.qq.com/c2c";
 const TRUSTED_IMAGE_HOST_SUFFIXES = [
@@ -24,7 +26,7 @@ export function buildWechatCdnDownloadUrl(encryptedQueryParam: string): string {
   return `${WECHAT_CDN_BASE}/download?encrypted_query_param=${encodeURIComponent(encryptedQueryParam)}`;
 }
 
-function isTrustedImageUrl(value: string): boolean {
+export function isTrustedImageUrl(value: string): boolean {
   try {
     const url = new URL(value);
     if (url.protocol !== "https:" || url.username || url.password) return false;
@@ -33,6 +35,47 @@ function isTrustedImageUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Explicit local file input, bounded before reading; no URLs or device/FIFO reads. */
+export async function prepareWechatImage(path: string, signal?: AbortSignal): Promise<{
+  rawSize: number;
+  rawMd5: string;
+  aesKey: string;
+  encrypted: Buffer;
+  filekey: string;
+}> {
+  signal?.throwIfAborted();
+  const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  let data: Buffer;
+  try {
+    const stats = await file.stat();
+    if (!stats.isFile()) throw new Error("微信图片必须是普通文件");
+    if (stats.size > DEFAULT_WECHAT_IMAGE_MAX_BYTES) throw new Error("微信图片超过 10 MiB 限制");
+    // Limit the actual read too, in case the file grows after stat().
+    const buffer = Buffer.alloc(stats.size + 1);
+    let total = 0;
+    while (total < buffer.length) {
+      signal?.throwIfAborted();
+      const { bytesRead } = await file.read(buffer, total, buffer.length - total, null);
+      if (!bytesRead) break;
+      total += bytesRead;
+    }
+    if (total > stats.size) throw new Error("微信图片在读取期间发生变化，请重试");
+    data = buffer.subarray(0, total);
+  } finally {
+    await file.close();
+  }
+  if (!detectImageMimeType(data)) throw new Error("微信图片格式不受支持，仅支持 JPEG、PNG、GIF、WebP");
+  const aesKey = randomBytes(16).toString("hex");
+  const cipher = createCipheriv("aes-128-ecb", Buffer.from(aesKey, "hex"), null);
+  return {
+    rawSize: data.length,
+    rawMd5: createHash("md5").update(data).digest("hex"),
+    aesKey,
+    encrypted: Buffer.concat([cipher.update(data), cipher.final()]),
+    filekey: randomBytes(16).toString("hex"),
+  };
 }
 
 function decodeAesKey(value: string): Buffer {

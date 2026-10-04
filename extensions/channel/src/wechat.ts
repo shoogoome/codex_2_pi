@@ -15,12 +15,14 @@ import {
   buildWechatCdnDownloadUrl,
   DEFAULT_WECHAT_IMAGE_MAX_BYTES,
   downloadWechatImage,
+  isTrustedImageUrl,
+  prepareWechatImage,
   MAX_WECHAT_IMAGES_PER_MESSAGE,
   type WechatImageReference,
 } from "./wechatMedia.js";
 
 /**
- * iLink/ClawBot text + inbound-image transport. The wire/media format follows
+ * iLink/ClawBot text and bidirectional image transport. The wire/media format follows
  * the MIT-licensed shenjiecode/pi-wechat-assistant project, while lifecycle,
  * scoping and routing are owned by this Channel extension.
  */
@@ -101,6 +103,7 @@ export interface RunningWechatTransport {
   status: "connected" | "occupied";
   detail?: string;
   send(content: string, replyTarget?: string): Promise<void>;
+  sendImage?(path: string, replyTarget?: string, content?: string, signal?: AbortSignal): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -420,6 +423,64 @@ async function sendWechatText(input: {
   }
 }
 
+async function sendWechatImage(input: {
+  channelName: string;
+  credentials: WechatCredentials;
+  state: WechatPersistedState;
+  path: string;
+  replyTarget?: string;
+  content?: string;
+  signal?: AbortSignal;
+  fetcher?: typeof fetch;
+}): Promise<void> {
+  const userId = input.replyTarget || input.state.lastUserId;
+  if (!userId) throw new Error(`微信 Channel "${input.channelName}" 尚未收到联系人消息，无法确定接收人`);
+  const contextToken = input.state.contextTokens[userId];
+  if (!contextToken) throw new Error(`微信 Channel "${input.channelName}" 缺少接收人的 context token`);
+  if ((input.content?.length ?? 0) > 1_200) throw new Error("图片附带文字最多 1200 字符，请将长文本单独发送");
+  const image = await prepareWechatImage(input.path, input.signal);
+  const options = { fetcher: input.fetcher, signal: input.signal };
+  const upload = await apiPost<{ upload_param?: string; upload_full_url?: string }>(
+    input.credentials.baseUrl, "/ilink/bot/getuploadurl", input.credentials.token,
+    {
+      filekey: image.filekey, media_type: 1, to_user_id: userId,
+      rawsize: image.rawSize, rawfilemd5: image.rawMd5, filesize: image.encrypted.length,
+      no_need_thumb: true, aeskey: image.aesKey, base_info: baseInfo(),
+    }, { ...options, timeoutMs: 20_000 },
+  );
+  let uploadParam = upload.upload_param;
+  if (!uploadParam && upload.upload_full_url) {
+    if (!isTrustedImageUrl(upload.upload_full_url)) throw new Error("微信图片上传地址不在受信任的 CDN 域名内");
+    uploadParam = new URL(upload.upload_full_url).searchParams.get("encrypted_query_param") ?? undefined;
+  }
+  if (!uploadParam) throw new Error("微信图片上传响应缺少 upload_param");
+  // Use the fixed trusted CDN; never forward the bot token to it.
+  const url = `https://novac2c.cdn.weixin.qq.com/c2c/upload?encrypted_query_param=${encodeURIComponent(uploadParam)}&filekey=${image.filekey}`;
+  const timeout = AbortSignal.timeout(60_000);
+  const response = await (input.fetcher ?? fetch)(url, {
+    method: "POST", headers: { "Content-Type": "application/octet-stream" },
+    body: new Uint8Array(image.encrypted), redirect: "error",
+    signal: input.signal ? AbortSignal.any([input.signal, timeout]) : timeout,
+  });
+  const downloadParam = response.headers.get("x-encrypted-param");
+  await response.body?.cancel();
+  if (response.status !== 200) throw new Error(`微信图片上传失败: HTTP ${response.status}`);
+  if (!downloadParam) throw new Error("微信图片上传响应缺少 x-encrypted-param");
+  await apiPost(input.credentials.baseUrl, "/ilink/bot/sendmessage", input.credentials.token, {
+    msg: {
+      from_user_id: "", to_user_id: userId, client_id: randomUUID(),
+      message_type: 2, message_state: 2, context_token: contextToken,
+      item_list: [
+        ...(input.content?.trim() ? [{ type: 1, text_item: { text: input.content.trim() } }] : []),
+        { type: 2, image_item: {
+          media: { encrypt_query_param: downloadParam, aes_key: Buffer.from(image.aesKey, "utf8").toString("base64"), encrypt_type: 1 },
+          mid_size: image.encrypted.length,
+        } },
+      ],
+    }, base_info: baseInfo(),
+  }, { ...options, timeoutMs: 15_000 });
+}
+
 export async function startWechatTransport(options: {
   agentDir: string;
   channel: ChannelDefinition;
@@ -452,6 +513,11 @@ export async function startWechatTransport(options: {
           ...(replyTarget ? { replyTarget } : {}),
           ...(options.fetcher ? { fetcher: options.fetcher } : {}),
         });
+      },
+      sendImage: async (path, replyTarget, content, signal) => {
+        const state = await readJson<WechatPersistedState>(wechatStatePath(agentDir, channel.id));
+        if (!state) throw new Error(`微信 Channel "${channel.name}" 尚无共享联系人状态`);
+        await sendWechatImage({ channelName: channel.name, credentials, state, path, replyTarget, content, signal, fetcher: options.fetcher });
       },
       close: async () => undefined,
     };
@@ -547,6 +613,9 @@ export async function startWechatTransport(options: {
   return {
     status: "connected",
     send,
+    sendImage: (path, replyTarget, content, signal) => sendWechatImage({
+      channelName: channel.name, credentials, state, path, replyTarget, content, signal, fetcher: options.fetcher,
+    }),
     close: async () => {
       if (closed) return;
       closed = true;

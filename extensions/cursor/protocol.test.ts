@@ -1,5 +1,6 @@
-import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
-import { BinaryWriter, WireType } from "@bufbuild/protobuf/wire";
+import { create, fromBinary, toBinary, toJson } from "@bufbuild/protobuf";
+import { ValueSchema } from "@bufbuild/protobuf/wkt";
+import { BinaryReader, BinaryWriter, WireType } from "@bufbuild/protobuf/wire";
 import { createModels, type Context, type Model, type Api, type AssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -212,6 +213,69 @@ describe("Cursor native protocol through the real provider", () => {
     bridge.send(Buffer.concat([delta("synthetic response"), turnEnded()]));
     bridge.finish();
     expect((await stream.result()).stopReason).toBe("stop");
+  });
+
+  it("injects codemode in Run and dynamic metadata, preserves code, and returns its result through Pi", async () => {
+    const { bridge, factory, runtime, model, options } = fixture();
+    const parameters = { type: "object", required: ["code"], properties: { code: { type: "string", description: "Raw JavaScript source." } } };
+    const codemode = { name: "codemode", description: "Run JavaScript that calls Pi tools in a QuickJS sandbox.", parameters,
+      constrainedSampling: { type: "grammar", variants: { openai_lark: "start: SOURCE\nSOURCE: /[\\s\\S]+/" } } };
+    const transcript = (extra: unknown[] = []) => ({ messages: [
+      { role: "system", content: "Use Pi codemode for this task.", toolsAdded: [codemode] },
+      { role: "user", content: "Find the available Pi tools through codemode", timestamp: 1 }, ...extra,
+    ] }) as unknown as Context;
+    const first = runtime.provider.streamSimple(model, transcript(), options);
+    await bridge.ready;
+    const run = fromBinary(AgentClientMessageSchema, bridge.writes[0]!.subarray(5));
+    if (run.message.case !== "runRequest") throw new Error("missing run");
+    const definition = run.message.value.mcpTools!.mcpTools[0]!;
+    expect(definition.toolName).toBe("codemode");
+    expect(definition.providerIdentifier).toBe("pi");
+    expect(toJson(ValueSchema, fromBinary(ValueSchema, definition.inputSchema))).toEqual(parameters);
+
+    bridge.send(frameConnectMessage(toBinary(AgentServerMessageSchema, create(AgentServerMessageSchema, {
+      message: { case: "execServerMessage", value: create(ExecServerMessageSchema, {
+        id: 10, execId: "codemode-context", message: { case: "requestContextArgs", value: create(RequestContextArgsSchema) },
+      }) },
+    }))));
+    const reply = fromBinary(AgentClientMessageSchema, bridge.writes.at(-1)!.subarray(5));
+    if (reply.message.case !== "execClientMessage" || reply.message.value.message.case !== "requestContextResult") throw new Error("missing context");
+    const result = reply.message.value.message.value.result;
+    if (result.case !== "success") throw new Error("missing context success");
+    expect(result.value.requestContext!.tools.map((tool) => tool.toolName)).toEqual(["codemode"]);
+    const delimited = (bytes: Uint8Array, field: number): Uint8Array[] => {
+      const reader = new BinaryReader(bytes);
+      const values: Uint8Array[] = [];
+      while (reader.pos < reader.len) {
+        const [no, wire] = reader.tag();
+        if (no === field && wire === WireType.LengthDelimited) values.push(reader.bytes());
+        else reader.skip(wire);
+      }
+      return values;
+    };
+    const metadata = result.value.requestContext!.$unknown!.find((field) => field.no === 34)!;
+    const descriptor = delimited(new BinaryReader(metadata.data).bytes(), 2)[0]!;
+    const dynamicTool = delimited(descriptor, 5)[0]!;
+    expect(Buffer.from(delimited(dynamicTool, 1)[0]!).toString("utf8")).toBe("codemode");
+    expect(toJson(ValueSchema, fromBinary(ValueSchema, delimited(dynamicTool, 4)[0]!))).toEqual(parameters);
+
+    const code = '// @options: {"timeout_ms": 1000}\nconst matches = await searchTools("training");\nreturn matches;';
+    bridge.send(toolCall("codemode", { code }, 12));
+    const assistant = await first.result();
+    expect(assistant.stopReason).toBe("toolUse");
+    expect(assistant.content).toContainEqual(expect.objectContaining({ type: "toolCall", name: "codemode", arguments: { code } }));
+    const before = bridge.writes.length;
+    bridge.resetReady();
+    const resumed = runtime.provider.streamSimple(model, transcript([assistant,
+      { role: "toolResult", toolCallId: "call-12", toolName: "codemode", content: [{ type: "text", text: "Script completed: synthetic tool discovery result" }], isError: false, timestamp: 2 },
+    ]), options);
+    await bridge.ready;
+    expect(factory).toHaveBeenCalledTimes(1);
+    const responses = bridge.writes.slice(before).map((frame) => fromBinary(AgentClientMessageSchema, frame.subarray(5)));
+    expect(JSON.stringify(responses)).toContain("synthetic tool discovery result");
+    bridge.send(Buffer.concat([delta("Pi codemode result received."), turnEnded()]));
+    bridge.finish();
+    expect((await resumed.result()).stopReason).toBe("stop");
   });
 
   it("registers transcript tools, answers modern dynamic discovery, and completes ls → read through Pi", async () => {

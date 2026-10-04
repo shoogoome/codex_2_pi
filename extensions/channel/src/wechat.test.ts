@@ -1,5 +1,5 @@
-import { createCipheriv } from "node:crypto";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { createCipheriv, createDecipheriv, createHash } from "node:crypto";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createChannelDefinition } from "./store.js";
@@ -42,6 +42,8 @@ describe("WeChat ClawBot channel", () => {
       sessionId: "session-a",
     });
     const sentBodies: unknown[] = [];
+    const uploadRequests: any[] = [];
+    const uploaded: Buffer[] = [];
     let updates = 0;
     const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const url = new URL(String(input));
@@ -76,6 +78,18 @@ describe("WeChat ClawBot channel", () => {
         return new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
         });
+      }
+      if (url.pathname.endsWith("/getuploadurl")) {
+        uploadRequests.push(JSON.parse(String(init?.body)));
+        return json({ ret: 0, upload_param: "upload+a/b=" });
+      }
+      if (url.pathname.endsWith("/upload")) {
+        expect(url.hostname).toBe("novac2c.cdn.weixin.qq.com");
+        expect(url.searchParams.get("encrypted_query_param")).toBe("upload+a/b=");
+        expect(init?.headers).toEqual({ "Content-Type": "application/octet-stream" });
+        expect(init?.redirect).toBe("error");
+        uploaded.push(Buffer.from(init?.body as Uint8Array));
+        return new Response(null, { status: 200, headers: { "x-encrypted-param": "download-param" } });
       }
       if (url.pathname.endsWith("/sendmessage")) {
         sentBodies.push(JSON.parse(String(init?.body)));
@@ -141,8 +155,37 @@ describe("WeChat ClawBot channel", () => {
         item_list: [{ text_item: { text: "跨会话发送" } }],
       },
     });
-    await sharedTransport.close();
-    await transport.close();
+    const imagePath = join(root, "test.png");
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    await writeFile(imagePath, png);
+    try {
+      await transport.sendImage!(imagePath, "wx-user-1", "这是截图");
+      await sharedTransport.sendImage!(imagePath);
+      expect(uploadRequests).toHaveLength(2);
+      for (const [i, upload] of uploadRequests.entries()) {
+        expect(upload).toMatchObject({
+          media_type: 1, to_user_id: "wx-user-1", rawsize: png.length,
+          rawfilemd5: createHash("md5").update(png).digest("hex"),
+          filesize: uploaded[i].length, no_need_thumb: true,
+        });
+        expect(upload.filekey).toMatch(/^[0-9a-f]{32}$/);
+        const decipher = createDecipheriv("aes-128-ecb", Buffer.from(upload.aeskey, "hex"), null);
+        expect(Buffer.concat([decipher.update(uploaded[i]), decipher.final()])).toEqual(png);
+        const body = sentBodies[i + 2] as any;
+        expect(body.msg).toMatchObject({ to_user_id: "wx-user-1", context_token: "context-1", message_type: 2, message_state: 2 });
+        expect(body.msg.item_list.at(-1)).toEqual({
+          type: 2, image_item: {
+            media: { encrypt_query_param: "download-param", aes_key: Buffer.from(upload.aeskey, "utf8").toString("base64"), encrypt_type: 1 },
+            mid_size: uploaded[i].length,
+          },
+        });
+      }
+      expect((sentBodies[2] as any).msg.item_list[0]).toEqual({ type: 1, text_item: { text: "这是截图" } });
+      expect((sentBodies[3] as any).msg.item_list).toHaveLength(1);
+    } finally {
+      await sharedTransport.close();
+      await transport.close();
+    }
   });
 
   it("downloads, decrypts, and forwards a pure image message", async () => {

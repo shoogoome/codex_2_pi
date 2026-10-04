@@ -179,4 +179,6 @@ export interface ChannelSendRequest {
   content: string;
   session: ChannelSessionIdentity;
   replyTarget?: string;
+  imagePath?: string;
+  signal?: AbortSignal;
 }

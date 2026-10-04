@@ -42,6 +42,7 @@ Cursor 协议需要可用的 **HTTP/2**；普通 OpenAI SSE 代理不能替代�
 
 - 双向连接在工具调用处暂停，Pi 执行后将结果写回同一 Cursor run；连接丢失时根据 Pi 历史重建。
 - 每轮始终注入 Pi 当前声明的工具和完整系统提示词，包括首轮问候、致谢、身份询问和确认/续接。已删除上游闲聊分类器及按消息内容清空工具、替换提示词的省 token 逻辑；工具可用性由 Pi 当前工具声明与显式 tool choice 决定，不由 provider 猜测用户意图。
+- Pi 启用 `codemode` 时，它同样进入 `pi` 动态工具目录；Cursor 的 `GetDynamicTools`/`CallDynamicTool` 是发现/调用入口，不是 Pi 的 codemode。Cursor MCP 接口使用普通 JSON schema，调用参数为 `{ "code": "JavaScript source" }`，不使用 OpenAI 的 `openai_lark` 原始源码语法工具。源码作为字符串原样交给 Pi，沙箱执行与权限检查仍由 Pi 负责。
 - switch、fork、tree、compaction 会清理本会话的协议状态；shutdown 取消进行中的认证/请求并关闭全部连接，下一次 session_start 可重新使用 provider。
 - 协议 checkpoint/blob 仅存内存，**不额外保存第二份对话 journal**；Pi 的正常会话持久化保持不变。
 - debug/lifecycle/metric 日志默认关闭。显式启用 `PI_CURSOR_PROVIDER_DEBUG=1` 时（`PI_CURSOR_LIFECYCLE_LOG` 仅指定文件路径），私有日志可能包含提示词、工具参数和返回内容，须按敏感资料管理；不建议日常启用。

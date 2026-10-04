@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { basename } from "node:path";
+import { basename, resolve } from "node:path";
 import type {
   AgentEndEvent,
   AgentToolResult,
@@ -75,7 +75,8 @@ const FLAG_PORT = "channel-port";
 const REGISTRY_CUSTOM_TYPE = "channel/registry";
 const ChannelSendParams = Type.Object({
   channel: Type.String({ description: "目标 Channel 的精确名称（不区分大小写）" }),
-  content: Type.String({ description: "要发送的消息正文或阶段性产物摘要" }),
+  content: Type.Optional(Type.String({ description: "文本正文；发送图片时可省略，附带文字最多 1200 字符" })),
+  image_path: Type.Optional(Type.String({ minLength: 1, description: "仅微信：本地图片路径（相对当前项目或绝对路径），JPEG/PNG/GIF/WebP，最多 10 MiB" })),
   message_id: Type.Optional(Type.String({ description: "Pi 频道重试同一逻辑发送时复用返回的消息 ID；不会重复广播" })),
 });
 
@@ -176,7 +177,8 @@ function registryMessage(session: ChannelSessionIdentity, rows: ChannelPanelRow[
   const lines = mounted.map(({ channel, runtime }) => {
     const direction = runtime?.direction ?? effectiveChannelDirection(channel, session.id);
     const send = allowsOutbound(direction) ? "可通过 channel_send 主动发送" : "仅可接收，禁止向对端发送";
-    return `- name=${JSON.stringify(channel.name)} protocol=${channel.protocol} direction=${direction} scope=${channel.scope.kind} status=${runtime?.status ?? "inactive"} capability=${send}`;
+    const media = channel.protocol === "wechat" && allowsOutbound(direction) ? "；支持 image_path 本地图片发送（最多 10 MiB）" : "";
+    return `- name=${JSON.stringify(channel.name)} protocol=${channel.protocol} direction=${direction} scope=${channel.scope.kind} status=${runtime?.status ?? "inactive"} capability=${send}${media}`;
   });
   return [
     "<channel_registry>",
@@ -371,6 +373,7 @@ export function installChannelExtension(
     if (!allowsOutbound(effectiveChannelDirection(channel, currentSession.id))) {
       throw new Error(`Channel "${channel.name}" is inbound-only in this session`);
     }
+    if (request.imagePath && channel.protocol !== "wechat") throw new Error("图片发送仅支持微信 Channel");
     const runtime = active.get(channel.id);
     if (!runtime?.send) {
       const detail = snapshots.get(channel.id)?.detail;
@@ -483,7 +486,13 @@ export function installChannelExtension(
           },
         });
         runtime.wechat = transport;
-        runtime.send = (request) => transport.send(request.content, request.replyTarget);
+        runtime.send = (request) => {
+          if (request.imagePath) {
+            if (!transport.sendImage) throw new Error("微信传输不支持图片发送");
+            return transport.sendImage(request.imagePath, request.replyTarget, request.content, request.signal);
+          }
+          return transport.send(request.content, request.replyTarget);
+        };
         snapshot.status = transport.status;
         snapshot.detail = transport.detail;
       }
@@ -890,20 +899,29 @@ export function installChannelExtension(
     pi.registerTool<typeof ChannelSendParams, ChannelSendDetails>({
       name: "channel_send",
       label: "Send to Channel",
-      description: "向当前 Pi 会话已挂载的具名 Channel 发送消息或阶段性产物。Channel 名称、方向和状态由 <channel_registry> 提供；仅 outbound/both Channel 可发送。",
-      promptSnippet: "Send text to a named external or local Pi Channel; Pi receipts confirm queuing, not processing.",
+      description: "向当前 Pi 会话已挂载的具名 Channel 发送文本；微信还支持 image_path 本地图片，可附带 content 说明。Channel 名称、方向和状态由 <channel_registry> 提供；仅 outbound/both Channel 可发送。",
+      promptSnippet: "Send text to a named Channel, or a local image via image_path to WeChat; Pi receipts confirm queuing, not processing.",
       executionMode: "sequential",
       renderShell: "self",
       promptGuidelines: [
         "When the user names a Channel and asks to send something, use channel_send with the exact channel name.",
+        "For WeChat images, pass image_path for one local JPEG/PNG/GIF/WebP file up to 10 MiB; content is optional (caption up to 1200 characters). Other protocols only support text. Do not automatically retry failed media sends.",
         "For Pi channels, only delivered=true confirms all targets queued the message, never read or processed; report partial/unknown receipts and errors without claiming full delivery.",
       ],
       parameters: ChannelSendParams,
-      async execute(_toolCallId, params): Promise<AgentToolResult<ChannelSendDetails>> {
+      async execute(_toolCallId, params, signal): Promise<AgentToolResult<ChannelSendDetails>> {
+        const content = params.content ?? "";
+        if ((!content.trim() && !params.image_path) || (params.image_path && params.message_id)) {
+          const error = params.image_path && params.message_id
+            ? "message_id 仅用于 Pi 文本频道，不支持图片发送"
+            : "必须提供非空 content 或 image_path";
+          return { content: [{ type: "text", text: error }], details: { channel: params.channel, delivered: false, error } };
+        }
         const peer = piRuntime?.find(params.channel);
         if (peer) {
           try {
-            const receipt = await piRuntime!.send(params.channel, params.content, params.message_id);
+            if (params.image_path) throw new Error("图片发送仅支持微信 Channel");
+            const receipt = await piRuntime!.send(params.channel, content, params.message_id);
             return {
               content: [{ type: "text", text: `Pi Channel「${peer.name}」投递结果（入队不等于已处理）：${JSON.stringify(receipt)}` }],
               details: { channel: peer.name, protocol: "pi", delivered: receipt.delivered, receipt },
@@ -927,7 +945,10 @@ export function installChannelExtension(
           };
         }
         try {
-          await sendThrough(channel, { content: params.content, session: currentSession });
+          await sendThrough(channel, {
+            content, session: currentSession,
+            ...(params.image_path ? { imagePath: resolve(currentSession.cwd, params.image_path), signal } : {}),
+          });
           return {
             content: [{ type: "text", text: `已发送到 Channel「${channel.name}」` }],
             details: { channel: channel.name, protocol: channel.protocol, delivered: true },

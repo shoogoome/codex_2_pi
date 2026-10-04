@@ -162,7 +162,8 @@ Pi 业务消息固定 **`steer` + 空闲自动唤醒**：运行中在下一次�
 同时注册工具：
 
 ```text
-channel_send(channel: string, content: string, message_id?: string) // message_id 用于 Pi 同 ID 重试查询
+channel_send(channel: string, content?: string, image_path?: string, message_id?: string)
+// 必须提供非空 content 或 image_path；图片仅微信支持；message_id 仅用于 Pi 文本同 ID 查询
 ```
 
 因此下面的跨 Channel 场景可以直接工作：
@@ -286,7 +287,40 @@ X-Pi-Channel: 产物群
 
 联系人 `context_token`、游标和最后联系人写在同目录 `state.json`，均为 `0600`。
 
-当前版本支持微信文字、语音转写文本、引用文本和**图片入站**。图片会从微信可信 CDN 下载，必要时按 iLink `aeskey` 做 AES-128-ECB 解密，经大小与格式校验后，以 Pi 原生 image block 注入当前模型；纯图片消息也会自动补充“请分析图片内容”的文本并按 Channel 的 Delivery/Auto-trigger 设置触发。图片可通过私有多会话 Relay 分发给其它允许入站的挂载会话。`channel_send` 出站和微信文件媒体目前仍仅支持文本。
+当前版本支持微信文字、语音转写文本、引用文本和**图片入站**。图片会从微信可信 CDN 下载，必要时按 iLink `aeskey` 做 AES-128-ECB 解密，经大小与格式校验后，以 Pi 原生 image block 注入当前模型；纯图片消息也会自动补充“请分析图片内容”的文本并按 Channel 的 Delivery/Auto-trigger 设置触发。图片可通过私有多会话 Relay 分发给其它允许入站的挂载会话。`channel_send` 出站支持文本和本地图片；文件、视频、语音媒体发送暂不支持。
+
+### 发送图片
+
+可以直接告诉 Pi：**“把 `output/chart.png` 发到 `wx` 渠道”**。模型使用精确 Channel 名称调用：
+
+```json
+{
+  "channel": "wx",
+  "image_path": "output/chart.png"
+}
+```
+
+附带文字（可选，最多 1200 字符）时：
+
+```json
+{
+  "channel": "wx",
+  "content": "这是本次生成的图表",
+  "image_path": "/absolute/path/chart.png"
+}
+```
+
+- `image_path` 是本地普通文件路径，相对路径按当前 Pi 项目 cwd 解析；不支持 HTTP URL、base64 或 Markdown 图片语法。
+- 支持 JPEG、PNG、GIF、WebP，校验文件头而非扩展名；单张最多 **10 MiB**，每次工具调用发送一张。
+- 可以显式发送项目外的图片，例如 `generate_image` 返回的绝对路径；这会将该文件上传到微信，请只指定你有意分享的图片。
+- 当前会话必须挂载 Channel，方向为 `outbound` 或 `both`。联系人必须先向机器人发送消息，以获得接收人和 `context_token`；主动发送使用最后活跃联系人。
+- `occupied` 会话也可共享凭证和联系人状态发送图片，无需抢占长轮询锁。
+- `content` 可省略；文字与图片放在同一个 iLink 消息的 `item_list` 中。超过 1200 字符的长文本请单独发送。
+- HTTP 和本机 Pi 频道拒绝 `image_path`；不要与仅用于 Pi 文本查询的 `message_id` 同时传入。
+- `/channel send` 仍是文本命令；自动回复仍只回传 assistant 文本，不会自动上传工具生成的图片，发送图片需要显式调用 `channel_send`。
+- 工具仅在上传和 `sendmessage` 均成功后返回 `delivered: true`，表示接口接受，不代表联系人已读。失败或超时不自动重发；发送阶段超时可能已送达，重试可能重复。
+
+底层流程：原图 MD5 + 随机 AES-128-ECB/PKCS#7 加密 → `/ilink/bot/getuploadurl`（`media_type: 1`）→ 微信 CDN 二进制上传 → 从响应头 `x-encrypted-param` 获取下载凭据 → `/ilink/bot/sendmessage`（`item_list[].type: 2`）。`media.aes_key` 是 hex 密钥文本的 base64，`mid_size` 为加密后大小。Bot token 只发给 iLink API，不发给 CDN。
 
 ### 自动回复与主动发送
 
@@ -419,3 +453,4 @@ name=legacy-http · protocol=http · direction=inbound · scope=selected
 - 出站 callback 会携带当前 session 名、ID 与 cwd；不要把 callback 配到不可信服务。
 - 微信 token 只保存在当前 OS 用户的私有文件中；不要提交 `~/.pi/agent/channel/` 的内容。
 - 微信图片仅允许从受信任的微信 CDN HTTPS 域名下载，拒绝重定向；单张下载上限 10 MiB，每条微信消息最多处理 5 张，支持 JPEG、PNG、GIF、WebP。图片以 base64 随 session/私有 Relay 保存，会增加会话文件和模型上下文体积。
+- 微信图片出站仅读取显式指定的本地普通文件，实际读取有大小上限；上传固定使用微信可信 CDN，拒绝重定向，CDN 请求不携带 bot token。上传会将图片交给微信，路径没有项目目录沙箱，请谨慎选择分享文件。

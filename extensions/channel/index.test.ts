@@ -115,6 +115,48 @@ describe("channel extension entrypoint", () => {
     );
   });
 
+  it("routes local image paths to WeChat, preserves direction checks and rejects unsupported channels", async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), "pi-channel-send-image-"));
+    tempRoots.push(agentDir);
+    const wechat = createChannelDefinition({ name: "wx", protocol: "wechat", direction: "outbound", scope: "all", sessionId: "session-1" });
+    const http = createChannelDefinition({ name: "http", protocol: "http", direction: "outbound", scope: "all", sessionId: "session-1", http: { callbackUrl: "https://example.com/callback" } });
+    const inbound = createChannelDefinition({ name: "inbound", protocol: "wechat", direction: "inbound", scope: "all", sessionId: "session-1" });
+    await saveChannelSettings(agentDir, { version: 1, channels: [wechat, http, inbound] });
+    const sendImage = vi.fn(async () => undefined);
+    const send = vi.fn(async () => undefined);
+    const sendHttp = vi.fn(async () => undefined);
+    const harness = buildHarness();
+    installChannelExtension(harness.pi as never, {
+      env: {}, agentDir, sendHttp,
+      startWechat: async () => ({ status: "occupied", send, sendImage, close: async () => undefined }),
+      startRelay: async () => ({ publish: async () => undefined, close: async () => undefined }),
+    });
+    await harness.handlers.get("session_start")!({}, harness.ctx);
+    const tool = harness.tools.get("channel_send")!;
+    const abort = new AbortController();
+    const result = await tool.execute("image", { channel: "wx", image_path: "output/chart.png" }, abort.signal) as any;
+    expect(result.details.delivered).toBe(true);
+    expect(sendImage).toHaveBeenCalledWith("/repo/output/chart.png", undefined, "", abort.signal);
+    await tool.execute("caption", { channel: "wx", image_path: "/tmp/image.png", content: "图表" });
+    expect(sendImage).toHaveBeenLastCalledWith("/tmp/image.png", undefined, "图表", undefined);
+    expect(send).not.toHaveBeenCalled();
+    for (const params of [
+      { channel: "http", image_path: "image.png" },
+      { channel: "inbound", image_path: "image.png" },
+      { channel: "wx", content: " " },
+      { channel: "wx", image_path: "image.png", message_id: "id" },
+    ]) {
+      const failed = await tool.execute("invalid", params) as any;
+      expect(failed.details.delivered).toBe(false);
+    }
+    expect(sendHttp).not.toHaveBeenCalled();
+    expect(sendImage).toHaveBeenCalledTimes(2);
+    sendImage.mockRejectedValueOnce(new Error("upload failed"));
+    const failed = await tool.execute("failure", { channel: "wx", image_path: "image.png" }) as any;
+    expect(failed.details).toMatchObject({ delivered: false, error: "upload failed" });
+    await harness.handlers.get("session_shutdown")!({}, harness.ctx);
+  });
+
   it("enforces the current session's direction override in registry and channel_send", async () => {
     const agentDir = await mkdtemp(join(tmpdir(), "pi-channel-index-"));
     tempRoots.push(agentDir);
