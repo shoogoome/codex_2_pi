@@ -107,6 +107,15 @@ export interface RunningWechatTransport {
   close(): Promise<void>;
 }
 
+export class WechatImageCaptionError extends Error {
+  readonly imageDelivered = true;
+
+  constructor(cause: unknown) {
+    super(`图片已发送，但说明文字发送失败；请勿重发图片，仅重试文字：${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    this.name = "WechatImageCaptionError";
+  }
+}
+
 export class WechatNotLoggedInError extends Error {
   constructor(channelName: string) {
     super(`微信 Channel "${channelName}" 尚未登录，请在 /channel 面板选择登录/认证，或执行 /channel auth ${channelName}`);
@@ -395,6 +404,7 @@ async function sendWechatText(input: {
   state: WechatPersistedState;
   content: string;
   replyTarget?: string;
+  signal?: AbortSignal;
   fetcher?: typeof fetch;
 }): Promise<void> {
   const userId = input.replyTarget || input.state.lastUserId;
@@ -418,7 +428,7 @@ async function sendWechatText(input: {
         },
         base_info: baseInfo(),
       },
-      { timeoutMs: 15_000, fetcher: input.fetcher },
+      { timeoutMs: 15_000, fetcher: input.fetcher, signal: input.signal },
     );
   }
 }
@@ -471,7 +481,6 @@ async function sendWechatImage(input: {
       from_user_id: "", to_user_id: userId, client_id: randomUUID(),
       message_type: 2, message_state: 2, context_token: contextToken,
       item_list: [
-        ...(input.content?.trim() ? [{ type: 1, text_item: { text: input.content.trim() } }] : []),
         { type: 2, image_item: {
           media: { encrypt_query_param: downloadParam, aes_key: Buffer.from(image.aesKey, "utf8").toString("base64"), encrypt_type: 1 },
           mid_size: image.encrypted.length,
@@ -479,6 +488,22 @@ async function sendWechatImage(input: {
       ],
     }, base_info: baseInfo(),
   }, { ...options, timeoutMs: 15_000 });
+  // iLink rejects mixed text/image item_list with "invalid arguments".
+  // Send the caption separately and preserve the original image recipient.
+  if (input.content?.trim()) {
+    try {
+      await sendWechatText({
+        channelName: input.channelName,
+        credentials: input.credentials,
+        state: input.state,
+        content: input.content,
+        replyTarget: userId,
+        ...options,
+      });
+    } catch (error) {
+      throw new WechatImageCaptionError(error);
+    }
+  }
 }
 
 export async function startWechatTransport(options: {

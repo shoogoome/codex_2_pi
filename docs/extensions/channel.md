@@ -315,10 +315,10 @@ X-Pi-Channel: 产物群
 - 可以显式发送项目外的图片，例如 `generate_image` 返回的绝对路径；这会将该文件上传到微信，请只指定你有意分享的图片。
 - 当前会话必须挂载 Channel，方向为 `outbound` 或 `both`。联系人必须先向机器人发送消息，以获得接收人和 `context_token`；主动发送使用最后活跃联系人。
 - `occupied` 会话也可共享凭证和联系人状态发送图片，无需抢占长轮询锁。
-- `content` 可省略；文字与图片放在同一个 iLink 消息的 `item_list` 中。超过 1200 字符的长文本请单独发送。
+- `content` 可省略；有说明时，先发图片，再单独发送一条文字消息，使用同一接收人。微信 iLink 会拒绝同一个 `item_list` 混放图片和文字（`invalid arguments`）。超过 1200 字符的长文本请单独发送。
 - HTTP 和本机 Pi 频道拒绝 `image_path`；不要与仅用于 Pi 文本查询的 `message_id` 同时传入。
 - `/channel send` 仍是文本命令；自动回复仍只回传 assistant 文本，不会自动上传工具生成的图片，发送图片需要显式调用 `channel_send`。
-- 工具仅在上传和 `sendmessage` 均成功后返回 `delivered: true`，表示接口接受，不代表联系人已读。失败或超时不自动重发；发送阶段超时可能已送达，重试可能重复。
+- 工具仅在图片及可选说明均发送成功后返回 `delivered: true`，表示接口接受，不代表联系人已读。若只有说明发送失败，返回 `delivered: false`、`imageDelivered: true` 并提示“图片已发送”，此时只补发文字，不重发图片。其它失败或超时不自动重发；发送阶段超时可能已送达，重试可能重复。
 
 底层流程：原图 MD5 + 随机 AES-128-ECB/PKCS#7 加密 → `/ilink/bot/getuploadurl`（`media_type: 1`）→ 微信 CDN 二进制上传 → 从响应头 `x-encrypted-param` 获取下载凭据 → `/ilink/bot/sendmessage`（`item_list[].type: 2`）。`media.aes_key` 是 hex 密钥文本的 base64，`mid_size` 为加密后大小。Bot token 只发给 iLink API，不发给 CDN。
 

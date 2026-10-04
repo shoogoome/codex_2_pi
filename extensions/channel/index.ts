@@ -53,6 +53,7 @@ import {
 import {
   loginWechatChannel,
   startWechatTransport,
+  WechatImageCaptionError,
   type RunningWechatTransport,
   type WechatInboundMessage,
 } from "./src/wechat.js";
@@ -86,6 +87,7 @@ interface ChannelSendDetails {
   protocol?: string;
   error?: string;
   receipt?: unknown;
+  imageDelivered?: boolean;
 }
 
 interface ActiveChannel {
@@ -957,7 +959,10 @@ export function installChannelExtension(
           const text = error instanceof Error ? error.message : String(error);
           return {
             content: [{ type: "text", text }],
-            details: { channel: channel.name, delivered: false, error: text },
+            details: {
+              channel: channel.name, delivered: false, error: text,
+              ...(error instanceof WechatImageCaptionError ? { imageDelivered: true } : {}),
+            },
           };
         }
       },

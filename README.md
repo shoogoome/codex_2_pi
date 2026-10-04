@@ -79,7 +79,7 @@
 
 - **作用域**：默认多会话（在各会话面板按 `m` 挂载），也可选全部会话；旧单会话配置自动迁移为多会话挂载。
 - **方向**：每个 Pi 会话可分别设置对端 → Pi、Pi → 对端或双向；微信只由一个会话长轮询，再把入站消息分发给所有允许入站的挂载会话，所有允许出站的会话都可共享发送。
-- **协议**：HTTP 入站 listener + 出站 callback；微信 iLink/ClawBot 扫码登录、文本收发、图片入站分析，以及本地图片加密上传发送（JPEG/PNG/GIF/WebP，最多 10 MiB）。用 `channel_send(channel="wx", image_path="output/chart.png", content="可选说明")` 发图；相对路径按当前项目解析，自动回复和 `/channel send` 仍仅发送文本。
+- **协议**：HTTP 入站 listener + 出站 callback；微信 iLink/ClawBot 扫码登录、文本收发、图片入站分析，以及本地图片加密上传发送（JPEG/PNG/GIF/WebP，最多 10 MiB）。用 `channel_send(channel="wx", image_path="output/chart.png", content="可选说明")` 发图（图片先发送，说明单独一条；iLink 不支持图文混合 item）；相对路径按当前项目解析，自动回复和 `/channel send` 仍仅发送文本。
 - **名称路由**：Pi 每轮感知已挂载 Channel 名称；用户从微信要求“给 `产物群` 发送阶段结果”时，Pi 可调用 `channel_send(channel="产物群", ...)`。
 
 原有环境变量配置保持兼容：设置 `PI_CHANNEL_TOKEN` 仍会得到只读的 `legacy-http` 入站 Channel，默认监听 `0.0.0.0:4317`。HTTP 入站继续使用 `POST /v1/messages`、Bearer 鉴权、幂等和限流：

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { installChannelExtension } from "./index.js";
 import { createChannelDefinition, saveChannelSettings } from "./src/store.js";
+import { WechatImageCaptionError } from "./src/wechat.js";
 
 interface Harness {
   pi: Record<string, unknown>;
@@ -154,6 +155,9 @@ describe("channel extension entrypoint", () => {
     sendImage.mockRejectedValueOnce(new Error("upload failed"));
     const failed = await tool.execute("failure", { channel: "wx", image_path: "image.png" }) as any;
     expect(failed.details).toMatchObject({ delivered: false, error: "upload failed" });
+    sendImage.mockRejectedValueOnce(new WechatImageCaptionError(new Error("caption failed")));
+    const partial = await tool.execute("partial", { channel: "wx", image_path: "image.png", content: "说明" }) as any;
+    expect(partial.details).toMatchObject({ delivered: false, imageDelivered: true, error: expect.stringContaining("图片已发送") });
     await harness.handlers.get("session_shutdown")!({}, harness.ctx);
   });
 

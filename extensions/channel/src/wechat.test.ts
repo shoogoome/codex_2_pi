@@ -171,7 +171,7 @@ describe("WeChat ClawBot channel", () => {
         expect(upload.filekey).toMatch(/^[0-9a-f]{32}$/);
         const decipher = createDecipheriv("aes-128-ecb", Buffer.from(upload.aeskey, "hex"), null);
         expect(Buffer.concat([decipher.update(uploaded[i]), decipher.final()])).toEqual(png);
-        const body = sentBodies[i + 2] as any;
+        const body = sentBodies[i === 0 ? 2 : 4] as any;
         expect(body.msg).toMatchObject({ to_user_id: "wx-user-1", context_token: "context-1", message_type: 2, message_state: 2 });
         expect(body.msg.item_list.at(-1)).toEqual({
           type: 2, image_item: {
@@ -180,8 +180,9 @@ describe("WeChat ClawBot channel", () => {
           },
         });
       }
-      expect((sentBodies[2] as any).msg.item_list[0]).toEqual({ type: 1, text_item: { text: "这是截图" } });
-      expect((sentBodies[3] as any).msg.item_list).toHaveLength(1);
+      expect((sentBodies[2] as any).msg.item_list).toHaveLength(1);
+      expect((sentBodies[3] as any).msg.item_list).toEqual([{ type: 1, text_item: { text: "这是截图" } }]);
+      expect((sentBodies[4] as any).msg.item_list).toHaveLength(1);
     } finally {
       await sharedTransport.close();
       await transport.close();
