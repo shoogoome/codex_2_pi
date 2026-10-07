@@ -69,7 +69,7 @@ describe("WeChat outbound image failures", () => {
   it.each([
     [{}, 200, "download", "upload_param"],
     [{ upload_full_url: "https://evil.example/upload?encrypted_query_param=x" }, 200, "download", "受信任"],
-    [{ ret: -1, errmsg: "upload denied" }, 200, "download", "upload denied"],
+    [{ ret: -1, errmsg: "prepare failed" }, 200, "download", "/ilink/bot/getuploadurl: prepare failed (code -1)"],
     [{ upload_param: "upload" }, 503, "download", "HTTP 503"],
     [{ upload_param: "upload" }, 200, null, "x-encrypted-param"],
   ] as const)("does not send a message after upload failure %#", async (response, status, downloadParam, error) => {
@@ -99,6 +99,6 @@ describe("WeChat outbound image failures", () => {
     fetcher.mockImplementationOnce(async () => Response.json({ upload_param: "upload" }));
     fetcher.mockImplementationOnce(async () => new Response(null, { headers: { "x-encrypted-param": "download" } }));
     fetcher.mockImplementationOnce(async () => Response.json({ ret: -14, errmsg: "expired context" }));
-    await expect(transport.sendImage!(image)).rejects.toThrow("expired context");
+    await expect(transport.sendImage!(image)).rejects.toThrow("/ilink/bot/sendmessage: expired context (code -14)");
   });
 });

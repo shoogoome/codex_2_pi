@@ -192,7 +192,9 @@ async function parseResponse<T>(response: Response, label: string): Promise<T> {
   }
   if (!response.ok || (typeof body.ret === "number" && body.ret !== 0)) {
     const code = body.errcode ?? body.ret;
-    const error = new Error(body.errmsg || `${label} failed with HTTP ${response.status}`) as Error & { code?: number };
+    // Preserve the API stage without exposing tokens or signed media URLs.
+    const reason = body.errmsg || `HTTP ${response.status}`;
+    const error = new Error(`${label}: ${reason}${typeof code === "number" ? ` (code ${code})` : ""}`) as Error & { code?: number };
     error.code = code;
     throw error;
   }

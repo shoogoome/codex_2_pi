@@ -320,6 +320,8 @@ X-Pi-Channel: 产物群
 - `/channel send` 仍是文本命令；自动回复仍只回传 assistant 文本，不会自动上传工具生成的图片，发送图片需要显式调用 `channel_send`。
 - 工具仅在图片及可选说明均发送成功后返回 `delivered: true`，表示接口接受，不代表联系人已读。若只有说明发送失败，返回 `delivered: false`、`imageDelivered: true` 并提示“图片已发送”，此时只补发文字，不重发图片。其它失败或超时不自动重发；发送阶段超时可能已送达，重试可能重复。
 
+故障诊断：API 错误会保留接口路径和错误码，例如 `/ilink/bot/getuploadurl: prepare failed (code ...)` 或 `/ilink/bot/sendmessage: prepare failed (code ...)`。`prepare failed` 是服务端错误，不能仅凭这个字符串断定图片损坏或登录失效；请按失败阶段排查，不自动重发。
+
 底层流程：原图 MD5 + 随机 AES-128-ECB/PKCS#7 加密 → `/ilink/bot/getuploadurl`（`media_type: 1`）→ 微信 CDN 二进制上传 → 从响应头 `x-encrypted-param` 获取下载凭据 → `/ilink/bot/sendmessage`（`item_list[].type: 2`）。`media.aes_key` 是 hex 密钥文本的 base64，`mid_size` 为加密后大小。Bot token 只发给 iLink API，不发给 CDN。
 
 ### 自动回复与主动发送
