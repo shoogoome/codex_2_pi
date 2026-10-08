@@ -22,7 +22,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 | `/autopilot [on [目标]\|off\|status]` | autopilot | 自主续跑控制器 |
 | `/loop [interval] <prompt>`、`/loop list`、`/loop cancel <id\|all>` | loop | 定时重复运行提示词或斜杠命令；创建后立即执行一次 |
 | `/effort [status\|off\|minimal\|low\|medium\|high\|xhigh\|max\|ultra]`、`/model`、`Alt+,` / `Alt+.` | effort + ultra | 两级选择 thinking；Ultra 为 Sol/Terra 开启 wire max、自动激活 `task_agent` 与主动并行 workflow（Plan 模式暂停） |
-| `/fast [on\|off\|status]` · `/ultrafast [on\|off\|status]` | fast-mode | 为 openai-codex OAuth 请求切换 priority / ultrafast；UltraFast 限 GPT-6 Astra，需符合资格的订阅，Pro $200 不支持 |
+| `/fast [on\|off\|status]` · `/ultrafast [on\|off\|status]` | fast-mode | 为 openai-codex OAuth 请求切换 priority / ultrafast；UltraFast 支持 GPT 模型，需符合资格的订阅，Pro $200 不支持 |
 | `/login cursor`、`/model cursor`、`/cursor [status\|models\|refresh\|usage]` | cursor | 使用 Cursor 订阅模型，工具仍由 Pi 执行；详见 `docs/extensions/cursor.md` |
 | `/local-models [list\|pull\|ensure_ready]`, `/ollama`, `/lm` | local-models | 发现/拉取/就绪检查本地模型(Ollama/LM Studio) |
 | `/mcp [list\|status\|add\|remove\|reconnect]` | mcp | 管理 MCP server 连接 |
@@ -87,7 +87,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **复用已有 Claude/Cursor 配置**：`/migrate`。
 - **跨会话记住偏好/事实**：memory 默认自动初始化、召回和按需提炼；`/remember`、`/memory` 只在需要强制记录、查看或纠错时使用。
 - **调模型推理强度 / 开 Codex Ultra 编排**：`/effort` 或 `/model` 两级选择器；Sol/Terra 的 Ultra 会自动激活 `task_agent`，在适合时并行委派并等待自动终态结果综合。
-- **Codex 订阅加速**：`/fast` 请求 priority，`/ultrafast` 请求 GPT-6 Astra 的 ultrafast；二者互斥，与 reasoning effort 独立。扩展仅支持 openai-codex OAuth，不能验证或解锁服务端权限；UltraFast 需 Pro $500 或符合条件的 Enterprise/Edu，Pro $200 不支持。详见 `docs/extensions/fast-mode.md`。
+- **Codex 订阅加速**：`/fast` 请求 priority，`/ultrafast` 请求 GPT 模型的 ultrafast；二者互斥，与 reasoning effort 独立。扩展仅支持 openai-codex OAuth，不能验证或解锁服务端权限；UltraFast 需 Pro $500 或符合条件的 Enterprise/Edu，Pro $200 不支持。详见 `docs/extensions/fast-mode.md`。
 - **使用 Cursor 订阅模型**：`/login cursor` → `/cursor refresh` → `/model cursor`；不需要 cursor-agent，也不读取 Keychain/IDE 登录态。原生 HTTP/2 协议为社区实现，`/cursor usage` 查询服务端计费周期、套餐与按量用量（不计入 Pi 的 token 估算），订阅额度/计费以 Cursor 为准；详见 `docs/extensions/cursor.md`。
 - **用本地模型**：`/local-models list` / `pull` / `ensure_ready`。
 - **要花了多少钱 / 用了多少 token**：`/cost`。

@@ -15,7 +15,7 @@ export type FastModel = Pick<Model<any>, "api" | "id" | "provider">;
 
 export type FastAvailability =
   | { active: true }
-  | { active: false; reason: "no-model" | "unsupported-model" | "oauth-required" | "ultrafast-model-required" };
+  | { active: false; reason: "no-model" | "unsupported-model" | "oauth-required" };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -35,9 +35,6 @@ export function getFastAvailability(
   if (!model) return { active: false, reason: "no-model" };
   if (!isFastCapableModel(model)) return { active: false, reason: "unsupported-model" };
   if (!usingOAuth) return { active: false, reason: "oauth-required" };
-  if (tier === ULTRAFAST_SERVICE_TIER && model.id !== "gpt-6-astra") {
-    return { active: false, reason: "ultrafast-model-required" };
-  }
   // Local routing eligibility only; this does not establish account entitlement.
   return { active: true };
 }
@@ -54,8 +51,6 @@ export function applyFastServiceTier(
   if (!options.enabled || !isRecord(payload)) return payload;
   const tier = options.tier ?? FAST_SERVICE_TIER;
   if (!getFastAvailability(options.model, options.usingOAuth, tier).active) return payload;
-  // Nested requests may use a different model than the active session model.
-  if (tier === ULTRAFAST_SERVICE_TIER && payload.model !== options.model?.id) return payload;
   if (payload.service_tier === tier) return payload;
   return { ...payload, service_tier: tier };
 }

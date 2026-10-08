@@ -35,9 +35,9 @@ footer 显示 `⚡ fast` 或 `⚡ ultrafast (requested)`。后者仅表示请求
 | 模式 | 参数 | 本地模型条件 |
 |---|---|---|
 | Fast | `service_tier: "priority"` | 任意 `openai-codex` / `openai-codex-responses` 模型 |
-| UltraFast | `service_tier: "ultrafast"` | 同上，且模型 ID 为 `gpt-6-astra`，请求中的模型 ID 也必须一致 |
+| UltraFast | `service_tier: "ultrafast"` | 任意 `openai-codex` / `openai-codex-responses` GPT 模型 |
 
-两种档位均要求 ChatGPT/Codex 订阅 OAuth；API-key 和其他 provider 请求保持原样。Fast 现有实现不使用模型 ID 白名单，但这不代表服务端支持所有模型的 Fast 档位。
+两种档位均要求 ChatGPT/Codex 订阅 OAuth；API-key 和其他 provider 请求保持原样。两种档位均支持 Codex Responses GPT 模型，最终服务端权限以账户授权为准。
 
 切换到不符合条件的模型时，保留配置但停止注入；切回后恢复。不会把不支持的 UltraFast 自动改为 Fast，也不会捕获服务端权限错误后偷偷重试。关闭模式只是停止本扩展的覆盖，不会删除其他来源设置的 `service_tier`。
 
@@ -45,13 +45,13 @@ footer 显示 `⚡ fast` 或 `⚡ ultrafast (requested)`。后者仅表示请求
 
 根据当前官方文档：
 
-- Codex 订阅 UltraFast 支持 **GPT-6 Astra**。
+- Codex 订阅 UltraFast 支持符合本地 Codex Responses 接口条件的 GPT 模型；扩展不再限制特定模型 ID。
 - 开放给 **Pro $500** 及符合条件的 **Enterprise / Edu**；**Pro $200 不支持**，购买额外 credits 也不能解锁。
 - Enterprise 默认关闭，需要工作区管理员授权；美国以外推理驻留不支持。
 - GPT-6 Astra token 生成速度最高为 Standard 的 8 倍，不代表整体任务时间缩短 8 倍。
 - 订阅内额度按 Standard 的 **8 倍**消耗；购买 credits / Enterprise 按量计费按 **6 倍**，企业合同另有约定则以合同为准。
 
-扩展没有账户服务档位查询接口，**无法验证订阅档位或工作区授权**。开启、恢复 UltraFast 会提示上述限制；最终授权、采用档位和计费以服务端为准。Pro $200 用户不应把此开关视为权限解锁。
+扩展没有账户服务档位查询接口，**无法验证订阅档位或工作区授权**。开启、恢复 UltraFast 会提示上述限制；最终授权、采用档位和计费以服务端为准。模型范围由扩展按 Codex Responses GPT 模型统一处理。
 
 API UltraFast 是独立的 API-key 计费路径，目前 GPT-6 Astra 广泛开放、GPT-5.6 Sol 为预览；本扩展仍保持仅订阅 OAuth 的范围，不会将订阅请求切换为 API 付费请求。
 
