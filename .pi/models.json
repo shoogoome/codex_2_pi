@@ -1107,8 +1107,8 @@
       },
       "models": [
         {
-          "id": "deepseek-v4-flash-0731",
-          "name": "DeepSeek V4 Flash 0731 (2x DGX Spark)",
+          "id": "deepseek-ai/DeepSeek-V4.1-Flash",
+          "name": "DeepSeek V4.1 Flash (2x DGX Spark, 512K)",
           "reasoning": true,
           "thinkingLevelMap": {
             "minimal": null,
@@ -1119,9 +1119,10 @@
             "max": "max"
           },
           "input": [
-            "text"
+            "text",
+            "image"
           ],
-          "contextWindow": 262144,
+          "contextWindow": 524288,
           "maxTokens": 65536,
           "cost": {
             "input": 0,
