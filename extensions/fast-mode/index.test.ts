@@ -225,7 +225,7 @@ describe("UltraFast", () => {
     expect(result).toEqual({ ...payload, service_tier: "ultrafast" });
     expect(payload.service_tier).toBe("priority");
     expect(applyFastServiceTier(result, options)).toBe(result);
-    expect(applyFastServiceTier({ model: codexModel.id }, options)).toEqual({ model: codexModel.id });
+    expect(applyFastServiceTier({ model: codexModel.id }, options)).toEqual({ model: codexModel.id, service_tier: "ultrafast" });
     expect(applyFastServiceTier(null, options)).toBeNull();
     expect(applyFastServiceTier([], options)).toEqual([]);
   });
@@ -233,7 +233,7 @@ describe("UltraFast", () => {
   it("leaves unsupported models and auth untouched", () => {
     const payload = { model: astraModel.id };
     const options = { enabled: true, model: astraModel as any, usingOAuth: true, tier: "ultrafast" as const };
-    expect(applyFastServiceTier(payload, { ...options, model: codexModel as any })).toBe(payload);
+    expect(applyFastServiceTier(payload, { ...options, model: codexModel as any })).toEqual({ ...payload, service_tier: "ultrafast" });
     expect(applyFastServiceTier(payload, { ...options, usingOAuth: false })).toBe(payload);
     expect(applyFastServiceTier(payload, { ...options, model: undefined })).toBe(payload);
     expect(applyFastServiceTier(payload, { ...options, model: { ...astraModel, provider: "openai" } as any })).toBe(payload);
@@ -268,12 +268,12 @@ describe("UltraFast", () => {
     expect(await fire(h.handlers, "before_provider_request", event, h.ctx)).toBeUndefined();
   });
 
-  it("rejects unsupported enable attempts without replacing Fast", async () => {
+  it("allows UltraFast for every Codex Responses model", async () => {
     const h = createHarness();
     await h.commands.get("fast").handler("on", h.ctx);
     await h.commands.get("ultrafast").handler("on", h.ctx);
-    expect(h.entries).toHaveLength(1);
-    expect(h.notifications.at(-1)?.message).toContain("GPT-6 Astra");
+    expect(h.entries.at(-1)?.data).toEqual({ enabled: true, tier: "ultrafast" });
+    expect(h.notifications.at(-1)?.message).not.toContain("GPT-6 Astra");
     const apiKey = createHarness({ model: astraModel, oauth: false });
     await apiKey.commands.get("ultrafast").handler("on", apiKey.ctx);
     expect(apiKey.entries).toEqual([]);
@@ -299,15 +299,15 @@ describe("UltraFast", () => {
     expect(await fire(off.handlers, "before_provider_request", event, off.ctx)).toBeUndefined();
   });
 
-  it("pauses on model switch and resumes on Astra without fallback", async () => {
+  it("keeps UltraFast active when switching between Codex models", async () => {
     const h = createHarness({ model: astraModel });
     await h.commands.get("ultrafast").handler("on", h.ctx);
     h.ctx.model = codexModel;
     await fire(h.handlers, "model_select", { model: codexModel }, h.ctx);
-    expect(h.statuses.at(-1)?.value).toBeUndefined();
-    expect(await fire(h.handlers, "before_provider_request", { payload: { model: codexModel.id } }, h.ctx)).toBeUndefined();
+    expect(h.statuses.at(-1)?.value).toContain("ultrafast");
+    expect(await fire(h.handlers, "before_provider_request", { payload: { model: codexModel.id } }, h.ctx)).toEqual({ model: codexModel.id, service_tier: "ultrafast" });
     await h.commands.get("ultrafast").handler("status", h.ctx);
-    expect(h.notifications.at(-1)?.message).toContain("inactive");
+    expect(h.notifications.at(-1)?.message).not.toContain("inactive");
     h.ctx.model = astraModel;
     await fire(h.handlers, "model_select", { model: astraModel }, h.ctx);
     expect(h.statuses.at(-1)?.value).toContain("ultrafast");

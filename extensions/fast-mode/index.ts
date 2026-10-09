@@ -40,8 +40,6 @@ function availabilityMessage(model: CurrentModel, availability: FastAvailability
       return `${name} mode is unavailable for ${modelLabel(model)}. It requires an OpenAI Codex Responses model.`;
     case "oauth-required":
       return `${name} mode requires openai-codex ChatGPT subscription OAuth; API-key requests are left unchanged.`;
-    case "ultrafast-model-required":
-      return "UltraFast subscription routing currently requires GPT-6 Astra (gpt-6-astra).";
   }
 }
 
@@ -59,7 +57,7 @@ export default function fastModeExtension(
     default: false,
   });
   pi.registerFlag("ultrafast", {
-    description: "Request GPT-6 Astra UltraFast (requires eligible subscription; increased usage). Takes precedence over --fast.",
+    description: "Request UltraFast routing for GPT models (requires eligible subscription; increased usage). Takes precedence over --fast.",
     type: "boolean",
     default: false,
   });
