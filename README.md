@@ -63,6 +63,7 @@
 | `extensions/token-speed` | 底部展示 token 生成速度(tok/s):流式实时估算 + 每条响应精确测量，含 TTFT、会话加权平均与最近序列。 | `/speed` · `/speed on\|off\|status` · `--token-speed=false` |
 | `extensions/cost-usage` | 只读追踪会话美元成本、按模型 token、时长与编辑增删行，并在 OAuth 模式查看 Codex 订阅套餐额度与重置时间。 | `/cost` · `/usage` |
 | `extensions/web` | 浏览器 Web UI：管理整机 `~/.pi/agent/sessions` 的 Pi 会话并从 CLI 到 Web 聊天；后端零依赖 HTTP + SSE，每个会话一个 `pi --mode rpc` 子进程，支持流式事件/工具调用/图片/审批对话框。 | `/web` · `/web status\|stop` · `--web` / `--web-host` / `--web-port` / `--web-token` |
+| `extensions/honeypot` | LLM 攻防蜜罐实验：同步 jailbreak-prompts、DecoyPot/CTF 场景、NERV 风格蓝队检测与 prompt-manager 清单导出（授权红队评测）。 | `/honeypot` · `--honeypot=true` · [详情](docs/extensions/honeypot.md) |
 
 ## Named Channels（HTTP + 微信 ClawBot + 本机 Pi）
 
