@@ -28,6 +28,7 @@ import {
 import { buildProviderInjectionBlock, nervStackActive } from "./src/nerv-stack.js";
 import { injectProviderPayload } from "./src/provider-inject.js";
 import { extractText } from "./src/message-text.js";
+import { activateHoneypot, deactivateProfile, resolveDefaultBundleId } from "./src/activate.js";
 import { createL2TamperHandler } from "./src/l2-tamper-handler.js";
 import {
   buildExportManifest,
@@ -362,7 +363,34 @@ export default function honeypotExtension(pi: ExtensionAPI): void {
       const sub = parts[0]?.toLowerCase() ?? "";
 
       if (sub === "" || sub === "help") {
-        ctx.ui.notify(formatHelp(), "info");
+        ctx.ui.notify(formatHelpSimple(), "info");
+        return;
+      }
+
+      if (sub === "help-advanced" || sub === "advanced") {
+        ctx.ui.notify(formatHelpAdvanced(), "info");
+        return;
+      }
+
+      if (sub === "start" || sub === "on") {
+        const bundleId = resolveDefaultBundleId(parts[1]);
+        const result = activateHoneypot(repoDir, bundleId);
+        if (!result.ok || !result.profile) {
+          ctx.ui.notify(result.message, "error");
+          return;
+        }
+        contextProfile = result.profile;
+        persistContext();
+        labModeManual = true;
+        ctx.ui.notify(result.message, "info");
+        return;
+      }
+
+      if (sub === "stop" || sub === "off") {
+        labModeManual = false;
+        contextProfile = deactivateProfile();
+        persistContext();
+        ctx.ui.notify("Honeypot stopped. Pi uses normal context again.", "info");
         return;
       }
 
@@ -518,23 +546,6 @@ export default function honeypotExtension(pi: ExtensionAPI): void {
         return;
       }
 
-      if (sub === "on" || sub === "off") {
-        labModeManual = sub === "on";
-        if (sub === "on" && contextProfile.bridge === "none") {
-          contextProfile = {
-            ...contextProfile,
-            bridge: "lab",
-            mode: contextProfile.mode === "inherit" ? "bridge" : contextProfile.mode,
-          };
-          persistContext();
-        }
-        ctx.ui.notify(
-          `honeypot lab ${sub === "on" ? "enabled" : "disabled"} (session); NERV stack via extension hooks`,
-          "info",
-        );
-        return;
-      }
-
       if (sub === "stack") {
         const action = parts[1]?.toLowerCase();
         if (action === "off") {
@@ -645,7 +656,7 @@ export default function honeypotExtension(pi: ExtensionAPI): void {
         return;
       }
 
-      ctx.ui.notify(`Unknown subcommand "${sub}". ${formatHelp()}`, "error");
+      ctx.ui.notify(`Unknown subcommand "${sub}". ${formatHelpSimple()}`, "error");
     },
   });
 }
@@ -668,20 +679,26 @@ function startScenario(
   ctx.ui.notify(`Started honeypot scenario: ${scenario.id}`, "info");
 }
 
-function formatHelp(): string {
+function formatHelpSimple(): string {
   return [
-    "Usage:",
-    "  /honeypot on|off|status",
-    "  /honeypot apply <bundle-id> [append|replace|bridge]  (default bridge + NERV stack)",
-    "  /honeypot stack on|off|status   (L1 INJ / L2 TMP / L3 deliver)",
-    "  /honeypot context status|clear|mode <m>",
-    "  /honeypot bridge lab|nerv|off|<path>",
-    "  /honeypot sources|scenarios|list",
-    "  /honeypot update|export",
-    "  /honeypot run <scenario>",
-    "  /honeypot probe <bundle-id>",
-    "Flags: --honeypot=true · --honeypot-bundle=<id> · --honeypot-context-mode=bridge",
-    "Env: PI_HONEYPOT=1 · PI_HONEYPOT_BRIDGE=<bridge.md>",
+    "Simple (Codex):",
+    "  /honeypot start              → one-click: lab + bridge + default bundle (xsser-codex)",
+    "  /honeypot start codex-red-team",
+    "  /honeypot stop               → off, restore normal Pi context",
+    "  /honeypot status",
+    "",
+    "CLI: pi --honeypot=true --honeypot-bundle=xsser-codex",
+    "",
+    "Advanced: /honeypot help-advanced",
+  ].join("\n");
+}
+
+function formatHelpAdvanced(): string {
+  return [
+    "Advanced:",
+    "  /honeypot apply <bundle-id> [append|replace|bridge]",
+    "  /honeypot stack|context|bridge|list|update|run|probe …",
+    "Env: PI_HONEYPOT_DEFAULT_BUNDLE · PI_HONEYPOT_BRIDGE",
   ].join("\n");
 }
 

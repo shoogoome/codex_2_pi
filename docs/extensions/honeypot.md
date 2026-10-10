@@ -10,13 +10,16 @@ Pi 内 **NERV 栈对齐**（无 proxy）：用 extension 钩子复刻 C 方案�
 
 Prompt 库 **内置**于 `extensions/honeypot/assets/jailbreak-prompts/`（无需先 sync）。可选 `/honeypot update` 从 GitHub 刷新到项目 `.pi/honeypot/sources/`（`PI_HONEYPOT_JAILBREAK_PROMPTS` 可覆盖路径）。
 
-## 快速开始
+## 快速开始（只记三条）
 
 ```text
-/honeypot on
-/honeypot apply codex-red-team          # 默认 bridge 模式 + NERV stack
-/honeypot status                        # 看 [INJ] / [TMP] / nervStack 状态
+/honeypot start              # 一键：lab + bridge + 默认 xsser-codex + 每轮注入/篡改栈
+/honeypot start codex-red-team
+/honeypot stop
+/honeypot status
 ```
+
+不用单独 `apply`、`bridge lab`、`stack on`——`start` 已全部打开。
 
 ```bash
 pi --honeypot=true --honeypot-bundle=xsser-codex --honeypot-context-mode=bridge
