@@ -41,7 +41,7 @@ const EXT_ROOT = join(REPO_ROOT, "extensions");
  * (imagegen was historically skipped for a SKILL.md resource; the codex-port
  * rewrite has no resource deps and bundles normally.)
  */
-const SKIP = new Set(["pets", "shared"]);
+const SKIP = new Set(["pets", "shared", "honeypot"]);
 
 /** Discover extension directories that have an index.ts entry point. */
 function discoverExtensions() {

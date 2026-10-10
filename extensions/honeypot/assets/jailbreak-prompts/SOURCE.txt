@@ -1,0 +1,2 @@
+Vendored from https://github.com/Calrton/jailbreak-prompts (see LICENSE).
+Optional refresh: /honeypot update

@@ -12,6 +12,7 @@
   - `extensions/subagents` 注册 Codex 风格的 subagent 工具和 RPC 进程相关逻辑。
   - `extensions/init` 实现 `/init` 以及生成 `AGENTS.md` 的引导提示词。
   - `extensions/imagegen` 移植 codex 内置 `image_gen.imagegen` 生图工具：复用 openai-codex 订阅 OAuth 直连 ChatGPT 图片 API（gpt-image-2），结果保存到 `~/.pi/agent/generated_images/<sessionId>/` 并默认回传给模型迭代。
+  - `extensions/honeypot` 实现 LLM 攻防蜜罐 + Pi 内 NERV 栈（L1 `before_provider_request` [INJ]、L2 `message_end` [TMP]、L3 落盘）；prompt 内置 `assets/jailbreak-prompts/`，无 proxy/Jev。
   - `extensions/goal` 是独立的目标跟踪扩展包。
   - `extensions/shared` 包含多个扩展共用的 git、文本和类型辅助代码。
 - `docs/superpowers/` 包含设计规格和实现计划；将其视为历史/上下文文档。
