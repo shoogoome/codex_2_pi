@@ -28,8 +28,7 @@ export function injectProviderPayload(payload: Record<string, unknown>, block: s
     return next;
   }
 
-  next.instructions = tag;
-  return next;
+  return payload;
 }
 
 function prependSystemLikeItem(items: unknown[], tag: string): unknown[] {
@@ -39,8 +38,7 @@ function prependSystemLikeItem(items: unknown[], tag: string): unknown[] {
     const row = first as Record<string, unknown>;
     const role = String(row.role ?? row.type ?? "");
     if (role === "system" || role === "developer") {
-      const text = extractItemText(row);
-      copy[0] = { ...row, content: tag + text };
+      copy[0] = prependContent(row, tag);
       return copy;
     }
   }
@@ -48,12 +46,26 @@ function prependSystemLikeItem(items: unknown[], tag: string): unknown[] {
   return copy;
 }
 
-function extractItemText(row: Record<string, unknown>): string {
-  if (typeof row.content === "string") return row.content;
-  if (Array.isArray(row.content)) {
-    return row.content
-      .map((p) => (p && typeof p === "object" && typeof (p as { text?: unknown }).text === "string" ? (p as { text: string }).text : ""))
-      .join("\n");
+function prependContent(row: Record<string, unknown>, tag: string): Record<string, unknown> {
+  if (typeof row.content === "string") {
+    return { ...row, content: tag + row.content };
   }
-  return "";
+  if (Array.isArray(row.content)) {
+    const parts = [...row.content];
+    const idx = parts.findIndex(
+      (p) =>
+        p &&
+        typeof p === "object" &&
+        (p as { type?: unknown }).type === "input_text" &&
+        typeof (p as { text?: unknown }).text === "string",
+    );
+    if (idx >= 0) {
+      const part = parts[idx] as { type: string; text: string };
+      parts[idx] = { ...part, text: tag + part.text };
+      return { ...row, content: parts };
+    }
+    parts.unshift({ type: "input_text", text: tag });
+    return { ...row, content: parts };
+  }
+  return { ...row, content: tag };
 }

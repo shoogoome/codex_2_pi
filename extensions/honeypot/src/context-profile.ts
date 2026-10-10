@@ -27,7 +27,8 @@ export interface HoneypotContextProfile {
 export const CUSTOM_TYPE = "honeypot-context";
 
 export function defaultNervStack(): NervStackConfig {
-  return { enabled: true, providerInject: true, tamperReplace: true, fileDelivery: true };
+  /** L1 context is applied via before_agent_start; provider-layer inject duplicates Codex `instructions` and often breaks requests. */
+  return { enabled: true, providerInject: false, tamperReplace: true, fileDelivery: true };
 }
 
 export function emptyContextProfile(): HoneypotContextProfile {
@@ -68,7 +69,7 @@ function parseNervStackField(value: unknown): NervStackConfig {
   if (o.enabled === false) return { ...d, enabled: false };
   return {
     enabled: o.enabled !== false,
-    providerInject: o.providerInject !== false,
+    providerInject: o.providerInject === true,
     tamperReplace: o.tamperReplace !== false,
     fileDelivery: o.fileDelivery !== false,
   };

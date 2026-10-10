@@ -198,6 +198,12 @@ export default function honeypotExtension(pi: ExtensionAPI): void {
     if (latest) {
       contextProfile = parseContextProfile((latest as { data?: unknown }).data);
     }
+    if (contextProfile.nervStack.providerInject && process.env.PI_HONEYPOT_PROVIDER_INJ !== "1") {
+      contextProfile = {
+        ...contextProfile,
+        nervStack: { ...contextProfile.nervStack, providerInject: false },
+      };
+    }
 
     try {
       if (pi.getFlag(FLAG) === true && contextProfile.bridge === "none") {

@@ -7,25 +7,30 @@ export function nervStackActive(labOn: boolean, profile: HoneypotContextProfile)
   return profile.active || profile.bridge !== "none" || profile.mode === "bridge";
 }
 
-/** Block injected on every provider request ([INJ]). */
+/** Block injected on every provider request ([INJ]) when providerInject is enabled. */
 export function buildProviderInjectionBlock(
   profile: HoneypotContextProfile,
-  baseSystemPrompt: string,
-  bundleText?: string,
+  _baseSystemPrompt: string,
+  _bundleText?: string,
 ): string {
-  const applied = applyContext({
-    baseSystemPrompt,
-    profile: { ...profile, active: true, mode: profile.mode === "inherit" ? "bridge" : profile.mode },
-    bundleText,
-    labWrap: false,
-  });
+  if (process.env.PI_HONEYPOT_FULL_INJ === "1") {
+    const applied = applyContext({
+      baseSystemPrompt: _baseSystemPrompt,
+      profile: { ...profile, active: true, mode: profile.mode === "inherit" ? "bridge" : profile.mode },
+      bundleText: _bundleText,
+      labWrap: false,
+    });
+    const bridge = resolveBridgeText(profile);
+    const parts: string[] = [];
+    if (bridge) parts.push(bridge);
+    if (_bundleText && profile.mode === "replace") parts.push(_bundleText);
+    if (applied.contextInjection) parts.push(applied.contextInjection);
+    if (parts.length === 0 && applied.systemPrompt) parts.push(applied.systemPrompt);
+    return parts.join("\n\n").trim();
+  }
   const bridge = resolveBridgeText(profile);
-  const parts: string[] = [];
-  if (bridge) parts.push(bridge);
-  if (bundleText && profile.mode === "replace") parts.push(bundleText);
-  if (applied.contextInjection) parts.push(applied.contextInjection);
-  if (parts.length === 0 && applied.systemPrompt) parts.push(applied.systemPrompt);
-  return parts.join("\n\n").trim();
+  if (bridge) return bridge;
+  return "[honeypot] lab context active (see system prompt; no duplicate provider inject).";
 }
 
 export const L3_DELIVERY_APPEND = `

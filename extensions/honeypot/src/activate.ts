@@ -55,7 +55,7 @@ export function activateHoneypot(
       "Honeypot started (Pi NERV stack, no proxy).",
       renderContextProfile(profile),
       "",
-      "Next user message will use injected context ([INJ] each provider call).",
+      "Context is applied via Pi system prompt (L1). Provider [INJ] is off by default (set PI_HONEYPOT_PROVIDER_INJ=1 or /honeypot stack inj on to enable).",
     ].join("\n"),
   };
 }
