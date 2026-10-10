@@ -17,6 +17,7 @@
 | `extensions/init` | 通过主 agent 检查项目并创建项目 `AGENTS.md` 指南（已存在则跳过）。 | `/init` |
 | `extensions/imagegen` | Codex 订阅生图：复刻 codex 内置 `image_gen.imagegen`，走 openai-codex OAuth 直连 ChatGPT 图片 API（gpt-image-2），生成/编辑结果保存到 `~/.pi/agent/generated_images/<session>/` 并回传给模型检查迭代。 | `generate_image` |
 | `extensions/todo` | Codex 风格 `update_plan`（整份计划快照）+ 计划渲染 + 常驻 plan overlay。 | `update_plan` |
+| `extensions/openspec-progress` | 从当前 session branch 最后一次 `/opsx-apply <change>` 读取 `tasks.md`，在输入框上方显示 OpenSpec 完成进度，支持详情 overlay。 | `Alt+O` · `/opsx-progress on\|off\|toggle\|<change>` |
 | `extensions/effort` | 通用 thinking 档位、Codex 风格两级高级选择器、`/model` 模型+档位原子选择，以及 `Alt+,` / `Alt+.` 升降快捷键。 | `/effort [status\|off\|minimal\|low\|medium\|high\|xhigh\|max\|ultra]` · `/model` |
 | `extensions/fast-mode` | Codex Fast / UltraFast 路由：订阅 OAuth 请求注入 `priority` 或 `ultrafast`，互斥并保存会话状态；UltraFast 支持 GPT 模型，需 Pro $500 或符合条件的 Enterprise/Edu，Pro $200 不支持。 | `/fast [on\|off\|status]` · `/ultrafast [on\|off\|status]` · `--fast` / `--ultrafast` · settings `"fastMode": "fast"` |
 | `extensions/ultra` | GPT-5.6 Sol/Terra 的 Codex Ultra controller：会话态 `ultra`、wire `max`，自动激活 `task_agent` 并注入并行 multi-agent workflow。 | 由 `/effort ultra` 或 `/model` 高级选择器进入 |
@@ -198,6 +199,22 @@ Pi 也支持 `.pi/SYSTEM.md` 和 `APPEND_SYSTEM.md`，但 `/init` 有意以 `AGE
 - `--imagegen-return-image=false`：不把图片回传模型（省上下文），只返回保存路径，模型可用 read 工具查看图片
 
 注意：生图通常需要 20 秒到几分钟，工具内置 300s 超时与 5s 进度更新。
+
+## OpenSpec Apply 进度
+
+`extensions/openspec-progress` 会回放当前 session branch 的用户消息，使用最后一次 `/opsx-apply <change>` 绑定对应的 `openspec/changes/<change>/tasks.md`。有效任务存在时，输入框上方显示固定高度摘要：
+
+```text
+OpenSpec: demo-change · 3/8 · ████░░░░ · Alt+O 切换 · Alt+Enter 查看
+当前：2.1 实现进度渲染
+```
+
+- `Alt+O`：显示/隐藏摘要；也可用 `/opsx-progress on|off|toggle`
+- 摘要显示后按 `Alt+Enter`：打开任务详情；`Esc`：关闭详情
+- 任务很多时详情窗口固定高度，使用 `↑/↓` 滚动并显示隐藏数量
+- `/opsx-progress <change>`：手动绑定 change
+- 未找到当前 branch 的 `/opsx-apply` 或任务文件无有效 checkbox 时隐藏面板，不会触发模型轮次
+- `Alt+O` 避开终端 `Ctrl+S` 的 XOFF 行为；也可直接使用 `/opsx-progress` 命令
 
 ## Codex Todo / `update_plan`
 

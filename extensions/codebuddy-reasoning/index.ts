@@ -7,7 +7,6 @@ import { streamSimple as streamSimpleOpenAICompletions } from "@earendil-works/p
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const CODEBUDDY_PROVIDER = "codebuddy";
-const GPT_56_SOL = "gpt-5.6-sol";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -16,18 +15,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function applyCodeBuddyReasoningPayload(
   payload: unknown,
   model: Pick<Model<any>, "provider" | "id">,
-  reasoning: SimpleStreamOptions["reasoning"],
+  _reasoning: SimpleStreamOptions["reasoning"],
 ): unknown {
-  if (model.provider !== CODEBUDDY_PROVIDER || model.id !== GPT_56_SOL || !reasoning || !isRecord(payload)) {
+  // CodeBuddy's current CLI strips these legacy fields before sending custom
+  // OpenAI-compatible model requests.  In particular, reasoning_summary and
+  // verbosity now make the gateway return a malformed error response, which
+  // Pi surfaces as `undefined.length`.
+  if (model.provider !== CODEBUDDY_PROVIDER || !isRecord(payload)) {
     return payload;
   }
 
-  return {
-    ...payload,
-    temperature: 1,
-    verbosity: "high",
-    reasoning_summary: "auto",
-  };
+  const sanitized = { ...payload };
+  delete sanitized.verbosity;
+  delete sanitized.reasoning_summary;
+  return sanitized;
 }
 
 function streamCodeBuddyCompletions(

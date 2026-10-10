@@ -16,9 +16,15 @@ describe("codebuddy reasoning extension", () => {
     );
   });
 
-  it("adds the native CodeBuddy visible-reasoning parameters for gpt-5.6-sol", () => {
+  it("removes legacy fields rejected by the current CodeBuddy CLI gateway", () => {
     const payload = applyCodeBuddyReasoningPayload(
-      { model: "gpt-5.6-sol", reasoning_effort: "high", temperature: 0 },
+      {
+        model: "gpt-5.6-sol",
+        reasoning_effort: "high",
+        temperature: 1,
+        verbosity: "high",
+        reasoning_summary: "auto",
+      },
       { provider: "codebuddy", id: "gpt-5.6-sol" } as any,
       "high",
     );
@@ -27,13 +33,11 @@ describe("codebuddy reasoning extension", () => {
       model: "gpt-5.6-sol",
       reasoning_effort: "high",
       temperature: 1,
-      verbosity: "high",
-      reasoning_summary: "auto",
     });
   });
 
-  it("does not alter requests when thinking is off", () => {
-    const payload = { model: "gpt-5.6-sol" };
+  it("does not change a clean request", () => {
+    const payload = { model: "gpt-5.6-sol", reasoning_effort: "high" };
 
     expect(
       applyCodeBuddyReasoningPayload(
@@ -41,23 +45,16 @@ describe("codebuddy reasoning extension", () => {
         { provider: "codebuddy", id: "gpt-5.6-sol" } as any,
         undefined,
       ),
-    ).toBe(payload);
+    ).toEqual(payload);
   });
 
-  it("does not alter other providers or CodeBuddy models", () => {
-    const payload = { reasoning_effort: "high" };
+  it("does not alter other providers", () => {
+    const payload = { reasoning_effort: "high", verbosity: "high" };
 
     expect(
       applyCodeBuddyReasoningPayload(
         payload,
         { provider: "openai", id: "gpt-5.6-sol" } as any,
-        "high",
-      ),
-    ).toBe(payload);
-    expect(
-      applyCodeBuddyReasoningPayload(
-        payload,
-        { provider: "codebuddy", id: "gpt-5.6-terra" } as any,
         "high",
       ),
     ).toBe(payload);

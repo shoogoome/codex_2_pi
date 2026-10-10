@@ -214,7 +214,7 @@
       "apiKey": "$CODEBUDDY_API_KEY",
       "api": "openai-completions",
       "headers": {
-        "X-Conversation-ID2": "81f0864098994c088ae6b203c785308c",
+        "X-Conversation-ID": "81f0864098994c088ae6b203c785308c",
         "X-IDE-Type": "cli",
         "X-IDE-Name": "pi",
         "X-Product": "codebuddy"
