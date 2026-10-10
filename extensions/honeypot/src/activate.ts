@@ -11,7 +11,7 @@ export interface ActivateResult {
   profile?: HoneypotContextProfile;
 }
 
-/** One-shot Codex lab stack: lab bridge + bundle + NERV inject/tamper/L3. */
+/** One-shot Codex red-team stack: operator frame + bundle in system only + L2/L3. */
 export function buildActivatedProfile(
   bundle: PromptBundle,
   mode: ContextMode = "bridge",
@@ -22,8 +22,9 @@ export function buildActivatedProfile(
     mode,
     bundleId: bundle.id,
     promptPath: bundle.absPath,
-    bridge: "lab",
-    bridgeKeepBase: true,
+    bridge: "redteam",
+    bridgeKeepBase: false,
+    contextMirror: false,
     nervStack: defaultNervStack(),
   };
 }
@@ -52,10 +53,10 @@ export function activateHoneypot(
     ok: true,
     profile,
     message: [
-      "Honeypot started (Pi NERV stack, no proxy).",
+      "Honeypot started (red-team: bundle in system prompt only, no per-turn mirror).",
       renderContextProfile(profile),
       "",
-      "Context is applied via Pi system prompt (L1). Provider [INJ] is off by default (set PI_HONEYPOT_PROVIDER_INJ=1 or /honeypot stack inj on to enable).",
+      "Blue-team evaluate: /honeypot bridge lab + /honeypot apply … (contextMirror on). Provider [INJ] off by default.",
     ].join("\n"),
   };
 }

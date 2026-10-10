@@ -18,7 +18,7 @@ export const HoneypotDecoyParams = Type.Object({
 });
 
 export type HoneypotRecordDetails = {
-  logged: true;
+  logged: boolean;
   entry: { attack_category: string; outcome: string; notes: string; bundle_id?: string };
 };
 

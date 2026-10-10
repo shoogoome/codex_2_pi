@@ -14,8 +14,8 @@ export interface TamperRule {
 
 /** Subset of public NERV tamper taxonomy (L2 triggers when nervStack.tamperReplace is on). */
 export const TAMPER_RULES: readonly TamperRule[] = [
-  { id: "p1-cannot-help", priority: "P1", label: "direct refusal", pattern: /不能协助|I cannot help|I can't help|超出范围|out of scope/i },
-  { id: "p1-wont-assist", priority: "P1", label: "direct refusal", pattern: /won't assist|will not assist|cannot assist|无法协助/i },
+  { id: "p1-cannot-help", priority: "P1", label: "direct refusal", pattern: /不能协助|不能提供|不能帮助|我不会提供|无法帮助|I cannot help|I can't help|I cannot provide|超出范围|out of scope/i },
+  { id: "p1-wont-assist", priority: "P1", label: "direct refusal", pattern: /won't assist|will not assist|cannot assist|无法协助|不予协助|无法继续/i },
   { id: "p1-policy", priority: "P1", label: "policy refusal", pattern: /against my (guidelines|policies)|违反.*政策|安全政策/i },
   { id: "p2-written-auth", priority: "P2", label: "authorization request", pattern: /书面授权|written authorization|authorized scope|测试范围|紧急联系人/i },
   { id: "p2-prove-auth", priority: "P2", label: "authorization request", pattern: /provide proof|证明.*授权|legal authorization/i },

@@ -1,6 +1,6 @@
 export type ContextMode = "inherit" | "append" | "replace" | "bridge";
 
-export type BridgeSource = "none" | "lab" | "file";
+export type BridgeSource = "none" | "lab" | "redteam" | "file";
 
 export interface NervStackConfig {
   enabled: boolean;
@@ -20,6 +20,11 @@ export interface HoneypotContextProfile {
   bridgePath?: string;
   /** In bridge mode, keep Pi-assembled base prompt after bridge preamble. */
   bridgeKeepBase: boolean;
+  /**
+   * When true, mirror bridge+bundle on the hidden custom context channel each turn (blue-team evaluate UX).
+   * Red-team `/honeypot start` sets false — bundle lives in system prompt only.
+   */
+  contextMirror: boolean;
   /** Pi-native NERV stack (L1 inject / L2 tamper / L3 file delivery). */
   nervStack: NervStackConfig;
 }
@@ -37,6 +42,7 @@ export function emptyContextProfile(): HoneypotContextProfile {
     mode: "inherit",
     bridge: "none",
     bridgeKeepBase: true,
+    contextMirror: true,
     nervStack: defaultNervStack(),
   };
 }
@@ -58,6 +64,7 @@ export function parseContextProfile(data: unknown): HoneypotContextProfile {
     bridge,
     bridgePath: typeof o.bridgePath === "string" ? o.bridgePath : undefined,
     bridgeKeepBase: o.bridgeKeepBase !== false,
+    contextMirror: o.contextMirror !== false,
     nervStack: parseNervStackField(o.nervStack),
   };
 }
@@ -81,7 +88,7 @@ function parseMode(value: unknown): ContextMode {
 }
 
 function parseBridge(value: unknown): BridgeSource {
-  if (value === "lab" || value === "file" || value === "none") return value;
+  if (value === "lab" || value === "redteam" || value === "file" || value === "none") return value;
   return "none";
 }
 

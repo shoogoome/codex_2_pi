@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { HoneypotContextProfile } from "./context-profile.js";
 import { LAB_BRIDGE_MARKDOWN } from "./bridge-lab.js";
+import { REDTEAM_BRIDGE_MARKDOWN } from "./bridge-redteam.js";
 import { appendHoneypotLabPrompt } from "./prompts.js";
 import { L3_DELIVERY_APPEND } from "./nerv-stack.js";
 
@@ -10,6 +11,7 @@ export function readPromptFile(absPath: string): string {
 
 export function resolveBridgeText(profile: HoneypotContextProfile): string | undefined {
   if (profile.bridge === "lab") return LAB_BRIDGE_MARKDOWN.trim();
+  if (profile.bridge === "redteam") return REDTEAM_BRIDGE_MARKDOWN.trim();
   if (profile.bridge === "file" && profile.bridgePath) {
     try {
       return readPromptFile(profile.bridgePath);
@@ -91,15 +93,21 @@ export function applyContext(input: ApplyContextInput): ApplyContextResult {
     }
   }
 
-  const injectionParts: string[] = [];
-  if (bridge) injectionParts.push(bridge);
-  if (bundle && input.profile.mode !== "replace") {
-    injectionParts.push(`<honeypot-bundle id="${input.profile.bundleId ?? "custom"}">\n${truncateForContext(bundle)}\n</honeypot-bundle>`);
+  let contextInjection: string | undefined;
+  if (input.profile.contextMirror !== false) {
+    const injectionParts: string[] = [];
+    if (bridge) injectionParts.push(bridge);
+    if (bundle && input.profile.mode !== "replace") {
+      injectionParts.push(
+        `<honeypot-bundle id="${input.profile.bundleId ?? "custom"}">\n${truncateForContext(bundle)}\n</honeypot-bundle>`,
+      );
+    }
+    if (injectionParts.length > 0) contextInjection = injectionParts.join("\n\n");
   }
 
   return {
     systemPrompt,
-    contextInjection: injectionParts.length > 0 ? injectionParts.join("\n\n") : undefined,
+    contextInjection,
     tags,
   };
 }

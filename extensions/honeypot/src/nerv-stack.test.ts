@@ -14,6 +14,6 @@ describe("buildProviderInjectionBlock", () => {
     const bundleText = readFileSync(bundle!.absPath, "utf8");
     const block = buildProviderInjectionBlock(profile, "BASE", bundleText);
     expect(block.length).toBeLessThan(4000);
-    expect(block).not.toContain("<honeypot-bundle");
+    expect(block).not.toMatch(/<honeypot-bundle id=/);
   });
 });

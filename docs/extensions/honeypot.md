@@ -13,7 +13,8 @@ Prompt 库 **内置**于 `extensions/honeypot/assets/jailbreak-prompts/`（无�
 ## 快速开始（只记三条）
 
 ```text
-/honeypot start              # 一键：lab + bridge + 默认 xsser-codex + 每轮注入/篡改栈
+/honeypot start              # 一键破甲向：redteam bridge + bundle 只进 system（不每轮 mirror）
+/honeypot bridge lab         # 蓝队评估：每轮 mirror + honeypot_record 分类
 /honeypot start codex-red-team
 /honeypot stop
 /honeypot status

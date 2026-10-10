@@ -13,6 +13,7 @@ export function renderContextProfile(profile: HoneypotContextProfile): string {
     profile.promptPath ? `  promptPath: ${profile.promptPath}` : undefined,
     `  bridge: ${profile.bridge}${profile.bridgePath ? ` (${profile.bridgePath})` : ""}`,
     profile.mode === "bridge" ? `  bridgeKeepBase: ${profile.bridgeKeepBase}` : undefined,
+    `  contextMirror: ${profile.contextMirror}`,
   ].filter(Boolean);
   return lines.join("\n");
 }

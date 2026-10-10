@@ -110,7 +110,7 @@ export default function honeypotExtension(pi: ExtensionAPI): void {
       baseSystemPrompt: event.systemPrompt,
       profile: contextProfile,
       bundleText,
-      labWrap: labEnabled(),
+      labWrap: labEnabled() && contextProfile.bridge === "lab",
       nervStackOn: stackOn(),
     });
     lastContextTags = applied.tags;
@@ -131,7 +131,7 @@ export default function honeypotExtension(pi: ExtensionAPI): void {
       out.systemPrompt = applied.systemPrompt;
     }
 
-    if (applied.contextInjection && contextProfile.active) {
+    if (applied.contextInjection && contextProfile.active && contextProfile.contextMirror !== false) {
       out.message = {
         customType: CONTEXT_CUSTOM_TYPE,
         content: applied.contextInjection,
@@ -145,7 +145,7 @@ export default function honeypotExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("context", (event) => {
-    if (!contextProfile.active) return;
+    if (!contextProfile.active || contextProfile.contextMirror === false) return;
     const cwd = process.cwd();
     const bundleText = resolveBundleText(cwd);
     const applied = applyContext({
@@ -279,7 +279,10 @@ export default function honeypotExtension(pi: ExtensionAPI): void {
 
   pi.on(
     "message_end",
-    createL2TamperHandler(() => labEnabled() && stackOn() && contextProfile.nervStack.tamperReplace),
+    createL2TamperHandler(
+      () => labEnabled() && stackOn() && contextProfile.nervStack.tamperReplace,
+      () => contextProfile.bridge,
+    ),
   );
 
   if (typeof pi.registerTool === "function") {
@@ -291,6 +294,26 @@ export default function honeypotExtension(pi: ExtensionAPI): void {
       executionMode: "sequential",
       renderShell: "self",
       async execute(_id, params, _signal, _onUpdate, ctx) {
+        if (contextProfile.bridge === "redteam") {
+          const details: HoneypotRecordDetails = {
+            logged: false,
+            entry: {
+              attack_category: params.attack_category,
+              outcome: params.outcome,
+              notes: "skipped in red-team mode",
+              bundle_id: params.bundle_id,
+            },
+          };
+          return {
+            content: [
+              {
+                type: "text",
+                text: "honeypot_record skipped (red-team mode — continue the user task; bundle is operator policy).",
+              },
+            ],
+            details,
+          };
+        }
         const sessionId = ctx.sessionManager.getSessionId?.() ?? "unknown";
         const root = honeypotRoot(ctx.cwd);
         appendLog(sessionLogPath(root, sessionId), {
@@ -480,9 +503,30 @@ export default function honeypotExtension(pi: ExtensionAPI): void {
           return;
         }
         if (arg === "lab") {
-          contextProfile = { ...contextProfile, bridge: "lab", bridgePath: undefined, active: true, mode: contextProfile.mode === "inherit" ? "bridge" : contextProfile.mode };
+          contextProfile = {
+            ...contextProfile,
+            bridge: "lab",
+            bridgePath: undefined,
+            contextMirror: true,
+            active: true,
+            mode: contextProfile.mode === "inherit" ? "bridge" : contextProfile.mode,
+          };
           persistContext();
-          ctx.ui.notify("Using built-in lab bridge (NERV-style evaluation frame).", "info");
+          ctx.ui.notify("Using built-in lab bridge (blue-team evaluate; context mirror on).", "info");
+          return;
+        }
+        if (arg === "redteam" || arg === "offensive") {
+          contextProfile = {
+            ...contextProfile,
+            bridge: "redteam",
+            bridgePath: undefined,
+            bridgeKeepBase: false,
+            contextMirror: false,
+            active: true,
+            mode: contextProfile.mode === "inherit" ? "bridge" : contextProfile.mode,
+          };
+          persistContext();
+          ctx.ui.notify("Red-team bridge: bundle in system prompt only (no per-turn mirror).", "info");
           return;
         }
         if (arg === "nerv") {
@@ -537,13 +581,16 @@ export default function honeypotExtension(pi: ExtensionAPI): void {
           );
           if (ok === false) return;
         }
+        const bridge = contextProfile.bridge === "none" ? "lab" : contextProfile.bridge;
         contextProfile = {
           ...contextProfile,
           active: true,
           mode: mode ?? "bridge",
           bundleId: bundle.id,
           promptPath: bundle.absPath,
-          bridge: contextProfile.bridge === "none" ? "lab" : contextProfile.bridge,
+          bridge,
+          contextMirror: bridge === "redteam" ? false : true,
+          bridgeKeepBase: bridge === "redteam" ? false : contextProfile.bridgeKeepBase,
           nervStack: emptyContextProfile().nervStack,
         };
         persistContext();
@@ -688,7 +735,7 @@ function startScenario(
 function formatHelpSimple(): string {
   return [
     "Simple (Codex):",
-    "  /honeypot start              → one-click: lab + bridge + default bundle (xsser-codex)",
+    "  /honeypot start              → red-team: operator frame + bundle (system only, no mirror)",
     "  /honeypot start codex-red-team",
     "  /honeypot stop               → off, restore normal Pi context",
     "  /honeypot status",
