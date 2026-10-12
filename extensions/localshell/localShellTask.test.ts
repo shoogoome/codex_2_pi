@@ -463,6 +463,62 @@ describe("spawnLocalShell — PI_TASK_BASH_TIMEOUT_MS", () => {
 });
 
 describe("session review shell lifecycle", () => {
+  it("Esc cancels a stalled baseline without starting a process and releases the late window", async () => {
+    const { getTaskActivityHandle } = await import("../tasks/activity.js");
+    const hub = getTaskActivityHandle();
+    const fake = createFakeBashOps();
+    const controller = new AbortController();
+    let release!: () => void;
+    const baseline = new Promise<void>((resolve) => { release = resolve; });
+    const phases: string[] = [];
+    const unsubscribe = hub.subscribe(async (event) => {
+      if (event.originSessionId !== "shell-cancel-baseline") return;
+      phases.push(event.phase);
+      if (event.phase === "before-start") await baseline;
+    });
+    try {
+      const result = spawnLocalShell(pi as never, store, {
+        originSessionId: "shell-cancel-baseline", command: "must not execute",
+        description: "cancel startup", operations: fake.ops, signal: controller.signal,
+      });
+      controller.abort();
+      await expect(result).rejects.toThrow(/aborted/);
+      expect(fake.lastCommand).toBeUndefined();
+      expect(store.get()).toEqual({});
+      release();
+      await vi.waitFor(() => expect(phases).toEqual(["before-start", "end"]));
+      expect(hub.getActive().some((a) => a.originSessionId === "shell-cancel-baseline")).toBe(false);
+    } finally {
+      release();
+      unsubscribe();
+    }
+  });
+
+  it.each(["blocked", "rejected"])("returns process completion even when review end is %s", async (mode) => {
+    const { getTaskActivityHandle } = await import("../tasks/activity.js");
+    const hub = getTaskActivityHandle();
+    const fake = createFakeBashOps();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const unsubscribe = hub.subscribe(async (event) => {
+      if (event.originSessionId !== "shell-end-failure" || event.phase !== "end") return;
+      if (mode === "rejected") throw new Error("review end failed");
+      await gate;
+    });
+    try {
+      const result = spawnLocalShell(pi as never, store, {
+        originSessionId: "shell-end-failure", command: "done", description: "review end",
+        operations: fake.ops,
+      });
+      await vi.waitFor(() => expect(fake.lastCommand).toBe("done"));
+      fake.finish(0);
+      await expect(result).resolves.toMatchObject({ status: "completed", backgrounded: false });
+    } finally {
+      release();
+      unsubscribe();
+    }
+  });
+
   it("awaits baseline then retains a stable window beyond the tool return", async () => {
     const { getTaskActivityHandle } = await import("../tasks/activity.js");
     const hub = getTaskActivityHandle();

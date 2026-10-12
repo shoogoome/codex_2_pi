@@ -64,6 +64,8 @@ export interface SpawnLocalShellOptions extends TaskOrigin {
   timeoutMs?: number;
   cwd?: string;
   operations?: BashOperations;
+  /** Cancel foreground startup, including the review baseline barrier. */
+  signal?: AbortSignal;
   /**
    * Owning teammate (`name@team`) when a teammate started this command, so a
    * team kill can reap it if it auto-backgrounds. Resolved by the caller from
@@ -158,7 +160,26 @@ export async function spawnLocalShell(
   const activity = { ...origin, taskId, operationId: taskId, cwd };
   const hub = getTaskActivityHandle();
   const outputFile = getTaskOutputPath(taskId);
-  if (origin.originSessionId) await hub.begin(activity);
+  opts.signal?.throwIfAborted();
+  if (origin.originSessionId) {
+    const baseline = hub.begin(activity);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = () => reject(new Error("task_bash aborted before start"));
+        opts.signal?.addEventListener("abort", onAbort, { once: true });
+        baseline.then(resolve, reject).finally(() => {
+          opts.signal?.removeEventListener("abort", onAbort);
+        });
+        if (opts.signal?.aborted) onAbort();
+      });
+      opts.signal?.throwIfAborted();
+    } catch (error) {
+      // end() waits for begin(): release a late baseline without starting a
+      // process, but never make Esc wait for the same stalled listener.
+      void hub.end(activity).catch((e) => logError(e, "shell activity cancelled start"));
+      throw error;
+    }
+  }
   const endActivity = () => hub.end(activity).catch((e) => logError(e, "shell activity end"));
   const abort = new AbortController();
   const ops = opts.operations ?? createLocalBashOperations();
@@ -269,7 +290,8 @@ export async function spawnLocalShell(
 
     void execPromise.then(async () => {
       clearTimeout(timer);
-      await endActivity();
+      // Review bookkeeping must not block process completion or cancellation.
+      void endActivity();
       const r = resultRef ?? { exitCode: 1 };
       if (resolved) {
         // timeout 已 resolve → 走后台 terminal 路径

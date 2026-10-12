@@ -148,6 +148,20 @@ describe("localshellExtension", () => {
     expect(r.content[0]!.text).toMatch(/aborted/i);
   });
 
+  it("Esc stops an already running silent command", async () => {
+    localshellExtension(pi as never);
+    fireEvent("session_start", {}, {});
+    const tool = pi.registerTool.mock.calls.find((c) => c[0].name === "task_bash")![0];
+    const controller = new AbortController();
+    const result = tool.execute("silent-abort", {
+      command: "sleep 30", description: "silent cancellation", timeout_ms: 60_000,
+    }, controller.signal, undefined, { cwd: tmpRoot });
+    await vi.waitFor(() => expect(Object.values(store.get())).toHaveLength(1));
+    controller.abort();
+    await expect(result).resolves.toMatchObject({ isError: true, details: { status: "killed", backgrounded: false } });
+    expect(store.get()).toEqual({});
+  });
+
   it("session_start binds pi (LocalShellTask.kill works after start)", async () => {
     localshellExtension(pi as never);
     fireEvent("session_start", {}, { sessionManager: { getSessionId: () => "ls-5" } });

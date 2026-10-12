@@ -167,34 +167,39 @@ export default function localshellExtension(pi: ExtensionAPI): void {
           }, FLUSH_INTERVAL_MS - sinceLast);
         };
 
-        const result = await spawnLocalShell(pi, handle.store, {
-          ...taskOriginFromContext(ctx),
-          cwd: ctx.cwd,
-          command,
-          description,
-          timeoutMs: timeout_ms,
-          // Attribute to the calling teammate via its session file (realm-safe;
-          // AsyncLocalStorage is empty in a teammate sub-session's tool realm).
-          ownerAgentId: ownerFromSessionFile(
-            (ctx as { sessionManager?: { getSessionFile?: () => string | undefined } } | undefined)
-              ?.sessionManager?.getSessionFile?.(),
-          ),
-          onStart: (taskId) => {
-            // Capture immediately, before any stdout arrives. Silent commands
-            // such as `sleep` must still be cancellable with Esc.
-            runningTaskId = taskId;
-            if (signal?.aborted) onAbort();
-          },
-          onProgress: (snap) => {
-            scheduleFlush({
-              output: snap.cumulative,
-              taskId: snap.taskId,
-              bytesReceived: snap.bytesReceived,
-            });
-          },
-        });
-        if (timer) clearTimeout(timer);
-        if (signal) signal.removeEventListener("abort", onAbort);
+        let result;
+        try {
+          result = await spawnLocalShell(pi, handle.store, {
+            ...taskOriginFromContext(ctx),
+            cwd: ctx.cwd,
+            command,
+            description,
+            timeoutMs: timeout_ms,
+            signal,
+            // Attribute to the calling teammate via its session file (realm-safe;
+            // AsyncLocalStorage is empty in a teammate sub-session's tool realm).
+            ownerAgentId: ownerFromSessionFile(
+              (ctx as { sessionManager?: { getSessionFile?: () => string | undefined } } | undefined)
+                ?.sessionManager?.getSessionFile?.(),
+            ),
+            onStart: (taskId) => {
+              // Capture immediately, before any stdout arrives. Silent commands
+              // such as `sleep` must still be cancellable with Esc.
+              runningTaskId = taskId;
+              if (signal?.aborted) onAbort();
+            },
+            onProgress: (snap) => {
+              scheduleFlush({
+                output: snap.cumulative,
+                taskId: snap.taskId,
+                bytesReceived: snap.bytesReceived,
+              });
+            },
+          });
+        } finally {
+          if (timer) clearTimeout(timer);
+          if (signal) signal.removeEventListener("abort", onAbort);
+        }
 
         const isError = result.status === "failed" || result.status === "killed";
         let text: string;
