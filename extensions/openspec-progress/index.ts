@@ -19,6 +19,7 @@ const DEFAULT_KEY = "alt+o";
 const DETAILS_KEY = "alt+enter";
 const KEY_FLAG = "openspec-progress-key";
 const REFRESH_MS = 1000;
+const WIDGET_MOUNTED_EVENT = "openspec-progress:mounted";
 
 interface FileSnapshot {
   path: string;
@@ -138,6 +139,7 @@ export default function openSpecProgressExtension(pi: ExtensionAPI): void {
           invalidate: () => { tui = undefined; },
         };
       }, { placement: "aboveEditor" });
+      try { pi.events.emit(WIDGET_MOUNTED_EVENT, undefined); } catch { /* best effort */ }
     }
   }
 

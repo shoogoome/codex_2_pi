@@ -45,6 +45,7 @@ const LINES_FLAG = "session-summary-lines";
 const DEFAULT_VISIBLE_ROWS = 8;
 const DEFAULT_CONTEXT_TURNS = 3;
 const SHUTDOWN_WAIT_MS = 3_000;
+const OPENSPEC_WIDGET_MOUNTED_EVENT = "openspec-progress:mounted";
 const SCROLL_OLDER_KEY: KeyId = "alt+up";
 const SCROLL_NEWER_KEY: KeyId = "alt+down";
 
@@ -292,6 +293,13 @@ export default function sessionSummaryExtension(
     if (restoreGeneration !== generation || currentCtx !== ctx) return;
     overlay.resetScroll();
     refresh();
+  }
+
+  // OpenSpec may mount before this async restore finishes. Re-registering the
+  // summary after that mount makes its widget the stable lower row, preventing
+  // a visible reorder when the summary state becomes available.
+  if (pi.events && typeof pi.events.on === "function") {
+    pi.events.on(OPENSPEC_WIDGET_MOUNTED_EVENT, () => refresh());
   }
 
   pi.on("session_start", (_event, ctx) => restore(ctx));

@@ -7,6 +7,26 @@ export interface OpenSpecProgressTheme {
 
 const plainTheme: OpenSpecProgressTheme = { fg: (_color, text) => text };
 
+function frameRow(content: string, innerWidth: number, theme: OpenSpecProgressTheme): string {
+  const shown = truncateToWidth(content, innerWidth, "…", true);
+  const padding = " ".repeat(Math.max(0, innerWidth - visibleWidth(shown)));
+  return `${theme.fg("border", "│")}${shown}${padding}${theme.fg("border", "│")}`;
+}
+
+function framedBorder(
+  sideLeft: string,
+  sideRight: string,
+  label: string,
+  innerWidth: number,
+  theme: OpenSpecProgressTheme,
+  labelColor: string,
+): string {
+  const available = Math.max(0, innerWidth - 1);
+  const shown = truncateToWidth(` ${label} `, available, "…", false);
+  const fill = "─".repeat(Math.max(0, available - visibleWidth(shown)));
+  return `${theme.fg("border", `${sideLeft}─`)}${theme.fg(labelColor, shown)}${theme.fg("border", `${fill}${sideRight}`)}`;
+}
+
 export function formatSummaryLines(
   change: string,
   snapshot: OpenSpecTaskSnapshot,
@@ -14,14 +34,20 @@ export function formatSummaryLines(
   width = 80,
 ): string[] {
   if (snapshot.tasks.length === 0) return [];
-  const safeWidth = Math.max(1, Math.floor(width));
-  const barWidth = Math.max(4, Math.min(12, Math.floor((safeWidth - 48) / 2)));
-  const first = `OpenSpec: ${change} · ${snapshot.completed}/${snapshot.tasks.length} · ${renderProgressBar(snapshot, barWidth)} · Alt+O 切换 · Alt+Enter 查看`;
-  const current = snapshot.current ? `当前：${snapshot.current.text}` : "当前：全部任务已完成";
-  return [
-    truncateToWidth(first, safeWidth, "…"),
-    truncateToWidth(current, safeWidth, "…"),
-  ].map((line) => visibleWidth(line) > safeWidth ? truncateToWidth(line, safeWidth, "…") : line).map((line) => theme.fg("text", line));
+  const safeWidth = Math.max(1, Math.floor(Number.isFinite(width) ? width : 80));
+  if (safeWidth < 4) return [truncateToWidth(`OpenSpec: ${change}`, safeWidth, "")];
+
+  const innerWidth = safeWidth - 2;
+  const barWidth = Math.max(4, Math.min(16, Math.floor((innerWidth - 22) / 2)));
+  const percent = Math.round((snapshot.completed / snapshot.tasks.length) * 100);
+  const current = snapshot.current ? snapshot.current.text : "全部任务已完成";
+  const lines = [
+    framedBorder("╭", "╮", `OpenSpec · ${change} · ${snapshot.completed}/${snapshot.tasks.length}`, innerWidth, theme, "dim"),
+    frameRow(` 进度 ${renderProgressBar(snapshot, barWidth)} ${percent}%`, innerWidth, theme),
+    frameRow(` 当前：${current}`, innerWidth, theme),
+    framedBorder("╰", "╯", "Alt+O 切换 · Alt+Enter 查看", innerWidth, theme, "dim"),
+  ];
+  return lines.map((line) => visibleWidth(line) > safeWidth ? truncateToWidth(line, safeWidth, "…") : line);
 }
 
 function taskGlyph(task: OpenSpecTask): string {
