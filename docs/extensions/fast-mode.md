@@ -26,11 +26,15 @@
 
 修改后 `/reload` 或重启 Pi；如果当前分支曾保存关闭状态，执行 `/fast on`，或 `/new` 新建会话使用新的默认值。此项为扩展设置，不会出现在 Pi 内置 `/settings` 菜单中。
 
-footer 显示 `⚡ fast` 或 `⚡ ultrafast (requested)`。后者仅表示请求了该档位，**不表示账户获得授权或服务端实际采用了该档位**。恢复会话、切换 session tree 和 compaction 后会恢复分支状态；新会话没有 flag 时默认关闭。
+footer 显示 `⚡ fast` 或 `⚡ ultrafast (requested)`。两者都仅表示本地配置请求该档位，**不表示账户获得授权或服务端实际采用了该档位**。恢复会话、切换 session tree 和 compaction 后会恢复分支状态；新会话没有 flag 时默认关闭。
 
 ## 请求行为
 
-在 `before_provider_request` 阶段复制请求并注入：
+在 `before_provider_request` 阶段复制请求并注入；按 Codex #49675 将 `model`、`stream`、`service_tier` 排在大段 `input` 之前，让网关尽早读取路由字段。Fast 与 UltraFast 均适用，即使已有相同档位也会修正顺序。
+
+**切换从下一次模型请求开始生效，不会中断或改变正在输出的响应。** 同一轮工具调用结束后的下一次请求也会使用新档位，不必等下一条用户消息。状态栏立即反映配置，不代表当前流已经换档；扩展不验证服务端实际采用的档位。
+
+注入参数：
 
 | 模式 | 参数 | 本地模型条件 |
 |---|---|---|

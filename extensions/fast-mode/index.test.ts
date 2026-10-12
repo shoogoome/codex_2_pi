@@ -95,6 +95,37 @@ describe("fast mode core", () => {
     expect(payload).toEqual({ model: "gpt-6-astra", input: [] });
   });
 
+  it.each(["priority", "ultrafast"] as const)("serializes %s before large input for HTTP and WebSocket", (tier) => {
+    const options = { enabled: true, model: codexModel, usingOAuth: true, tier };
+    for (const previousTier of [undefined, tier, "default"]) {
+      const payload = Object.freeze({
+        input: [{ role: "user", content: "x".repeat(2 * 1024 * 1024) }],
+        tools: [{ type: "function", name: "test" }],
+        model: codexModel.id,
+        stream: true,
+        ...(previousTier === undefined ? {} : { service_tier: previousTier }),
+      });
+      const result = applyFastServiceTier(payload, options) as Record<string, unknown>;
+      expect(Object.keys(result).slice(0, 3)).toEqual(["model", "stream", "service_tier"]);
+      expect(result).toEqual({ ...payload, service_tier: tier });
+      expect(result.input).toBe(payload.input);
+      expect(payload.service_tier).toBe(previousTier);
+      for (const wire of [JSON.stringify(result), JSON.stringify({ type: "response.create", ...result })]) {
+        expect(wire.indexOf('"service_tier"')).toBeLessThan(wire.indexOf('"input"'));
+        expect(wire.indexOf('"service_tier"')).toBeLessThan(100);
+        expect(JSON.parse(wire).service_tier).toBe(tier);
+      }
+      expect(applyFastServiceTier(result, options)).toBe(result);
+    }
+  });
+
+  it("does not invent absent model or stream fields", () => {
+    const result = applyFastServiceTier({ input: [] }, {
+      enabled: true, model: codexModel, usingOAuth: true,
+    });
+    expect(Object.keys(result as object)).toEqual(["service_tier", "input"]);
+  });
+
   it("leaves requests unchanged outside the supported OAuth path", () => {
     const payload = { model: "gpt-5.6-sol" };
     expect(applyFastServiceTier(payload, { enabled: false, model: codexModel as any, usingOAuth: true })).toBe(payload);
@@ -266,6 +297,29 @@ describe("UltraFast", () => {
     await h.commands.get("ultrafast").handler("", h.ctx);
     await h.commands.get("ultrafast").handler("", h.ctx);
     expect(await fire(h.handlers, "before_provider_request", event, h.ctx)).toBeUndefined();
+  });
+
+  it("changes only future requests when switching or disabling during a response", async () => {
+    const h = createHarness();
+    const payload = { model: codexModel.id, input: [], stream: true };
+    const request = () => fire(h.handlers, "before_provider_request", { payload }, h.ctx);
+    await h.commands.get("fast").handler("on", h.ctx);
+    const fastRequest = await request();
+    const sentFast = JSON.stringify(fastRequest);
+    await h.commands.get("ultrafast").handler("on", h.ctx);
+    expect(h.notifications.at(-1)?.message).toContain("next provider request");
+    expect(h.notifications.at(-1)?.message).toContain("in-flight response is unchanged");
+    const ultraRequest = await request();
+    expect(ultraRequest.service_tier).toBe("ultrafast");
+    expect(JSON.stringify(fastRequest)).toBe(sentFast);
+    await h.commands.get("fast").handler("on", h.ctx);
+    expect((await request()).service_tier).toBe("priority");
+    expect(ultraRequest.service_tier).toBe("ultrafast");
+    await h.commands.get("fast").handler("off", h.ctx);
+    expect(h.notifications.at(-1)?.message).toContain("in-flight response is unchanged");
+    expect(await request()).toBeUndefined();
+    expect(fastRequest.service_tier).toBe("priority");
+    expect(payload).not.toHaveProperty("service_tier");
   });
 
   it("allows UltraFast for every Codex Responses model", async () => {

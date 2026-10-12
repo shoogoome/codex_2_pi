@@ -51,8 +51,17 @@ export function applyFastServiceTier(
   if (!options.enabled || !isRecord(payload)) return payload;
   const tier = options.tier ?? FAST_SERVICE_TIER;
   if (!getFastAvailability(options.model, options.usingOAuth, tier).active) return payload;
-  if (payload.service_tier === tier) return payload;
-  return { ...payload, service_tier: tier };
+  // Match Codex #49675: gateways inspect routing fields before large inputs.
+  // A matching tier at the end still needs reordering; preserve identity only
+  // once all present routing fields already form the expected prefix.
+  const keys = Object.keys(payload);
+  const routingKeys = ["model", "stream"].filter((key) => keys.includes(key));
+  routingKeys.push("service_tier");
+  if (payload.service_tier === tier && routingKeys.every((key, index) => keys[index] === key)) return payload;
+  const routing: Record<string, unknown> = {};
+  for (const key of routingKeys) routing[key] = key === "service_tier" ? tier : payload[key];
+  const { service_tier: _previousTier, ...rest } = payload;
+  return { ...routing, ...rest };
 }
 
 export function restoreFastModeState(branch: Iterable<unknown>): FastModeState | null {

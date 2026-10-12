@@ -16,6 +16,7 @@ import {
 
 const STATUS_KEY = "fast-mode";
 const COMMAND_ARGS = ["status", "on", "off"] as const;
+const REQUEST_TIMING_NOTICE = "Applies to the next provider request; an in-flight response is unchanged. Server routing is not verified.";
 const ULTRAFAST_NOTICE = "Account entitlement is not verified: UltraFast requires Pro $500 or eligible Enterprise/Edu; Pro $200 is not supported. Included usage is consumed at 8x Standard (purchased credits: 6x). Server authorization still applies; no automatic fallback.";
 
 type CurrentModel = Model<any> | undefined;
@@ -31,7 +32,7 @@ function modelLabel(model: CurrentModel): string {
 function availabilityMessage(model: CurrentModel, availability: FastAvailability, tier: SpeedServiceTier): string {
   const name = modeName(tier);
   if (availability.active) {
-    return `${name} mode is configured on for ${modelLabel(model)} (service tier: ${tier}; increased usage).${tier === ULTRAFAST_SERVICE_TIER ? ` ${ULTRAFAST_NOTICE}` : ""}`;
+    return `${name} mode is configured on for ${modelLabel(model)} (service tier: ${tier}; increased usage). ${REQUEST_TIMING_NOTICE}${tier === ULTRAFAST_SERVICE_TIER ? ` ${ULTRAFAST_NOTICE}` : ""}`;
   }
   switch (availability.reason) {
     case "no-model":
@@ -127,7 +128,7 @@ export default function fastModeExtension(
     enabled = false;
     persist();
     updateStatus(ctx);
-    ctx.ui.notify(`${name} mode is off; this extension no longer overrides the service tier.`, "info");
+    ctx.ui.notify(`${name} mode is off; this extension no longer overrides the service tier. ${REQUEST_TIMING_NOTICE}`, "info");
   }
 
   for (const [command, commandTier] of [["fast", FAST_SERVICE_TIER], ["ultrafast", ULTRAFAST_SERVICE_TIER]] as const) {
