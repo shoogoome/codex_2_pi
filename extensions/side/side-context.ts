@@ -4,6 +4,7 @@ import {
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-ai";
+import { SIDE_BOUNDARY_PROMPT } from "./side-prompt.js";
 import { loadConfig } from "../context-pipeline/src/config.js";
 import { microcompact } from "../context-pipeline/src/microcompact.js";
 import { trimToolResults } from "../context-pipeline/src/toolResultTrim.js";
@@ -140,7 +141,14 @@ function fitMessagesToBudget(
   const sideHistory = detachProviderContinuationState(
     sideTurns.flatMap((turn) => [turn.userMessage, turn.assistantMessage]),
   );
-  const all = [...inheritedMessages, ...sideHistory, userMessage];
+  // Like Codex, place a hidden user boundary AFTER the parent history, not
+  // in the leading system prompt where "before this boundary" has no meaning.
+  const boundary: UserMessage = {
+    role: "user",
+    content: [{ type: "text", text: SIDE_BOUNDARY_PROMPT }],
+    timestamp: userMessage.timestamp,
+  };
+  const all = [...inheritedMessages, boundary, ...sideHistory, userMessage];
   if (maxEstimatedTokens == null || !Number.isFinite(maxEstimatedTokens)) return all;
   if (estimateMessages(all) <= maxEstimatedTokens) return all;
 
@@ -153,20 +161,20 @@ function fitMessagesToBudget(
   );
   while (
     retainedTurns.length > 0 &&
-    estimateMessages([notice, ...anchor, ...detachedTurnMessages(), userMessage]) > maxEstimatedTokens
+    estimateMessages([notice, ...anchor, boundary, ...detachedTurnMessages(), userMessage]) > maxEstimatedTokens
   ) {
     retainedTurns.shift();
   }
 
   const retainedSideHistory = detachedTurnMessages();
-  const fixedTokens = estimateMessages([notice, ...anchor, ...retainedSideHistory, userMessage]);
+  const fixedTokens = estimateMessages([notice, ...anchor, boundary, ...retainedSideHistory, userMessage]);
   const inheritedBudget = Math.max(0, maxEstimatedTokens - fixedTokens);
   const inheritedTail = keepRecentCompleteTurns(inheritedCandidates, inheritedBudget);
 
-  if (estimateMessages([notice, ...anchor, ...inheritedTail, ...retainedSideHistory, userMessage]) > maxEstimatedTokens) {
-    return [userMessage];
+  if (estimateMessages([notice, ...anchor, ...inheritedTail, boundary, ...retainedSideHistory, userMessage]) > maxEstimatedTokens) {
+    return [boundary, userMessage];
   }
-  return [notice, ...anchor, ...inheritedTail, ...retainedSideHistory, userMessage];
+  return [notice, ...anchor, ...inheritedTail, boundary, ...retainedSideHistory, userMessage];
 }
 
 function keepRecentCompleteTurns(messages: Message[], budget: number): Message[] {

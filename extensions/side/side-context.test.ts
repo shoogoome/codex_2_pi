@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-ai";
+import { SIDE_BOUNDARY_PROMPT } from "./side-prompt.js";
 import {
   buildSideMessages,
   detachProviderContinuationState,
@@ -115,7 +116,7 @@ describe("side context construction", () => {
     const text = textOf(messages);
 
     expect(text).not.toContain(huge);
-    expect(text.length).toBeLessThan(500);
+    expect(text.replace(SIDE_BOUNDARY_PROMPT, "").length).toBeLessThan(500);
     expect(text).toContain("what happened?");
   });
 
@@ -205,7 +206,7 @@ describe("side context construction", () => {
 
     const messages = buildSideMessages(reader(entries), [], user("SIDE"), {
       contextPipelineEnabled: false,
-      maxEstimatedTokens: 300,
+      maxEstimatedTokens: 700,
     });
     const text = textOf(messages);
 
@@ -213,6 +214,27 @@ describe("side context construction", () => {
     expect(text).not.toContain("OLD-");
     expect(text).toContain("RECENT-");
     expect(text).toContain("SIDE");
+  });
+
+  it("places the boundary after parent history and before all side turns without mutating the session", () => {
+    const entries = [
+      { type: "message", id: "u", parentId: null, timestamp: "2026-01-01", message: user("PARENT TASK") },
+      { type: "message", id: "a", parentId: "u", timestamp: "2026-01-01", message: assistant("PARENT ANSWER") },
+    ] as SessionEntry[];
+    const original = structuredClone(entries);
+    const turns = [{ userMessage: user("FIRST SIDE"), assistantMessage: assistant("SIDE ANSWER") }];
+    const messages = buildSideMessages(reader(entries), turns, user("FOLLOW UP"), { contextPipelineEnabled: false });
+
+    expect(messages.map((message) => textOf([message]))).toEqual([
+      "PARENT TASK", "PARENT ANSWER", SIDE_BOUNDARY_PROMPT, "FIRST SIDE", "SIDE ANSWER", "FOLLOW UP",
+    ]);
+    expect(messages[2].role).toBe("user");
+    expect(entries).toEqual(original);
+  });
+
+  it("retains the boundary even when the budget cannot fit any history", () => {
+    const messages = buildSideMessages(reader([]), [], user("SIDE"), { maxEstimatedTokens: 1 });
+    expect(messages.map((message) => textOf([message]))).toEqual([SIDE_BOUNDARY_PROMPT, "SIDE"]);
   });
 
   it("reserves response room and provides a stricter overflow-retry budget", () => {

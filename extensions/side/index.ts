@@ -1,7 +1,7 @@
 /**
  * /side — Codex-style side conversation overlay.
  *
- * Uses the same primary model directly (completeSimple) with a read-only clone
+ * Uses the same primary model directly (modelRegistry.complete) with a read-only clone
  * of the main conversation as context. No RPC subprocess, no tools.
  * Closing the overlay aborts any in-flight request.
  */
@@ -11,14 +11,14 @@ import {
   type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { completeSimple, type TextContent, type UserMessage } from "@earendil-works/pi-ai";
+import type { TextContent, UserMessage } from "@earendil-works/pi-ai";
 import {
   buildSideMessages,
   emergencySideInputBudget,
   sideInputBudget,
   type SideTurn,
 } from "./side-context.js";
-import { buildInitialSideMessage } from "./side-prompt.js";
+import { SIDE_DEVELOPER_INSTRUCTIONS } from "./side-prompt.js";
 import { completeSideWithOverflowRetry } from "./side-request.js";
 import { SIDE_REQUEST_CHANNEL, type SideRequest } from "../shared/side-protocol.js";
 import {
@@ -107,7 +107,7 @@ export async function runSide(args: string, ctx: ExtensionContext, pi: Extension
       timestamp: Date.now(),
     };
 
-    const systemPrompt = buildInitialSideMessage("");
+    const systemPrompt = SIDE_DEVELOPER_INSTRUCTIONS;
     const contextOptions = {
       contextPipelineEnabled: pi.getFlag("context-pipeline-off") !== true,
       autoPruneEnabled: pi.getFlag("prune-auto") === true,
@@ -116,7 +116,7 @@ export async function runSide(args: string, ctx: ExtensionContext, pi: Extension
       ...contextOptions,
       maxEstimatedTokens: sideInputBudget(model.contextWindow, systemPrompt),
     });
-    const complete = (requestMessages: typeof messages) => completeSimple(
+    const complete = (requestMessages: typeof messages) => ctx.modelRegistry.complete(
       model,
       { systemPrompt, messages: requestMessages, tools: [] },
       {
@@ -146,6 +146,13 @@ export async function runSide(args: string, ctx: ExtensionContext, pi: Extension
 
       if (response.stopReason === "error") {
         pendingError = response.errorMessage ?? "Unknown error";
+        transcript.push({ role: "system", text: pendingError });
+        requestRender?.();
+        return;
+      }
+
+      if (response.stopReason === "toolUse" || response.content.some((block) => block.type === "toolCall")) {
+        pendingError = "Tools are unavailable in /side. Continue requests requiring tools in the main conversation.";
         transcript.push({ role: "system", text: pendingError });
         requestRender?.();
         return;

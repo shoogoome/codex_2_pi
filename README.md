@@ -13,7 +13,7 @@
 | `extensions/diff` | 展示 Git 变更；按会话逐文件审阅，确认后隐藏、再次修改重现。 | `/diff` · `/changes` · `Ctrl+R` |
 | `extensions/review` | 提供 Codex 风格的评审预设（基准分支 / 未提交 / 某提交 / 自定义）。 | `/review [instructions]` |
 | `extensions/user-input` | 向用户提问 1-3 个带选项的问题（UI 自动加 `Other` 自由文本项）。 | `request_user_input` / `ask_user_question` / `askUserQuestion` |
-| `extensions/side` | 在 Pi overlay 中从当前 leaf 启动临时 fork subagent，关闭窗口即关闭 side 会话。 | `/side [message]` |
+| `extensions/side` | 在 Pi overlay 中继承当前 leaf 上下文进行独立、无工具的临时对话，关闭窗口即丢弃 side 历史。 | `/side [message]` |
 | `extensions/init` | 通过主 agent 检查项目并创建项目 `AGENTS.md` 指南（已存在则跳过）。 | `/init` |
 | `extensions/imagegen` | Codex 订阅生图：复刻 codex 内置 `image_gen.imagegen`，走 openai-codex OAuth 直连 ChatGPT 图片 API（gpt-image-2），生成/编辑结果保存到 `~/.pi/agent/generated_images/<session>/` 并回传给模型检查迭代。 | `generate_image` |
 | `extensions/todo` | Codex 风格 `update_plan`（整份计划快照）+ 计划渲染 + 常驻 plan overlay。 | `update_plan` |
@@ -155,7 +155,7 @@ Ultra 的入口属于 reasoning effort，但实现独立放在 `extensions/ultra
 
 `/side [message]` 打开 Codex 风格的临时 side conversation。它在 Pi 原生 overlay 中使用当前主模型发起独立、无工具的临时对话；关闭 overlay（Esc 或 Ctrl+C）会中止请求并丢弃 side 历史，主会话不会切换，也不会收到 side 的历史。
 
-这个实现复刻 Codex `/side` 的核心语义：继承当前 leaf 的上下文作为参考、使用 side boundary 指令、默认只做轻量非修改探索。继承上下文通过 Pi 原生 `buildSessionContext` 重建，遵守已有 compaction 边界，并复用发送前裁剪/LLM 可见性规则；进入独立 side 请求前会移除父线程专属的 encrypted reasoning 与 Responses item ID。若仍接近模型窗口，会优先丢弃最旧的完整 turn；服务端确认 overflow 时再以半窗口预算自动重试一次。它不使用系统新终端窗口或 tmux split。
+这个实现复刻 Codex `/side` 的上下文隔离语义：继承当前 leaf 的上下文作为参考，并在父历史之后、side 消息之前插入隐藏的 user-role boundary，配合独立的 side 系统指令。与 Codex 的完整 fork 线程不同，这里的 side 不提供工具或自动执行循环：每个问题直接基于已有上下文给出完整回答，支持用户继续追问；需要读文件、运行检查或修改的请求应回到主会话。继承上下文通过 Pi 原生 `buildSessionContext` 重建，遵守已有 compaction 边界，并复用发送前裁剪/LLM 可见性规则；进入独立 side 请求前会移除父线程专属的 encrypted reasoning 与 Responses item ID。若仍接近模型窗口，会优先丢弃最旧的完整 turn；服务端确认 overflow 时再以半窗口预算自动重试一次。它不使用系统新终端窗口或 tmux split。
 
 ## `/init`
 
