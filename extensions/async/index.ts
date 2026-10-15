@@ -754,9 +754,13 @@ export default function asyncExtension(pi: ExtensionAPI): void {
    * 交付点 = 解除点：用户/平台真正发起新一轮时，先把中止纪元清掉（恢复唤醒），
    * 再一次性把被抑制的完成事实交给模型判断。
    *
-   * 用 `before_agent_start`（非 streaming 的 `prompt()` 才发）而不是 `agent_start`。
+   * Pi 1.2 的 custom-message 唤醒也会发 before_agent_start，但不能撤销用户中止。
+   * 旧版事件没有 messageType，仍按用户轮处理。
    */
-  pi.on("before_agent_start", () => aborted.beginUserTurn());
+  pi.on("before_agent_start", (event) => {
+    if ("messageType" in event && event.messageType === "custom") return;
+    return aborted.beginUserTurn();
+  });
 
   pi.on("session_shutdown", async () => {
     unregisterChildReaper("async");

@@ -2,6 +2,13 @@
 
 一个独立的 Pi 包，用于在不修改 Pi 核心的情况下复刻部分 Codex CLI 能力。
 
+## Pi 1.2 兼容
+
+- 支持 `before_agent_start` 的 user/custom 两类运行，并保留旧版无 `messageType` 事件的行为。
+- 后台通知不会解除用户中止后的异步任务唤醒抑制，也不会消耗 `/agents use` 为下一次用户发话预留的角色提示。
+- 后台运行仍注入通用工作准则、只读规划限制及必要上下文；memory 不把后台通知当作用户提示检索记忆。
+- 内置主题使用 `https://pi.dev/schemas/theme.schema.json`，符合 1.2 启动时的严格校验。
+
 ## 包含的扩展
 
 完整能力总表、分组与详情链接见 [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md)；下表列出当前全部扩展。
@@ -117,12 +124,14 @@ HTTP/微信配置保存在私有文件 `~/.pi/agent/channel/config.json`（`0600
 
 ### `/review`
 
-在交互模式下打开以下预设：
+在当前本地 Git 工作树中启动 Codex 风格 Review，交互选择以下目标：
 
-- 对比基准分支进行评审（PR 风格）
-- 评审未提交变更
+- 对比基准分支进行评审（等价于本地 checkout 后的 PR diff）
+- 评审未提交变更（staged、unstaged 和 untracked）
 - 评审某个提交
 - 自定义评审指令
+
+Review 只读取当前工作树，不直接连接 GitHub，也不会自动读取或评论远程 PR。要评审 GitHub PR，请先将 PR checkout 到本地，再选择对应的 base branch。
 
 ### `/review <instructions>`
 

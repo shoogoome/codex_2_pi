@@ -48,5 +48,7 @@ describe("review prompt builders", () => {
     expect(message).toContain("# Review guidelines:");
     expect(message).toContain("You are acting as a reviewer for a proposed code change made by another engineer.");
     expect(message).toContain("OUTPUT FORMAT:");
+    expect(message).toContain("REPOSITORY CONTEXT:");
+    expect(message).toContain("Do not implement fixes unless the user explicitly asks.");
   });
 });

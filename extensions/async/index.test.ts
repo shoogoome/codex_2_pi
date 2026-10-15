@@ -673,8 +673,16 @@ describe("abort epoch — 系统续跑不算恢复（最易写错处）", () => 
     await until(() => sent.length > 0, 5_000);
     expect(sent[0]!.options).toMatchObject({ triggerTurn: false });
 
+    // Pi 1.2：后台消息也触发启动钩子，不能交付中止结果或解除抑制。
+    expect(await fire("before_agent_start", {
+      type: "before_agent_start",
+      messageType: "custom",
+      message: { role: "custom", customType: "background", content: "done", display: false },
+    })).toBeUndefined();
+    expect(entries.some((e) => e.customType === "async/aborted-completions")).toBe(false);
+
     // 用户发话：第一次交付，含任务标识与输出文件。
-    const first = (await fire("before_agent_start", { type: "before_agent_start", prompt: "next" })) as
+    const first = (await fire("before_agent_start", { type: "before_agent_start", messageType: "user", prompt: "next" })) as
       | { message?: { content?: string; customType?: string } }
       | undefined;
     expect(first?.message).toBeDefined();

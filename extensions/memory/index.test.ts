@@ -110,6 +110,34 @@ describe("memory extension wiring", () => {
     expect(result?.message?.content).toContain("Long-term memory");
   });
 
+  it("injects rules for custom runs without treating notifications as recall prompts", async () => {
+    const repo = join(root, "custom-run");
+    const mem = join(repo, ".pi", "memory");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    mkdirSync(mem, { recursive: true });
+    writeFileSync(join(mem, "MEMORY.md"), "# Memory index\n\n- `auth.md` — **Auth** (project): auth\n");
+    writeFileSync(join(mem, "auth.md"), "---\nname: Auth\ndescription: auth login flow\ntype: project\n---\n- UNIQUE_OAUTH_TOPIC_BODY\n");
+    const pi = makeFakePi();
+    memoryExtension(pi as never);
+    // Pi 1.2 already counts as busy while before_agent_start is running.
+    const ctx = { cwd: repo, hasUI: false, isIdle: () => false };
+    await pi.handlers.get("session_start")![0]({}, ctx);
+    const before = pi.handlers.get("before_agent_start")![0];
+    const customEvent = {
+      type: "before_agent_start", messageType: "custom",
+      message: { customType: "background", content: "auth login", display: false },
+    };
+    const first = await before(customEvent, ctx) as { message: { content: string } };
+    expect(first.message.content).toContain("## Memory index");
+    expect(first.message.content).not.toContain("UNIQUE_OAUTH_TOPIC_BODY");
+    expect(await before(customEvent, ctx)).toBeUndefined();
+    const user = await before({ messageType: "user", prompt: "auth login" }, ctx) as { message: { content: string } };
+    expect(user.message.content).toContain("UNIQUE_OAUTH_TOPIC_BODY");
+    await pi.handlers.get("session_compact")![0]({}, ctx);
+    const compacted = await before(customEvent, ctx) as { message: { content: string } };
+    expect(compacted.message.content).toContain("## Memory index");
+  });
+
   it("re-injects the index after session_compact", async () => {
     const repo = join(root, "compact");
     const mem = join(repo, ".pi", "memory");

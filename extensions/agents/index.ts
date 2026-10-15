@@ -22,7 +22,10 @@ export default function agentsExtension(pi: ExtensionAPI): void {
   // Consumed once, then cleared — a role application affects the next turn only.
   let pendingSystemPrompt: string | undefined;
 
-  pi.on("before_agent_start", () => {
+  pi.on("before_agent_start", (event) => {
+    // Background notifications must not consume the role reserved for the next user turn.
+    // Pre-1.2 events have no messageType and still count as user turns.
+    if ("messageType" in event && event.messageType === "custom") return;
     if (pendingSystemPrompt === undefined) return;
     const systemPrompt = pendingSystemPrompt;
     pendingSystemPrompt = undefined;

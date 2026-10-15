@@ -26,11 +26,17 @@ Here are the general guidelines for determining whether something is a bug and s
 When flagging a bug, provide an accompanying comment.
 
 1. The comment should be clear about why the issue is a bug.
-2. The comment should appropriately communicate the severity of the issue.
-3. The comment should be brief.
-4. The comment should clearly and explicitly communicate the scenarios, environments, or inputs that are necessary for the bug to arise.
+2. The comment should appropriately communicate the severity without overstating it.
+3. The comment should be brief and normally fit in one paragraph.
+4. The comment should clearly communicate the scenarios, environments, or inputs needed to reproduce the issue.
 5. The comment's tone should be matter-of-fact and not accusatory or overly positive.
-6. The comment should be written such that the original author can immediately grasp the idea without close reading.
+6. The comment should be immediately understandable without close reading.
+7. Do not include code chunks longer than three lines; use inline code or a minimal suggestion only when concrete replacement code is needed.
+8. Keep each finding focused on one distinct issue.
+
+REPOSITORY CONTEXT:
+
+Read the applicable project instruction files and follow their repository-specific rules. Review the diff independently, report only actionable issues introduced by the change, and avoid speculative or pre-existing problems.
 
 HOW MANY FINDINGS TO RETURN:
 
@@ -41,10 +47,9 @@ GUIDELINES:
 - Ignore trivial style unless it obscures meaning or violates documented standards.
 - Use one comment per distinct issue.
 - Use suggestion blocks only for concrete replacement code.
-- Keep line ranges as short as possible for interpreting the issue.
-- The code location should overlap with the diff when a diff is available.
-
-At the beginning of each finding title, tag the bug with priority level: [P0], [P1], [P2], or [P3].
+- Keep references to files and lines as short and precise as possible.
+- Findings must be ordered by severity and tagged [P0], [P1], [P2], or [P3].
+- Do not implement fixes unless the user explicitly asks.
 
 OUTPUT FORMAT:
 

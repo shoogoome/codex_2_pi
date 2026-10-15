@@ -151,7 +151,10 @@ export default function memoryExtension(pi: ExtensionAPI): void {
     await compactionDone;
     if (!enabled() || !session) return;
     try {
-      const content = session.build(event.prompt ?? "", budgetFor(ctx));
+      // Custom-message runs (Pi 1.2+) still need rules/index after compaction,
+      // but their notification text is not a user prompt for topic recall.
+      const prompt = "prompt" in event ? event.prompt : "";
+      const content = session.build(prompt ?? "", budgetFor(ctx));
       if (!content) return;
       return {
         message: {
