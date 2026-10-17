@@ -14,6 +14,9 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { loadPiRuntimeSdk } from "../shared/pi-runtime-sdk.js";
 import { createContextFork } from "./contextFork.js";
+import { getFastModeReader, type FastModeReader } from "../fast-mode/handle.js";
+import { buildWorkerRuntime } from "./workerRuntime.js";
+import { isForkWorker, registerForkWorker } from "./workerIdentity.js";
 
 import type { TaskStore } from "../tasks/taskStore.js";
 import {
@@ -81,6 +84,8 @@ export interface SpawnLocalAgentOptions extends TaskOrigin {
   /** Active branch captured at invocation, never the entire session archive. */
   parentBranch: readonly SessionEntry[];
   allRegisteredTools?: readonly string[];
+  /** Parent-owned speed mode reader; captured before asynchronous setup. */
+  readFastMode?: FastModeReader;
   /** Abort while waiting for a shared execution slot. */
   abortSignal?: AbortSignal;
   /**
@@ -140,6 +145,7 @@ interface SdkBindings {
   createAgentSessionServices: (opts: {
     cwd: string;
     appendSystemPrompt?: string[];
+    readFastMode: FastModeReader;
   }) => Promise<unknown>;
   createContextFork: (parent: string, cwd: string, branch: readonly SessionEntry[]) => unknown | Promise<unknown>;
   createAgentSessionFromServices: (opts: {
@@ -156,9 +162,10 @@ let _sdk: SdkBindings = {
     const sdk = await loadPiRuntimeSdk();
     return sdk.createAgentSessionServices({
       cwd: opts.cwd,
-      resourceLoaderOptions: opts.appendSystemPrompt?.length
-        ? { appendSystemPrompt: opts.appendSystemPrompt }
-        : undefined,
+      resourceLoaderOptions: {
+        appendSystemPrompt: opts.appendSystemPrompt,
+        extensionFactories: [buildWorkerRuntime(opts.readFastMode)],
+      },
     }) as unknown as Promise<unknown>;
   },
   createContextFork: async (parent, cwd, branch) =>
@@ -189,10 +196,12 @@ export async function spawnLocalAgent(
 ): Promise<SpawnLocalAgentResult> {
   const origin = copyTaskOrigin(opts);
   let unregisterOrigin: (() => void) | undefined;
+  let unregisterWorker: (() => void) | undefined;
+  const readFastMode = opts.readFastMode ?? getFastModeReader(pi);
   // 1. recursion guard — bail if we are already inside a fork child.
-  if (isInForkChild(opts.ctxMessages)) {
+  if (isForkWorker(opts.parentSessionFile) || isInForkChild(opts.ctxMessages)) {
     throw new Error(
-      "Fork is not available inside a forked worker. The fork boilerplate tag was found in ctxMessages.",
+      "Fork is not available inside a forked worker. LocalAgent workers cannot create agents or teammates.",
     );
   }
 
@@ -227,10 +236,13 @@ export async function spawnLocalAgent(
   // transferred to the task cleanup path.
   let session: AgentSession;
   try {
-    const services = await _sdk.createAgentSessionServices({ cwd: opts.cwd });
+    const services = await _sdk.createAgentSessionServices({ cwd: opts.cwd, readFastMode });
     const sm = await _sdk.createContextFork(opts.parentSessionFile, opts.cwd, opts.parentBranch);
     const childFile = (sm as { getSessionFile?: () => string | undefined }).getSessionFile?.();
-    if (childFile) unregisterOrigin = registerTaskOrigin(childFile, origin);
+    if (childFile) {
+      unregisterOrigin = registerTaskOrigin(childFile, origin);
+      unregisterWorker = registerForkWorker(childFile);
+    }
     const wrapped: ForkSessionManagerLike = {
       getEntries: () =>
         (sm as { getEntries: () => readonly unknown[] }).getEntries(),
@@ -251,6 +263,7 @@ export async function spawnLocalAgent(
     session = sessionUnknown as AgentSession;
   } catch (error) {
     unregisterOrigin?.();
+    unregisterWorker?.();
     releaseCapacity();
     throw error;
   }
@@ -287,6 +300,7 @@ export async function spawnLocalAgent(
     await hub.end(activity).catch((e) => logError(e, "localagent activity end"));
     removeProgress(taskId);
     unregisterOrigin?.();
+    unregisterWorker?.();
     releaseCapacity();
     session.dispose();
     throw error;
@@ -458,6 +472,7 @@ export async function spawnLocalAgent(
     if (cleanedUp) return;
     cleanedUp = true;
     unregisterOrigin?.();
+    unregisterWorker?.();
     void hub.end(activity).catch((e) => logError(e, "localagent activity end"));
     try {
       unsub();

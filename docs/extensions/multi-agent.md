@@ -14,10 +14,11 @@
 - 子会话完成、失败或 kill 后释放 SDK 运行时引用；优化的是 fork 的历史复制，并非对任意活动上下文大小的内存保证；
 
 - 固定后台运行，不接受 `run_in_background`；
-- 精确继承主会话当前 provider、model 对象和 thinking level，不接受 `model` 覆盖；
+- 精确继承启动时主会话的 provider、model 对象和 thinking level，不接受显式覆盖；
+- Fast/UltraFast（包括关闭）在每次请求时读取主会话有效状态，随主会话切换，不依赖压缩历史或子 cwd 默认值；只安装 worker 专属钩子，不复制主会话全部扩展的启动流程；
 - 要求主会话持久化；`--no-session` 下会明确报错；
 - 可用 `cwd` 覆盖子会话工作目录；
-- 继承主会话活动工具，但始终移除 `task_agent`，禁止递归 fork；
+- 叶子 worker 继承主会话活动工具，但始终移除 `task_agent` 和 `team_create`；额外的运行时工具门禁禁止创建 fork、teammate 或 team，身份检查不受上下文压缩影响；
 - 终态通知自动把有界最终回答送回主会话，完整轨迹保存在 `output_file`；
 - 不要轮询；终态会自动通知 leader。
 

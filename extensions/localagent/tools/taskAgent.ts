@@ -1,4 +1,7 @@
 import { taskOriginFromContext } from "../../tasks/origin.js";
+import { getFastModeReader } from "../../fast-mode/handle.js";
+import { isForkWorker } from "../workerIdentity.js";
+import { isInForkChild } from "../recursionGuard.js";
 import type {
   AgentToolResult,
   ExtensionAPI,
@@ -127,7 +130,8 @@ export function buildTaskAgentTool(
     "In fork mode the child inherits " +
     "the compaction-aware active context (summary + retained/recent messages), not the full session archive, " +
     "plus the exact parent provider, model, and thinking level; " +
-    "these cannot be overridden.\n" +
+    "these cannot be overridden. Fast/UltraFast follows the parent on each request. " +
+    "A fork is a leaf worker: it cannot create agents, teammates, or teams.\n" +
     "\n" +
     "Use task_agent for independent, non-trivial work that benefits from a separate context. " +
     "Each fork call returns immediately after backgrounding; the final answer arrives automatically.\n" +
@@ -195,6 +199,13 @@ export function buildTaskAgentTool(
           `Unsupported task_agent parameter(s): ${legacyKeys.join(", ")}. ` +
           "The fork path inherits the parent provider/model, and forks always run in the background.",
         );
+      }
+
+      // Check before BOTH routes; a leaf must not bypass the fork guard by
+      // providing team_name/name. The runtime identity survives compaction.
+      if (isForkWorker(ctx.sessionManager.getSessionFile()) ||
+          isInForkChild((ctx as { messages?: readonly unknown[] }).messages ?? [])) {
+        return errResult("LocalAgent is a leaf worker: cannot spawn fork agents or teammates.");
       }
 
       const origin = taskOriginFromContext(ctx);
@@ -348,6 +359,7 @@ export function buildTaskAgentTool(
           parentSessionFile,
           parentBranch: ctx.sessionManager.getBranch(),
           allRegisteredTools: pi.getActiveTools(),
+          readFastMode: getFastModeReader(pi),
           abortSignal: signal,
           onProgress,
         });

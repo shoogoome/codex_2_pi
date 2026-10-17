@@ -1,3 +1,4 @@
+import { isForkWorker } from "./workerIdentity.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnLocalAgent, _setSdkForTest } from "./spawnLocalAgent.js";
 import { createTaskStore, _setDefaultTaskStoreForTest } from "../tasks/taskStore.js";
@@ -409,5 +410,50 @@ describe("LocalAgent settlement and cleanup regressions", () => {
     expect(notifications()).toHaveLength(1);
     expect(notifications()[0]![0].details.status).toBe("killed");
     expect(onProgress.mock.calls.filter(([s]) => s.lastEvent.kind === "task_end")).toHaveLength(0);
+  });
+});
+
+
+describe("fork speed bridge and worker registration", () => {
+  it("passes the live parent speed reader into SDK services and retires identity on completion", async () => {
+    const fake = makeFakeSession();
+    let enabled = true;
+    const readFastMode = () => ({ enabled, tier: "priority" as const });
+    const services = vi.fn().mockResolvedValue({});
+    _setSdkForTest({ createAgentSessionServices: services,
+      createAgentSessionFromServices: vi.fn(async () => {
+        expect(isForkWorker("/tmp/forked.jsonl")).toBe(true);
+        return { session: fake };
+      }),
+    });
+    await spawnLocalAgent(fakePi, createTaskStore(), forkOptions({ readFastMode }));
+    const reader = services.mock.calls[0]![0].readFastMode;
+    expect(reader).toBe(readFastMode);
+    expect(reader().enabled).toBe(true);
+    enabled = false;
+    expect(reader().enabled).toBe(false);
+    fake.emit({ type: "agent_end" });
+    await vi.waitFor(() => expect(fake.dispose).toHaveBeenCalled());
+    expect(isForkWorker("/tmp/forked.jsonl")).toBe(false);
+  });
+
+  it("removes worker identity and capacity when SDK child creation fails", async () => {
+    _setSdkForTest({ createAgentSessionFromServices: vi.fn(async () => {
+      expect(isForkWorker("/tmp/forked.jsonl")).toBe(true);
+      throw new Error("SDK creation failed");
+    }) });
+    await expect(spawnLocalAgent(fakePi, createTaskStore(), forkOptions())).rejects.toThrow("SDK creation failed");
+    expect(isForkWorker("/tmp/forked.jsonl")).toBe(false);
+    expect(getAgentCapacity(fakePi).snapshot()).toMatchObject({ residentChildren: 0, activeChildren: 0 });
+  });
+
+  it("kill retires the identity as well as the SDK session", async () => {
+    const fake = makeFakeSession();
+    _setSdkForTest({ createAgentSessionFromServices: vi.fn(async () => ({ session: fake })) });
+    const store = createTaskStore();
+    const { taskId } = await spawnLocalAgent(fakePi, store, forkOptions());
+    expect(isForkWorker("/tmp/forked.jsonl")).toBe(true);
+    await killLocalAgentTask(fakePi, store, taskId);
+    expect(isForkWorker("/tmp/forked.jsonl")).toBe(false);
   });
 });

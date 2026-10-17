@@ -28,6 +28,12 @@
 
 footer 显示 `⚡ fast` 或 `⚡ ultrafast (requested)`。两者都仅表示本地配置请求该档位，**不表示账户获得授权或服务端实际采用了该档位**。恢复会话、切换 session tree 和 compaction 后会恢复分支状态；新会话没有 flag 时默认关闭。
 
+## LocalAgent 继承
+
+默认 fork 的 LocalAgent 在每次模型请求时读取主会话当前的 Fast/UltraFast 状态，包括明确关闭。`--fast`、`--ultrafast`、settings 默认值和会话命令最终解析出的有效状态均可继承；即使没有持久化状态条目或历史已压缩，也不会丢失。主会话切换档位影响子 agent 的下一次请求，不影响已经发出的请求。子工作目录的 Fast 默认值不能覆盖主会话选择。
+
+模型/provider/thinking 则继承 fork 启动时的值。本功能针对一次性 LocalAgent fork，不改变长生命周期 teammate 的配置机制；也不把所有主会话扩展的启动副作用复制到子会话。
+
 ## 请求行为
 
 在 `before_provider_request` 阶段复制请求并注入；按 Codex #49675 将 `model`、`stream`、`service_tier` 排在大段 `input` 之前，让网关尽早读取路由字段。Fast 与 UltraFast 均适用，即使已有相同档位也会修正顺序。

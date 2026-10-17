@@ -1,6 +1,8 @@
 import type { Model } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadFastModeSettings } from "./settings.js";
+import { publishFastModeReader } from "./handle.js";
+import { isForkWorker } from "../localagent/workerIdentity.js";
 import {
   FAST_MODE_STATE_ENTRY,
   FAST_SERVICE_TIER,
@@ -51,6 +53,7 @@ export default function fastModeExtension(
   const loadSettings = dependencies.loadSettings ?? loadFastModeSettings;
   let enabled = false;
   let tier: SpeedServiceTier = FAST_SERVICE_TIER;
+  publishFastModeReader(pi, () => ({ enabled, tier }));
 
   pi.registerFlag("fast", {
     description: "Start this Pi session with Codex Fast mode enabled (priority service tier; increased usage).",
@@ -166,6 +169,9 @@ export default function fastModeExtension(
   }
 
   pi.on("before_provider_request", (event, ctx) => {
+    // A fork has an explicit parent-owned routing hook. Local defaults and
+    // compaction-restored Fast state must not override it (including parent off).
+    if (isForkWorker(ctx.sessionManager.getSessionFile?.())) return;
     const nextPayload = applyFastServiceTier(event.payload, {
       enabled,
       tier,
@@ -202,6 +208,7 @@ export default function fastModeExtension(
   pi.on("session_compact", async (_event, ctx) => restore(ctx));
   pi.on("model_select", async (event, ctx) => updateStatus(ctx, event.model));
   pi.on("session_shutdown", async (_event, ctx) => {
+    enabled = false;
     if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);
   });
 }

@@ -1,3 +1,4 @@
+import { registerForkWorker } from "../workerIdentity.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTaskAgentTool,
@@ -404,4 +405,26 @@ describe("task_agent rendering", () => {
     );
     expect(render(output)).toBe("");
   });
+});
+
+
+it.each([
+  { description: "x", prompt: "y" },
+  { description: "x", prompt: "y", team_name: "alpha", name: "child" },
+])("a registered leaf cannot take either spawn route with empty history: %j", async (params) => {
+  const pi = freshPi();
+  const spawner = vi.fn(), teammate = vi.fn();
+  _setSpawnerForTest(spawner);
+  _setTeammateSpawnerForTest(teammate);
+  const release = registerForkWorker("/tmp/leaf-route-test");
+  try {
+    const result = await callTool(buildTaskAgentTool(pi, createTaskStore()), params, {
+      sessionManager: { getSessionFile: () => "/tmp/leaf-route-test", getBranch: () => [] },
+      messages: [],
+    });
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toContain("leaf worker");
+    expect(spawner).not.toHaveBeenCalled();
+    expect(teammate).not.toHaveBeenCalled();
+  } finally { release(); }
 });

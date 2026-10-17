@@ -57,7 +57,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 
 ## 模型可调用的工具（非命令）
 
-- **task_agent**（localagent）：默认从当前持久会话完整 fork 后台子 agent，精确继承主会话 provider/model/thinking，终态自动回传最终回答；传 `team_name`+`name` 则改为创建长生命周期 teammate。
+- **task_agent**（localagent）：默认从当前活动上下文精简 fork 后台子 agent，继承启动时主会话 provider/model/thinking，Fast/UltraFast 按请求动态跟随主会话，终态自动回传最终回答。fork 是叶子 worker，不能创建其他 agent、teammate 或 team；主会话传 `team_name`+`name` 可改为创建长生命周期 teammate。
 - **task_bash**（localshell）：后台执行 shell 命令（超时自动转后台）。
 - **task_status / task_kill / task_list**（tasks）：任务框架的查询与管理。
 - **team_create / send_message / request_plan_approval / team_delete / team_plan_approve** + team task 工具（teammate）：`name@team` 隔离、自动结果、消息 ACK/replay、硬写审批、共享任务与 fail-closed resume。

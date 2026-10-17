@@ -1,14 +1,15 @@
 import type { AgentDefinition } from "./types.js";
+import { FORK_FORBIDDEN_TOOLS } from "./workerRuntime.js";
 
 const SAFE_DEFAULT_TOOLS = ["read", "grep", "find", "ls"] as const;
 const NEVER_INCLUDE = new Set(["task_agent"]);
 
 /**
  * A fork inherits the parent's active tool pool, except recursive LocalAgent
- * spawning is always removed.
+ * spawning (fork or teammate) and team creation are always removed.
  */
 export function resolveForkTools(allRegistered: readonly string[]): string[] {
-  return allRegistered.filter((tool) => !NEVER_INCLUDE.has(tool));
+  return allRegistered.filter((tool) => !FORK_FORBIDDEN_TOOLS.has(tool));
 }
 
 /**

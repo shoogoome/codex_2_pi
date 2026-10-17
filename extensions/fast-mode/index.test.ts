@@ -1,3 +1,6 @@
+import { EventEmitter } from "node:events";
+import { getFastModeReader } from "./handle.js";
+import { registerForkWorker } from "../localagent/workerIdentity.js";
 import { describe, expect, it, vi } from "vitest";
 import fastModeExtension from "./index.js";
 import {
@@ -31,6 +34,7 @@ function createHarness(options: {
   const model = options.model === undefined ? codexModel : options.model;
 
   const pi = {
+    events: new EventEmitter(),
     registerFlag: vi.fn(),
     registerCommand: vi.fn((name: string, command: any) => commands.set(name, command)),
     on: vi.fn((event: string, handler: Handler) => {
@@ -390,5 +394,48 @@ describe("Fast mode startup defaults", () => {
       if (expected) expect(result.service_tier).toBe(expected);
       else expect(result).toBeUndefined();
     }
+  });
+});
+
+
+describe("Fast parent configuration reader", () => {
+  it.each([
+    { flag: true }, { ultraFlag: true }, { defaultMode: "fast" as const },
+    { defaultMode: "ultrafast" as const },
+  ])("inherits startup settings without a persisted entry: %j", async (options) => {
+    const h = createHarness(options);
+    await fire(h.handlers, "session_start", {}, h.ctx);
+    expect(h.entries).toEqual([]);
+    const read = getFastModeReader(h.pi);
+    expect(read()).toMatchObject({ enabled: true, tier:
+      options.ultraFlag || options.defaultMode === "ultrafast" ? "ultrafast" : "priority" });
+    await h.commands.get("fast").handler("on", h.ctx);
+    expect(read()).toEqual({ enabled: true, tier: "priority" });
+    await h.commands.get("fast").handler("off", h.ctx);
+    expect(read().enabled).toBe(false);
+  });
+
+  it("isolates roots, returns a copy, and disables the reader on shutdown", async () => {
+    const a = createHarness({ flag: true });
+    const b = createHarness();
+    await fire(a.handlers, "session_start", {}, a.ctx);
+    await fire(b.handlers, "session_start", {}, b.ctx);
+    const readA = getFastModeReader(a.pi), readB = getFastModeReader(b.pi);
+    readA().enabled = false;
+    expect(readA().enabled).toBe(true);
+    expect(readB().enabled).toBe(false);
+    await fire(a.handlers, "session_shutdown", {}, a.ctx);
+    expect(readA().enabled).toBe(false);
+    expect(getFastModeReader({ events: new EventEmitter() } as never)()).toEqual({ enabled: false });
+  });
+
+  it("a worker's local Fast state cannot override its parent-owned hook after compaction", async () => {
+    const child = createHarness({ defaultMode: "ultrafast" });
+    child.ctx.sessionManager.getSessionFile = () => "/tmp/fast-child-test";
+    const release = registerForkWorker("/tmp/fast-child-test");
+    try {
+      await fire(child.handlers, "session_compact", {}, child.ctx);
+      expect(await fire(child.handlers, "before_provider_request", { payload: { input: [] } }, child.ctx)).toBeUndefined();
+    } finally { release(); }
   });
 });

@@ -16,6 +16,10 @@ describe("resolveForkTools", () => {
     expect(resolveForkTools(["read", "task_agent", "grep"])).toEqual(["read", "grep"]);
   });
 
+  it("fork 是叶子 worker，不允许创建 team", () => {
+    expect(resolveForkTools(["read", "task_agent", "team_create", "codemode"])).toEqual(["read", "codemode"]);
+  });
+
   it("空工具池保持为空", () => {
     expect(resolveForkTools([])).toEqual([]);
   });
