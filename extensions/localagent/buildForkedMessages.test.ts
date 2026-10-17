@@ -97,6 +97,21 @@ describe("injectForkPlaceholders", () => {
     expect((sm._appended[0] as { toolCallId: string }).toolCallId).toBe("tu2");
   });
 
+  it("真实 SessionManager 包装条目与原生 toolCall 正确配对", () => {
+    const sm = makeSm([
+      { type: "message", message: {
+        role: "assistant", content: [
+          { type: "toolCall", id: "done", name: "read", arguments: {} },
+          { type: "toolCall", id: "pending", name: "task_agent", arguments: {} },
+        ],
+      } },
+      { type: "custom", customType: "metrics" },
+      { type: "message", message: { role: "toolResult", toolCallId: "done", content: [] } },
+    ]);
+    injectForkPlaceholders(sm);
+    expect(sm._appended).toEqual([expect.objectContaining({ toolCallId: "pending", toolName: "task_agent" })]);
+  });
+
   it("空 entries → 不写", () => {
     const sm = makeSm([]);
     injectForkPlaceholders(sm);

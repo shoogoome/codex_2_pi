@@ -81,6 +81,8 @@ describe("killLocalAgentTask", () => {
 
     await killLocalAgentTask(fakePi, store, "a2");
     expect(store.getTask("a2")?.status).toBe("killed");
+    expect((store.getTask("a2") as LocalAgentTaskState).session).toBeUndefined();
+    expect((store.getTask("a2") as LocalAgentTaskState).cleanup).toBeUndefined();
     // notify 是 tasks/notification 的 sendMessage,后面紧跟一次 tasks/progress kind=kill
     // 的 sendMessage。两次在 notifyTaskTerminal 之后顺序触发。`tasks/summary` 已被
     // 移除(task_agent 的 renderResult 接管了终态展示)。

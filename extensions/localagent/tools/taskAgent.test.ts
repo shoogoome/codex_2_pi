@@ -26,7 +26,7 @@ const fakePi: any = {
 
 const fakeCtx: any = {
   cwd: "/tmp",
-  sessionManager: { getSessionFile: () => "/tmp/parent.jsonl" },
+  sessionManager: { getSessionFile: () => "/tmp/parent.jsonl", getBranch: () => [] },
   model: parentModel,
   messages: [],
 };
@@ -166,6 +166,7 @@ describe("task_agent fork contract", () => {
       allRegisteredTools: ["read", "bash", "task_agent"],
     });
     expect(options.model).toBe(parentModel);
+    expect(options.parentBranch).toEqual([]);
     expect((result.content[0] as { text: string }).text).toMatch(/Fork backgrounded/);
     expect(result.details).toMatchObject({
       action: "task_agent",
@@ -174,6 +175,25 @@ describe("task_agent fork contract", () => {
       status: "running",
       isBackgrounded: true,
     });
+  });
+
+  it("捕获活动分支，不读取包含其他分支的全量条目", async () => {
+    const branch = [{ type: "message", id: "active", parentId: null, message: { role: "user", content: "current" } }];
+    const spawner = vi.fn().mockResolvedValue({
+      taskId: "a1", status: "running", backgrounded: true,
+      agentType: "__fork__", toolCallCount: 0, tokenCount: 0, outputFile: "/tmp/a1.out",
+    });
+    _setSpawnerForTest(spawner);
+    const getBranch = vi.fn(() => branch);
+    const getEntries = vi.fn(() => { throw new Error("must not read archive"); });
+    const result = await callTool(buildTaskAgentTool(fakePi, createTaskStore()),
+      { description: "x", prompt: "y" },
+      { sessionManager: { getSessionFile: () => "/tmp/parent.jsonl", getBranch, getEntries } },
+    );
+    expect((result as { isError?: boolean }).isError).not.toBe(true);
+    expect(spawner.mock.calls[0]![2].parentBranch).toBe(branch);
+    expect(getBranch).toHaveBeenCalledTimes(1);
+    expect(getEntries).not.toHaveBeenCalled();
   });
 
   it("spawner 返回非后台结果时按内部契约错误处理", async () => {

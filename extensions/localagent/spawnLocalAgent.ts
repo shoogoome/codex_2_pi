@@ -1,7 +1,7 @@
 // spawnLocalAgent — background-only fork of the current persisted Pi session.
 //
 // LocalAgent has exactly one mode: clone the parent branch with
-// SessionManager.forkFrom, inherit its exact provider/model/thinking runtime,
+// a compaction-aware context snapshot, inherit its exact provider/model/thinking runtime,
 // repair any in-flight tool calls, and run the delegated prompt in background.
 // Recursive forks are rejected by the boilerplate guard.
 
@@ -10,8 +10,10 @@ import { getTaskActivityHandle } from "../tasks/activity.js";
 import type {
   AgentSession,
   ExtensionAPI,
+  SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { loadPiRuntimeSdk } from "../shared/pi-runtime-sdk.js";
+import { createContextFork } from "./contextFork.js";
 
 import type { TaskStore } from "../tasks/taskStore.js";
 import {
@@ -76,6 +78,8 @@ export interface SpawnLocalAgentOptions extends TaskOrigin {
   /** Current parent thinking level. */
   thinkingLevel: AgentThinkingLevel;
   parentSessionFile: string;
+  /** Active branch captured at invocation, never the entire session archive. */
+  parentBranch: readonly SessionEntry[];
   allRegisteredTools?: readonly string[];
   /** Abort while waiting for a shared execution slot. */
   abortSignal?: AbortSignal;
@@ -137,7 +141,7 @@ interface SdkBindings {
     cwd: string;
     appendSystemPrompt?: string[];
   }) => Promise<unknown>;
-  SessionManagerForkFrom: (parent: string, cwd: string) => unknown | Promise<unknown>;
+  createContextFork: (parent: string, cwd: string, branch: readonly SessionEntry[]) => unknown | Promise<unknown>;
   createAgentSessionFromServices: (opts: {
     services: unknown;
     sessionManager: unknown;
@@ -157,8 +161,8 @@ let _sdk: SdkBindings = {
         : undefined,
     }) as unknown as Promise<unknown>;
   },
-  SessionManagerForkFrom: async (parent, cwd) =>
-    (await loadPiRuntimeSdk()).SessionManager.forkFrom(parent, cwd),
+  createContextFork: async (parent, cwd, branch) =>
+    createContextFork(await loadPiRuntimeSdk(), parent, cwd, branch),
   createAgentSessionFromServices: async (opts) => {
     const sdk = await loadPiRuntimeSdk();
     return sdk.createAgentSessionFromServices({
@@ -224,7 +228,7 @@ export async function spawnLocalAgent(
   let session: AgentSession;
   try {
     const services = await _sdk.createAgentSessionServices({ cwd: opts.cwd });
-    const sm = await _sdk.SessionManagerForkFrom(opts.parentSessionFile, opts.cwd);
+    const sm = await _sdk.createContextFork(opts.parentSessionFile, opts.cwd, opts.parentBranch);
     const childFile = (sm as { getSessionFile?: () => string | undefined }).getSessionFile?.();
     if (childFile) unregisterOrigin = registerTaskOrigin(childFile, origin);
     const wrapped: ForkSessionManagerLike = {
@@ -530,6 +534,13 @@ export async function spawnLocalAgent(
     } catch (e) {
       logError(e, "session.dispose-bg");
     }
+    // dispose() disconnects listeners but does not clear the SDK history.
+    // Terminal task metadata must not keep the entire worker session alive.
+    updateTaskState<LocalAgentTaskState>(taskId, store, (cur) => ({
+      ...cur,
+      session: undefined,
+      cleanup: undefined,
+    }));
     removeProgress(taskId);
     void evictTaskOutput(taskId);
   };

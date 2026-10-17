@@ -125,7 +125,8 @@ export function buildTaskAgentTool(
     "`team_name` + `name` are given — spawn a long-lived teammate.\n" +
     "\n" +
     "In fork mode the child inherits " +
-    "the full active conversation plus the exact parent provider, model, and thinking level; " +
+    "the compaction-aware active context (summary + retained/recent messages), not the full session archive, " +
+    "plus the exact parent provider, model, and thinking level; " +
     "these cannot be overridden.\n" +
     "\n" +
     "Use task_agent for independent, non-trivial work that benefits from a separate context. " +
@@ -345,6 +346,7 @@ export function buildTaskAgentTool(
           model: runtime.model,
           thinkingLevel: runtime.thinkingLevel,
           parentSessionFile,
+          parentBranch: ctx.sessionManager.getBranch(),
           allRegisteredTools: pi.getActiveTools(),
           abortSignal: signal,
           onProgress,

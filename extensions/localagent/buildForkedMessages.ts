@@ -1,6 +1,6 @@
 // Inject placeholder tool_result entries into a forked SessionManager.
 //
-// Why: SessionManager.forkFrom copies the parent jsonl verbatim. If the
+// Why: the context fork retains the parent's latest messages. If the
 // parent's tail is an assistant message containing in-flight tool_use
 // blocks (the very tool call that triggered the fork), the forked sub-
 // session sees an assistant turn with unmatched tool_use → the LLM
@@ -22,7 +22,7 @@
 import { FORK_PLACEHOLDER_RESULT } from "./boilerplate.js";
 
 interface ToolUseBlock {
-  type: "tool_use";
+  type: "tool_use" | "toolCall";
   id: string;
   name?: string;
   input?: unknown;
@@ -52,7 +52,8 @@ function isAssistant(e: unknown): e is AssistantEntry {
 }
 
 function isToolUse(b: unknown): b is ToolUseBlock {
-  return typeof b === "object" && b !== null && (b as { type?: string }).type === "tool_use";
+  return typeof b === "object" && b !== null &&
+    ["tool_use", "toolCall"].includes((b as { type?: string }).type ?? "");
 }
 
 function collectExistingToolResultIds(entries: readonly unknown[], afterIndex: number): Set<string> {
@@ -67,7 +68,11 @@ function collectExistingToolResultIds(entries: readonly unknown[], afterIndex: n
 }
 
 export function injectForkPlaceholders(sm: ForkSessionManagerLike): void {
-  const entries = sm.getEntries();
+  // SessionManager returns wrapped entries; tolerate bare messages for legacy adapters.
+  const entries = sm.getEntries().map((entry) => {
+    const wrapped = entry as { type?: string; message?: unknown };
+    return wrapped?.type === "message" ? wrapped.message : entry;
+  });
   if (entries.length === 0) return;
 
   // Find the last assistant entry; only its in-flight tool_uses matter.

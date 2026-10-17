@@ -52,6 +52,11 @@ export async function killLocalAgentTask(
   } catch (e) {
     logError(e, "killLocalAgent dispose");
   }
+  updateTaskState<LocalAgentTaskState>(taskId, store, (cur) => ({
+    ...cur,
+    session: undefined,
+    cleanup: undefined,
+  }));
   try {
     await flushTaskOutput(taskId);
   } catch (e) {

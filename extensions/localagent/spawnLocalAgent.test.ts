@@ -57,6 +57,7 @@ function forkOptions(overrides: Record<string, unknown> = {}) {
     ctxMessages: [],
     cwd: "/tmp",
     parentSessionFile: "/tmp/parent.jsonl",
+    parentBranch: [],
     model: inheritedModel,
     thinkingLevel: "max" as const,
     allRegisteredTools: ["read", "bash", "task_agent"],
@@ -81,7 +82,7 @@ beforeEach(() => {
   fakePi.sendMessage.mockClear();
   _setSdkForTest({
     createAgentSessionServices: vi.fn().mockResolvedValue({}),
-    SessionManagerForkFrom: vi.fn(() => forkSessionManager()),
+    createContextFork: vi.fn(() => forkSessionManager()),
     createAgentSessionFromServices: vi.fn(async () => ({ session: makeFakeSession() })),
   });
 });
@@ -102,13 +103,13 @@ describe("spawnLocalAgent — fork-only runtime", () => {
     const forkFrom = vi.fn(() => forkSessionManager());
     _setSdkForTest({
       createAgentSessionServices: vi.fn().mockResolvedValue({}),
-      SessionManagerForkFrom: forkFrom,
+      createContextFork: forkFrom,
       createAgentSessionFromServices: vi.fn(async () => ({ session: fake })),
     });
 
     const result = await spawnLocalAgent(fakePi, createTaskStore(), forkOptions());
 
-    expect(forkFrom).toHaveBeenCalledWith("/tmp/parent.jsonl", "/tmp");
+    expect(forkFrom).toHaveBeenCalledWith("/tmp/parent.jsonl", "/tmp", []);
     expect(result).toMatchObject({
       status: "running",
       backgrounded: true,
@@ -237,6 +238,8 @@ describe("spawnLocalAgent — progress and terminal delivery", () => {
       },
     });
     expect(fake.dispose).toHaveBeenCalled();
+    expect((store.getTask(result.taskId) as LocalAgentTaskState).session).toBeUndefined();
+    expect((store.getTask(result.taskId) as LocalAgentTaskState).cleanup).toBeUndefined();
   });
 
   it("模型错误以 failed 终态通知主会话", async () => {

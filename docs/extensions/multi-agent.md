@@ -6,7 +6,12 @@
 
 ### fork（默认）
 
-调用 `task_agent`，不传 `team_name` 和 `name`，会从当前有效 Pi session 完整 fork 一个进程内 LocalAgent：
+调用 `task_agent`，不传 `team_name` 和 `name`，会从当前活动分支的有效上下文精简 fork 一个进程内 LocalAgent：
+
+- 已压缩时，只复制最新摘要、`firstKeptEntryId` 起保留的消息和后续记录；未压缩时复制活动分支；
+- 不重读父 JSONL，不复制其他分支、已总结的旧历史、费用/速度/监控快照和任务进度日志；
+- 保留压缩系统提示词检查点、上下文编辑及必要引用，重建子会话父链；父历史文件不变；
+- 子会话完成、失败或 kill 后释放 SDK 运行时引用；优化的是 fork 的历史复制，并非对任意活动上下文大小的内存保证；
 
 - 固定后台运行，不接受 `run_in_background`；
 - 精确继承主会话当前 provider、model 对象和 thinking level，不接受 `model` 覆盖；
