@@ -63,29 +63,41 @@ export async function killLocalAgentTask(
     logError(e, "killLocalAgent flush");
   }
 
-  notifyTaskTerminal(pi, store, {
-    taskId,
-    taskType: "local_agent",
-    status: "killed",
-    description: t.description,
-    outputFile: t.outputFile,
-    toolUseId: t.toolUseId,
-    triggerTurn: true,
-    extra: { agentType: t.agentType, ...getProgress(taskId) },
-  });
-  emitTaskProgress(pi, {
-    taskId,
-    taskType: "local_agent",
-    kind: "kill",
-    summary: "killed by user request",
-    description: t.description,
-    agentType: t.agentType,
-  });
+  try {
+    notifyTaskTerminal(pi, store, {
+      taskId,
+      taskType: "local_agent",
+      status: "killed",
+      description: t.description,
+      outputFile: t.outputFile,
+      toolUseId: t.toolUseId,
+      triggerTurn: true,
+      extra: { agentType: t.agentType, ...getProgress(taskId) },
+    });
+  } catch (e) {
+    logError(e, "killLocalAgent notify");
+  }
+  try {
+    emitTaskProgress(pi, {
+      taskId,
+      taskType: "local_agent",
+      kind: "kill",
+      summary: "killed by user request",
+      description: t.description,
+      agentType: t.agentType,
+    });
+  } catch (e) {
+    logError(e, "killLocalAgent progress");
+  }
   // NOTE (terminal-summary removal): a `tasks/summary` customMessage used to
   // be emitted here. The task_agent tool's renderResult now owns the
   // user-visible "this task is done" line in the TUI, so the redundant
   // second main-stream row was dropped. Kill state still flows via
   // `tasks/notification` (jsonl + LLM context) above.
   removeProgress(taskId);
-  void evictTaskOutput(taskId);
+  try {
+    await evictTaskOutput(taskId);
+  } catch (e) {
+    logError(e, "killLocalAgent evict output");
+  }
 }

@@ -293,16 +293,11 @@ export async function spawnLocalAgent(
   }
   registerTask(initial, store);
 
-  // 4. counters + agent_end signal — declared early so pushProgress can read them.
+  // 4. Counters track the latest request; only prompt settlement is terminal.
   let turnCount = 0;
   let toolCount = 0;
   let lastFinalText = "";
   let runError: string | undefined;
-  let agentEnded = false;
-  let agentEndedResolve: () => void = () => {};
-  const agentEndedPromise = new Promise<void>((resolve) => {
-    agentEndedResolve = resolve;
-  });
 
   // Build progress timeline + emit helper. Each emit: (a) sendMessage(jsonl persistence),
   // (b) onProgress callback (live stream to TUI/RPC via tool_execution_update).
@@ -312,22 +307,26 @@ export async function spawnLocalAgent(
     const full: SpawnLocalAgentTimelineEntry = { ts: Date.now(), ...entry };
     timeline.push(full);
     // jsonl persistence (history) — not flushed live during streaming, but recorded.
-    emitTaskProgress(pi, {
-      taskId,
-      taskType: "local_agent",
-      kind: full.kind,
-      summary: full.summary,
-      description,
-      agentType: FORK_AGENT_TYPE,
-      toolName: full.toolName,
-      isError: full.isError,
-      toolCallCount:
-        full.kind === "task_end" || full.kind === "kill" ? toolCount : undefined,
-      tokenCount:
-        full.kind === "task_end" || full.kind === "kill"
-          ? getProgress(taskId)?.tokenCount ?? 0
-          : undefined,
-    });
+    try {
+      emitTaskProgress(pi, {
+        taskId,
+        taskType: "local_agent",
+        kind: full.kind,
+        summary: full.summary,
+        description,
+        agentType: FORK_AGENT_TYPE,
+        toolName: full.toolName,
+        isError: full.isError,
+        toolCallCount:
+          full.kind === "task_end" || full.kind === "kill" ? toolCount : undefined,
+        tokenCount:
+          full.kind === "task_end" || full.kind === "kill"
+            ? getProgress(taskId)?.tokenCount ?? 0
+            : undefined,
+      });
+    } catch (error) {
+      logError(error, "localagent progress delivery");
+    }
     // Live stream to caller's onUpdate (TUI/RPC will see partialResult immediately).
     try {
       opts.onProgress?.({
@@ -339,7 +338,9 @@ export async function spawnLocalAgent(
         toolCallCount: toolCount,
         turnCount,
         tokenCount: getProgress(taskId)?.tokenCount ?? 0,
-        status: full.kind === "task_end" ? "completed" : full.kind === "kill" ? "killed" : "running",
+        status: full.kind === "task_end"
+          ? (full.isError ? "failed" : "completed")
+          : full.kind === "kill" ? "killed" : "running",
       });
     } catch (err) {
       logError(err, "onProgress callback");
@@ -376,10 +377,8 @@ export async function spawnLocalAgent(
     logError(e, "initTaskOutput race");
   });
 
-  // 5. subscribe — drives translation, output writing, agent_end signal.
-  // Note: counters declared earlier (so pushProgress can see them). pushProgress
-  // is invoked from inside the subscribe listener for tool_start / tool_end /
-  // task_end milestones.
+  // 5. Subscribe to request progress. agent_end is not terminal: the SDK may
+  // still retry, recover from overflow, or drain queued continuations afterward.
 
   const unsub = session.subscribe((event) => {
     const e = event as {
@@ -422,10 +421,13 @@ export async function spawnLocalAgent(
     if (e.type === "message_end" && e.message?.role === "assistant") {
       const total = e.message?.usage?.totalTokens ?? 0;
       if (total > 0) setTokens(taskId, total);
-      if (e.message.stopReason === "error") {
-        runError = e.message.errorMessage || "Agent request failed";
-        void appendTaskOutput(taskId, `[error] ${runError}\n`);
-      }
+      runError = e.message.stopReason === "error"
+        ? e.message.errorMessage || "Agent request failed"
+        : e.message.stopReason === "aborted"
+          ? e.message.errorMessage || "Agent request aborted"
+          : undefined;
+      if (runError) appendTaskOutput(taskId, `[error] ${runError}\n`);
+      lastFinalText = "";
       const c = e.message?.content;
       if (Array.isArray(c)) {
         const txt = c
@@ -449,17 +451,6 @@ export async function spawnLocalAgent(
     } catch (err) {
       logError(err, "translateAgentEvent");
     }
-    if (e.type === "agent_end") {
-      agentEnded = true;
-      pushProgress({
-        kind: "task_end",
-        summary: runError
-          ? `failed: ${runError}`
-          : `done (turns=${turnCount}, tools=${toolCount})`,
-        isError: Boolean(runError),
-      });
-      agentEndedResolve();
-    }
   });
 
   let cleanedUp = false;
@@ -480,74 +471,87 @@ export async function spawnLocalAgent(
     cleanup,
   }));
 
-  // 5. start prompt — MUST .catch immediately to avoid unhandled rejection.
-  const promptText = buildChildDirective(opts.prompt);
-  const promptPromise = session.prompt(promptText).catch((e) => {
-    runError = (e as Error)?.message ?? String(e);
-    logError(e, "session.prompt");
-    void appendTaskOutput(taskId, `[error] ${runError}\n`);
-    if (!agentEnded) {
-      agentEnded = true;
+  // prompt() settles after all SDK retries/recovery, and may settle without
+  // agent_end (e.g. an input hook consumed the prompt). Do not wait on a second
+  // event promise, which would leave such tasks running forever.
+  const runBackgroundFinalizer = async (): Promise<void> => {
+    try {
+      await session.prompt(buildChildDirective(opts.prompt));
+    } catch (error) {
+      runError = (error as Error)?.message ?? String(error);
+      logError(error, "session.prompt");
+      appendTaskOutput(taskId, `[error] ${runError}\n`);
+    }
+
+    // kill claims the terminal state before aborting; it owns disposal and the
+    // killed notification. Never overwrite it or publish a second terminal event.
+    const task = store.getTask(taskId);
+    if (task && task.status !== "running") return;
+    try {
+      if (!task) return;
+      const status = runError ? "failed" as const : "completed" as const;
+      updateTaskState<LocalAgentTaskState>(taskId, store, (cur) => ({
+        ...cur,
+        status,
+        endTime: Date.now(),
+        error: runError,
+        result: {
+          finalText: lastFinalText,
+          toolCallCount: toolCount,
+          tokenCount: getProgress(taskId)?.tokenCount ?? 0,
+        },
+      }));
       pushProgress({
         kind: "task_end",
-        summary: `failed: ${runError}`,
-        isError: true,
+        summary: runError
+          ? `failed: ${runError}`
+          : `done (turns=${turnCount}, tools=${toolCount})`,
+        isError: Boolean(runError),
       });
-      agentEndedResolve();
+      try {
+        await flushTaskOutput(taskId);
+      } catch (error) {
+        logError(error, "localagent output flush");
+      }
+      notifyTaskTerminal(pi, store, {
+        taskId,
+        taskType: "local_agent",
+        status,
+        description,
+        outputFile,
+        toolUseId: opts.toolUseId,
+        finalMessage: boundedFinalMessage(
+          runError ? `Agent failed: ${runError}` : lastFinalText,
+        ),
+        triggerTurn: true,
+        extra: { agentType: FORK_AGENT_TYPE, ...getProgress(taskId) },
+      });
+    } finally {
+      // Notification/storage failures must never retain the SDK runtime or its
+      // capacity leases. Keep each release independent of the others.
+      try {
+        cleanup();
+      } catch (error) {
+        logError(error, "localagent cleanup");
+      }
+      try {
+        session.dispose();
+      } catch (error) {
+        logError(error, "session.dispose-bg");
+      }
+      updateTaskState<LocalAgentTaskState>(taskId, store, (cur) => ({
+        ...cur,
+        session: undefined,
+        cleanup: undefined,
+      }));
+      removeProgress(taskId);
+      await evictTaskOutput(taskId).catch((error) => logError(error, "localagent output eviction"));
     }
-  });
-
-  const runBackgroundFinalizer = async (): Promise<void> => {
-    await agentEndedPromise;
-    await promptPromise;
-    cleanup();
-    await flushTaskOutput(taskId);
-    const t = store.getTask(taskId) as LocalAgentTaskState | undefined;
-    if (!t || t.status !== "running") return;
-    const statusVal = runError ? "failed" as const : "completed" as const;
-    updateTaskState<LocalAgentTaskState>(taskId, store, (cur) => ({
-      ...cur,
-      status: statusVal,
-      endTime: Date.now(),
-      error: runError,
-      result: {
-        finalText: lastFinalText,
-        toolCallCount: toolCount,
-        tokenCount: getProgress(taskId)?.tokenCount ?? 0,
-      },
-    }));
-    notifyTaskTerminal(pi, store, {
-      taskId,
-      taskType: "local_agent",
-      status: statusVal,
-      description,
-      outputFile,
-      toolUseId: opts.toolUseId,
-      finalMessage: boundedFinalMessage(
-        runError ? `Agent failed: ${runError}` : lastFinalText,
-      ),
-      triggerTurn: true,
-      extra: { agentType: FORK_AGENT_TYPE, ...getProgress(taskId) },
-    });
-    try {
-      session.dispose();
-    } catch (e) {
-      logError(e, "session.dispose-bg");
-    }
-    // dispose() disconnects listeners but does not clear the SDK history.
-    // Terminal task metadata must not keep the entire worker session alive.
-    updateTaskState<LocalAgentTaskState>(taskId, store, (cur) => ({
-      ...cur,
-      session: undefined,
-      cleanup: undefined,
-    }));
-    removeProgress(taskId);
-    void evictTaskOutput(taskId);
   };
 
-  // LocalAgent is always background-only: completion is delivered by the
-  // terminal notification and the full transcript remains in outputFile.
-  void runBackgroundFinalizer();
+  // Catch synchronous prompt throws as well as asynchronous failures, and keep
+  // every background rejection observed even if terminal delivery itself fails.
+  void runBackgroundFinalizer().catch((error) => logError(error, "localagent finalizer"));
   return {
     taskId,
     status: "running",

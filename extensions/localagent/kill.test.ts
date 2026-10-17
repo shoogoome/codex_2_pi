@@ -1,8 +1,11 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { killLocalAgentTask } from "./kill.js";
 import { createTaskStore, _setDefaultTaskStoreForTest } from "../tasks/taskStore.js";
 import { _resetTaskOutputDirForTest } from "../tasks/outputPath.js";
-import { _resetProgressForTest, initProgress } from "./progress.js";
+import { _resetProgressForTest, initProgress, getProgress } from "./progress.js";
+import * as diskOutput from "../tasks/diskOutput.js";
+import * as logging from "../tasks/logging.js";
+import * as taskProgress from "../tasks/progress.js";
 import { registerTask } from "../tasks/framework.js";
 import { createTaskStateBase } from "../tasks/Task.js";
 import type { LocalAgentTaskState } from "./types.js";
@@ -13,7 +16,11 @@ beforeEach(() => {
   _setDefaultTaskStoreForTest(createTaskStore());
   _resetTaskOutputDirForTest();
   _resetProgressForTest();
-  fakePi.sendMessage.mockClear();
+  fakePi.sendMessage.mockReset();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 function makeRunningTask(taskId: string): {
@@ -91,6 +98,66 @@ describe("killLocalAgentTask", () => {
       (c: unknown[]) => (c[0] as { customType?: string }).customType,
     );
     expect(customTypes).toEqual(["tasks/notification", "tasks/progress"]);
+  });
+
+  it.each(["tasks/notification", "tasks/progress"])("%s 投递失败仍清理且重复 kill 不重复 dispose", async (failingType) => {
+    const store = createTaskStore();
+    const { state, abort, dispose, cleanup } = makeRunningTask("delivery-failure");
+    initProgress(state.id, 0);
+    registerTask(state, store);
+    const failure = new Error("delivery failed");
+    const log = vi.spyOn(logging, "logError").mockImplementation(() => {});
+    const evict = vi.spyOn(diskOutput, "evictTaskOutput").mockResolvedValue(undefined);
+    fakePi.sendMessage.mockImplementation((message: { customType: string }) => {
+      if (message.customType === failingType) throw failure;
+    });
+
+    await expect(killLocalAgentTask(fakePi, store, state.id)).resolves.toBeUndefined();
+    expect(store.getTask(state.id)).toMatchObject({ status: "killed", session: undefined, cleanup: undefined });
+    expect(getProgress(state.id)).toBeUndefined();
+    expect(evict).toHaveBeenCalledWith(state.id);
+    expect(log).toHaveBeenCalledWith(failure,
+      failingType === "tasks/notification" ? "killLocalAgent notify" : "emitTaskProgress");
+    expect(fakePi.sendMessage.mock.calls.map(([message]: [{ customType: string }]) => message.customType))
+      .toEqual(["tasks/notification", "tasks/progress"]);
+
+    await killLocalAgentTask(fakePi, store, state.id);
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(evict).toHaveBeenCalledTimes(1);
+    expect(fakePi.sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("进度发布函数抛错仍清理进度和输出", async () => {
+    const store = createTaskStore();
+    const { state } = makeRunningTask("progress-failure");
+    initProgress(state.id, 0);
+    registerTask(state, store);
+    const failure = new Error("progress failed");
+    vi.spyOn(taskProgress, "emitTaskProgress").mockImplementation(() => { throw failure; });
+    const evict = vi.spyOn(diskOutput, "evictTaskOutput").mockResolvedValue(undefined);
+    const log = vi.spyOn(logging, "logError").mockImplementation(() => {});
+
+    await expect(killLocalAgentTask(fakePi, store, state.id)).resolves.toBeUndefined();
+    expect(log).toHaveBeenCalledWith(failure, "killLocalAgent progress");
+    expect(getProgress(state.id)).toBeUndefined();
+    expect(evict).toHaveBeenCalledWith(state.id);
+  });
+
+  it("输出 eviction rejection 被接住并记录", async () => {
+    const store = createTaskStore();
+    const { state, dispose } = makeRunningTask("evict-failure");
+    initProgress(state.id, 0);
+    registerTask(state, store);
+    const failure = new Error("evict failed");
+    vi.spyOn(diskOutput, "evictTaskOutput").mockRejectedValue(failure);
+    const log = vi.spyOn(logging, "logError").mockImplementation(() => {});
+
+    await expect(killLocalAgentTask(fakePi, store, state.id)).resolves.toBeUndefined();
+    expect(log).toHaveBeenCalledWith(failure, "killLocalAgent evict output");
+    expect(getProgress(state.id)).toBeUndefined();
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 
   it("abort throw 也不阻断后续清理", async () => {

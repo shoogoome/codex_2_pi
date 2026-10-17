@@ -3,10 +3,12 @@ import { spawnLocalAgent, _setSdkForTest } from "./spawnLocalAgent.js";
 import { createTaskStore, _setDefaultTaskStoreForTest } from "../tasks/taskStore.js";
 import { _resetTaskOutputDirForTest } from "../tasks/outputPath.js";
 import { _clearOutputsForTest } from "../tasks/diskOutput.js";
-import { _resetProgressForTest } from "./progress.js";
+import { _resetProgressForTest, getProgress } from "./progress.js";
+import { killLocalAgentTask } from "./kill.js";
+import * as diskOutput from "../tasks/diskOutput.js";
 import type { LocalAgentTaskState } from "./types.js";
 import { createAgentCapacity } from "../tasks/agentCapacity.js";
-import { attachAgentCapacity } from "../tasks/agentCapacityHandle.js";
+import { attachAgentCapacity, getAgentCapacity } from "../tasks/agentCapacityHandle.js";
 
 interface FakeSession {
   sessionId: string;
@@ -21,15 +23,18 @@ interface FakeSession {
 
 function makeFakeSession(): FakeSession {
   const listeners = new Set<(event: unknown) => void>();
+  let finish!: () => void;
+  const run = new Promise<void>((resolve) => { finish = resolve; });
   return {
     sessionId: "fake-session",
     messages: [],
     isStreaming: false,
     emit(event) {
       for (const listener of listeners) listener(event);
+      if (event.type === "agent_end") finish();
     },
-    prompt: vi.fn().mockResolvedValue(undefined),
-    abort: vi.fn().mockResolvedValue(undefined),
+    prompt: vi.fn().mockReturnValue(run),
+    abort: vi.fn().mockImplementation(async () => { finish(); }),
     dispose: vi.fn(),
     subscribe(listener) {
       listeners.add(listener);
@@ -79,7 +84,7 @@ beforeEach(() => {
   _resetTaskOutputDirForTest();
   _resetProgressForTest();
   attachAgentCapacity(fakePi, createAgentCapacity());
-  fakePi.sendMessage.mockClear();
+  fakePi.sendMessage.mockReset();
   _setSdkForTest({
     createAgentSessionServices: vi.fn().mockResolvedValue({}),
     createContextFork: vi.fn(() => forkSessionManager()),
@@ -88,6 +93,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await _clearOutputsForTest();
 });
 
@@ -299,5 +305,109 @@ describe("fork review activity", () => {
       await vi.waitFor(() => expect(events).toEqual(["before-start", "end"]));
       expect(store.getTask(result.taskId)?.originSessionId).toBe(origin.originSessionId);
     } finally { unsubscribe(); }
+  });
+});
+
+
+describe("LocalAgent settlement and cleanup regressions", () => {
+  function setup() {
+    const fake = makeFakeSession();
+    _setSdkForTest({ createAgentSessionFromServices: vi.fn(async () => ({ session: fake })) });
+    return { fake, store: createTaskStore() };
+  }
+
+  function notifications() {
+    return fakePi.sendMessage.mock.calls.filter(
+      ([message]: any[]) => message.customType === "tasks/notification",
+    );
+  }
+
+  async function expectReleased(fake: FakeSession, store: ReturnType<typeof createTaskStore>, id: string) {
+    await vi.waitFor(() => expect(fake.dispose).toHaveBeenCalledTimes(1));
+    expect(store.getTask(id)).toMatchObject({ session: undefined, cleanup: undefined });
+    expect(getProgress(id)).toBeUndefined();
+    expect(getAgentCapacity(fakePi).snapshot()).toMatchObject({ residentChildren: 0, activeChildren: 0 });
+  }
+
+  it("waits for prompt settlement, clears a recovered error, and emits one terminal snapshot", async () => {
+    const { fake, store } = setup();
+    let finish!: () => void;
+    fake.prompt.mockReturnValue(new Promise<void>((resolve) => { finish = resolve; }));
+    const onProgress = vi.fn();
+    const { taskId } = await spawnLocalAgent(fakePi, store, forkOptions({ onProgress }));
+    fake.emit({ type: "message_end", message: {
+      role: "assistant", stopReason: "error", errorMessage: "transient 503", content: [],
+    } });
+    fake.emit({ type: "agent_end", willRetry: true });
+    await Promise.resolve();
+    expect(store.getTask(taskId)?.status).toBe("running");
+    expect(notifications()).toHaveLength(0);
+    expect(onProgress.mock.calls.filter(([s]) => s.lastEvent.kind === "task_end")).toHaveLength(0);
+    fake.emit({ type: "message_end", message: {
+      role: "assistant", stopReason: "stop", content: [{ type: "text", text: "recovered" }],
+    } });
+    fake.emit({ type: "agent_end" });
+    fake.emit({ type: "agent_settled" });
+    expect(store.getTask(taskId)?.status).toBe("running");
+    finish();
+    await expectReleased(fake, store, taskId);
+    expect(store.getTask(taskId)).toMatchObject({ status: "completed", error: undefined, result: { finalText: "recovered" } });
+    expect(notifications()).toHaveLength(1);
+    expect(onProgress.mock.calls.filter(([s]) => s.lastEvent.kind === "task_end").map(([s]) => s.status)).toEqual(["completed"]);
+  });
+
+  it.each(["error", "aborted"])("reports final %s as failed, not completed", async (stopReason) => {
+    const { fake, store } = setup();
+    const onProgress = vi.fn();
+    const { taskId } = await spawnLocalAgent(fakePi, store, forkOptions({ onProgress }));
+    fake.emit({ type: "message_end", message: { role: "assistant", stopReason, content: [] } });
+    fake.emit({ type: "agent_end" });
+    await expectReleased(fake, store, taskId);
+    expect(store.getTask(taskId)?.status).toBe("failed");
+    expect(onProgress.mock.calls.filter(([s]) => s.lastEvent.kind === "task_end").map(([s]) => s.status)).toEqual(["failed"]);
+  });
+
+  it.each(["resolved", "rejected", "throws"])("cleans up when prompt %s without agent_end", async (mode) => {
+    const { fake, store } = setup();
+    fake.prompt.mockImplementation(() => {
+      if (mode === "throws") throw new Error("sync prompt failure");
+      return mode === "rejected" ? Promise.reject(new Error("prompt failure")) : Promise.resolve();
+    });
+    const { taskId } = await spawnLocalAgent(fakePi, store, forkOptions());
+    await expectReleased(fake, store, taskId);
+    expect(store.getTask(taskId)?.status).toBe(mode === "resolved" ? "completed" : "failed");
+    expect(notifications()).toHaveLength(1);
+  });
+
+  it("releases runtime and capacity when progress and terminal delivery throw", async () => {
+    const { fake, store } = setup();
+    fakePi.sendMessage.mockImplementation(() => { throw new Error("delivery unavailable"); });
+    const { taskId } = await spawnLocalAgent(fakePi, store, forkOptions());
+    fake.emit({ type: "agent_end" });
+    await expectReleased(fake, store, taskId);
+    expect(store.getTask(taskId)?.status).toBe("completed");
+  });
+
+  it("still notifies and disposes if output flush/eviction fail", async () => {
+    const { fake, store } = setup();
+    vi.spyOn(diskOutput, "flushTaskOutput").mockRejectedValue(new Error("flush failed"));
+    vi.spyOn(diskOutput, "evictTaskOutput").mockRejectedValue(new Error("eviction failed"));
+    const { taskId } = await spawnLocalAgent(fakePi, store, forkOptions());
+    fake.emit({ type: "agent_end" });
+    await expectReleased(fake, store, taskId);
+    expect(notifications()).toHaveLength(1);
+    expect(store.getTask(taskId)?.status).toBe("completed");
+  });
+
+  it("kill racing with prompt settlement owns the only terminal notification", async () => {
+    const { fake, store } = setup();
+    const onProgress = vi.fn();
+    const { taskId } = await spawnLocalAgent(fakePi, store, forkOptions({ onProgress }));
+    await killLocalAgentTask(fakePi, store, taskId);
+    await expectReleased(fake, store, taskId);
+    expect(store.getTask(taskId)?.status).toBe("killed");
+    expect(notifications()).toHaveLength(1);
+    expect(notifications()[0]![0].details.status).toBe("killed");
+    expect(onProgress.mock.calls.filter(([s]) => s.lastEvent.kind === "task_end")).toHaveLength(0);
   });
 });

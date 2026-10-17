@@ -148,7 +148,7 @@ Review 只读取当前工作树，不直接连接 GitHub，也不会自动读取
 - **fork（默认）**：省略 `team_name`/`name`，从当前持久 Pi session 的活动分支精简 fork，并固定在后台运行。只继承最新压缩摘要、`firstKeptEntryId` 起的保留消息与后续消息；尚未压缩时继承活动分支。不复制其他分支、已被摘要替代的旧历史、统计快照或任务进度日志，父会话保持原样。参数只有 `description`、`prompt` 和可选 `cwd`。
 - **长生命周期 teammate**：同时传 `team_name` 和 `name`，把成员加入已有 team（需先 `team_create`）。此时可用 `subagent_type` 选择 role（默认 `general-purpose`）。两个参数必须成对出现，只传其一会明确报错而非静默 fork。
 
-fork 子会话精确继承主会话当前的 provider、model 对象和 thinking level，不做别名查找，也不允许显式覆盖。它继承当前活动工具并始终剔除 `task_agent` 以禁止递归 fork。任务结束后，有界最终回答随终态通知自动送回主会话，完整轨迹保存在 `output_file`。子会话结束或被 kill 后会释放 SDK 运行时引用，避免终态任务持续持有历史。此优化不自动裁剪父 JSONL，也不保证任意大小的活动上下文都不会耗尽内存。
+fork 子会话精确继承主会话当前的 provider、model 对象和 thinking level，不做别名查找，也不允许显式覆盖。它继承当前活动工具并始终剔除 `task_agent` 以禁止递归 fork。任务会等待 SDK 的自动重试、压缩恢复及续跑全部结束，再根据最终结果发送一次终态通知；中途可恢复的错误不会把最终成功误报为失败。有界最终回答自动送回主会话，完整轨迹保存在 `output_file`。子会话结束或被 kill 后会释放 SDK 运行时引用；通知或输出清理失败会记录日志，不阻断运行时回收，避免终态任务持续持有历史。此优化不自动裁剪父 JSONL，也不保证任意大小的活动上下文都不会耗尽内存。
 
 teammate 成员拥有独立持久 session，可在多轮消息间 idle，并在根 session 恢复时重建。成员用完整 `name@team` 路由：裸名称只有在 team 内（leader 侧则要求跨 team 唯一）才解析，广播也不会越 team。每轮最终回答和错误会自动注入 leader；成员间消息以 `message_sent → message_ack` 持久化，未 ACK 消息在 resume 后按序重放。写文件、变更 shell 和 MCP 调用由运行时硬门禁拦截，只有 `request_plan_approval` 获批后才在当前 turn 开放；恢复时若原 role 被删除或定义指纹变化则 fail-closed。`session_shutdown` 会挂起成员供下一会话重建；显式 `team_delete` 才执行 shutdown handshake 和超时强制清理。详见 [多 Agent 说明](docs/extensions/multi-agent.md)。
 
