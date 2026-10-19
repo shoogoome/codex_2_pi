@@ -9,7 +9,7 @@ import {
 import { getUltraHandle } from "./handle.js";
 import ultraExtension from "./index.js";
 
-type Model = { provider: string; id: string };
+type Model = { provider: string; api: string; id: string };
 
 interface HarnessOptions {
   current?: string;
@@ -22,7 +22,7 @@ interface HarnessOptions {
 
 function createHarness(options: HarnessOptions = {}) {
   let current = options.current ?? "medium";
-  let model = options.model ?? { provider: "openai-codex", id: "gpt-5.6-sol" };
+  let model = options.model ?? { provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.6-sol" };
   let activeTools = [...(options.activeTools ?? ["read", "task_agent"])];
   const handlers = new Map<string, Array<(event: any, ctx: any) => any>>();
   const entries: Array<{ type: "custom"; customType: string; data: unknown }> = [];
@@ -118,9 +118,9 @@ describe("Ultra controller registration", () => {
 
   it("allows Ultra for any active model", () => {
     const { handle } = createHarness();
-    expect(handle.isCapable({ provider: "openai-codex", id: "gpt-5.6-sol" })).toBe(true);
-    expect(handle.isCapable({ provider: "openai-codex", id: "gpt-5.6-luna" })).toBe(true);
-    expect(handle.isCapable({ provider: "codebuddy", id: "any-model" })).toBe(true);
+    expect(handle.isCapable({ provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.6-sol" })).toBe(true);
+    expect(handle.isCapable({ provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.6-luna" })).toBe(true);
+    expect(handle.isCapable({ provider: "codebuddy", api: "openai-completions", id: "any-model" })).toBe(false);
     expect(handle.isCapable(undefined)).toBe(false);
   });
 });
@@ -150,9 +150,9 @@ describe("Ultra request semantics", () => {
     expect(result.systemPrompt).toBe(`base\n\n${EXPLICIT_MULTI_AGENT_MODE_PROMPT}`);
   });
 
-  it("clears an Ultra workflow block and keeps explicit mode on other models", async () => {
+  it("clears Ultra workflow state on non-Codex models", async () => {
     const { ctx, handlers } = createHarness({
-      model: { provider: "codebuddy", id: "any-model" },
+      model: { provider: "codebuddy", api: "openai-completions", id: "any-model" },
     });
     const [result] = await fire(
       handlers,
@@ -161,7 +161,7 @@ describe("Ultra request semantics", () => {
       ctx,
     );
 
-    expect(result.systemPrompt).toBe(`base\n\n${EXPLICIT_MULTI_AGENT_MODE_PROMPT}`);
+    expect(result.systemPrompt).toBe("base");
   });
 
   it("keeps the combined mode and workflow blocks idempotent", async () => {
@@ -435,14 +435,14 @@ describe("Ultra session lifecycle", () => {
 
     const model = createHarness();
     model.handle.enable(model.ctx);
-    model.setModel({ provider: "openai-codex", id: "gpt-5.6-luna" });
+    model.setModel({ provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.6-luna" });
     await fire(
       model.handlers,
       "model_select",
       {
         type: "model_select",
-        model: { provider: "openai-codex", id: "gpt-5.6-luna" },
-        previousModel: { provider: "openai-codex", id: "gpt-5.6-sol" },
+        model: { provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.6-luna" },
+        previousModel: { provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.6-sol" },
         source: "set",
       },
       model.ctx,

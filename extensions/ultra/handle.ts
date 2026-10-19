@@ -12,6 +12,8 @@ const HANDLE_KEY = "__pi_codex_ultra_handle__";
 export interface UltraModelRef {
   id: string;
   provider?: string;
+  api?: string;
+  thinkingLevelMap?: Partial<Record<"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max", string | null>>;
 }
 
 export interface UltraEnableOptions {

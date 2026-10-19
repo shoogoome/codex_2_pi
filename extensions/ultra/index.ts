@@ -7,9 +7,11 @@ import {
   ULTRA_STATE_ENTRY,
   ULTRA_STATUS_KEY,
   type UltraWorkflowState,
+  applyUltraReasoningEffort,
   getUltraWorkflowState,
   isNativeThinkingLevel,
   isUltraCapableModel,
+  resolveUltraNativeEffort,
   restoreUltraStateFromBranch,
   toolsForUltraTaskAgentActivation,
   upsertMultiAgentModePrompt,
@@ -21,7 +23,6 @@ import {
   type UltraHandle,
 } from "./handle.js";
 
-const NATIVE_ULTRA_LEVEL = "max";
 type PiThinkingLevel = Parameters<ExtensionAPI["setThinkingLevel"]>[0];
 
 interface WorkflowActivationResult {
@@ -47,8 +48,12 @@ export default function ultraExtension(pi: ExtensionAPI): void {
     return isNativeThinkingLevel(level) ? level : undefined;
   }
 
-  function isNativeMax(): boolean {
-    return currentNativeLevel() === NATIVE_ULTRA_LEVEL;
+  function effectiveUltraLevel(model: ExtensionContext["model"]): NativeThinkingLevel {
+    return resolveUltraNativeEffort(model as Parameters<typeof resolveUltraNativeEffort>[0]);
+  }
+
+  function isNativeUltra(model: ExtensionContext["model"]): boolean {
+    return currentNativeLevel() === effectiveUltraLevel(model);
   }
 
   function availableToolNames(): string[] {
@@ -234,8 +239,9 @@ export default function ultraExtension(pi: ExtensionAPI): void {
     const wasEnabled = enabled;
     const previousLevel = currentNativeLevel() ?? "medium";
     const fallback = wasEnabled ? fallbackLevel ?? previousLevel : previousLevel;
-    pi.setThinkingLevel(NATIVE_ULTRA_LEVEL as PiThinkingLevel);
-    if (!isNativeMax()) {
+    const nativeLevel = effectiveUltraLevel(model);
+    pi.setThinkingLevel(nativeLevel as PiThinkingLevel);
+    if (!isNativeUltra(model)) {
       pi.setThinkingLevel(previousLevel as PiThinkingLevel);
       if (options.notify !== false) {
         ctx.ui.notify(
@@ -278,8 +284,9 @@ export default function ultraExtension(pi: ExtensionAPI): void {
       const previousLevel = currentNativeLevel() ?? "medium";
       enabled = true;
       fallbackLevel = restored.fallbackLevel ?? previousLevel;
-      pi.setThinkingLevel(NATIVE_ULTRA_LEVEL as PiThinkingLevel);
-      if (!isNativeMax()) {
+      const nativeLevel = effectiveUltraLevel(ctx.model);
+      pi.setThinkingLevel(nativeLevel as PiThinkingLevel);
+      if (!isNativeUltra(ctx.model)) {
         enabled = false;
         fallbackLevel = undefined;
         pi.setThinkingLevel(previousLevel as PiThinkingLevel);
@@ -302,9 +309,15 @@ export default function ultraExtension(pi: ExtensionAPI): void {
   // Codex MultiAgentV2 always carries an explicit mode. Ultra selects proactive;
   // every non-Ultra effort keeps delegation explicit-request-only. The
   // Ultra-owned workflow block is present only while its task tool is usable.
+  pi.on("before_provider_request", (event, ctx) => {
+    if (!enabled || !isUltraCapableModel(ctx.model) || !isNativeUltra(ctx.model)) return undefined;
+    const nextPayload = applyUltraReasoningEffort(event.payload, ctx.model);
+    return nextPayload === event.payload ? undefined : nextPayload;
+  });
+
   pi.on("before_agent_start", async (event, ctx) => {
     const capable = isUltraCapableModel(ctx.model);
-    const ultraActive = capable && enabled && isNativeMax();
+    const ultraActive = capable && enabled && isNativeUltra(ctx.model);
     let workflowActive = false;
 
     if (ultraActive) {
@@ -324,11 +337,11 @@ export default function ultraExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("thinking_level_select", async (event, ctx) => {
-    if (enabled && String(event.level) !== NATIVE_ULTRA_LEVEL) disable(ctx, true);
+    if (enabled) disable(ctx, true);
   });
 
   pi.on("model_select", async (event, ctx) => {
-    if (enabled && (!isUltraCapableModel(event.model) || !isNativeMax())) {
+    if (enabled && (!isUltraCapableModel(event.model) || !isNativeUltra(event.model))) {
       disable(ctx, true);
     } else {
       updateStatus(ctx);
@@ -344,7 +357,7 @@ export default function ultraExtension(pi: ExtensionAPI): void {
     // fallback. Pi's public setter also updates its global default, so restore
     // that fallback at graceful shutdown while leaving ultra/state intact.
     const fallback = fallbackLevel;
-    const shouldRestoreFallback = enabled && fallback && isNativeMax();
+    const shouldRestoreFallback = enabled && fallback && isNativeUltra(ctx.model);
     releaseTaskAgentAddedByUltra();
     taskAgentAddedByUltra = false;
     enabled = false;

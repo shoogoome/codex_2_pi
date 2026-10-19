@@ -11,11 +11,10 @@
 export interface SessionHandleEvents {
   emit?(channel: string, data: unknown): void;
   on?(channel: string, handler: (data: unknown) => unknown): unknown;
-  [key: string]: unknown;
 }
 
 export interface SessionHandleHost {
-  events: SessionHandleEvents;
+  events: Pick<SessionHandleEvents, "emit" | "on">;
 }
 
 function queryChannel(key: string): string {
@@ -23,19 +22,21 @@ function queryChannel(key: string): string {
 }
 
 export function attachSessionHandle<T>(host: SessionHandleHost, key: string, handle: T): void {
-  host.events[key] = handle;
-  if (typeof host.events.on !== "function") return;
-  host.events.on(queryChannel(key), (reply) => {
+  const events = host.events as SessionHandleEvents & Record<string, unknown>;
+  events[key] = handle;
+  if (typeof events.on !== "function") return;
+  events.on(queryChannel(key), (reply) => {
     if (typeof reply === "function") (reply as (value: T) => void)(handle);
   });
 }
 
 export function getSessionHandle<T>(host: SessionHandleHost, key: string): T | undefined {
-  const direct = host.events[key];
+  const events = host.events as SessionHandleEvents & Record<string, unknown>;
+  const direct = events[key];
   if (direct !== undefined) return direct as T;
-  if (typeof host.events.emit !== "function") return undefined;
+  if (typeof events.emit !== "function") return undefined;
   let found: T | undefined;
-  host.events.emit(queryChannel(key), (value: T) => {
+  events.emit(queryChannel(key), (value: T) => {
     found = value;
   });
   return found;

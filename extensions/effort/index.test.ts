@@ -5,6 +5,7 @@ import effortExtension from "./index.js";
 
 type Model = {
   provider: string;
+  api?: string;
   id: string;
   name?: string;
   reasoning?: boolean;
@@ -22,6 +23,7 @@ interface HarnessOptions {
 function codexModel(id = "gpt-5.6-sol"): Model {
   return {
     provider: "openai-codex",
+    api: "openai-codex-responses",
     id,
     name: id === "gpt-5.6-sol" ? "GPT-5.6 Sol" : "GPT-5.6 Terra",
     reasoning: true,

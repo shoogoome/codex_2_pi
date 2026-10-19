@@ -45,14 +45,48 @@ export interface UltraState {
   fallbackLevel?: NativeThinkingLevel;
 }
 
-interface ModelRef {
+export interface UltraModelRef {
   id: string;
   provider?: string;
+  api?: string;
+  thinkingLevelMap?: Partial<Record<NativeThinkingLevel, string | null>>;
 }
 
-/** Ultra is available for any active model; native max support is checked at enable time. */
-export function isUltraCapableModel(model: ModelRef | undefined): boolean {
-  return Boolean(model?.id);
+/** Codex Ultra is a logical subscription effort, not a generic Pi `max` alias. */
+export function isUltraCapableModel(model: UltraModelRef | undefined): boolean {
+  return model?.provider === "openai-codex" && model.api === "openai-codex-responses";
+}
+
+/**
+ * Resolve Codex's logical Ultra effort to the native value sent by Pi.
+ *
+ * The subscription catalog currently exposes max for the GPT-5.6 Sol/Terra
+ * models. For catalog entries that expose a mapping instead, follow Codex's
+ * fallback rule: explicit max, then the highest non-Ultra mapped level.
+ */
+export function resolveUltraNativeEffort(model: UltraModelRef | undefined): NativeThinkingLevel {
+  const map = model?.thinkingLevelMap;
+  if (map?.max) return "max";
+  if (map?.xhigh) return "xhigh";
+  if (map?.high) return "high";
+  if (map?.medium) return "medium";
+  if (map?.low) return "low";
+  if (map?.minimal) return "minimal";
+  return "max";
+}
+
+/** Apply the resolved Ultra effort without mutating the provider payload. */
+export function applyUltraReasoningEffort(
+  payload: unknown,
+  model: UltraModelRef | undefined,
+): unknown {
+  if (!isUltraCapableModel(model) || typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    return payload;
+  }
+  const record = payload as Record<string, unknown>;
+  const effort = resolveUltraNativeEffort(model);
+  if (record.reasoning_effort === effort) return payload;
+  return { ...record, reasoning_effort: effort };
 }
 
 const MULTI_AGENT_MODE_BLOCK = /(?:\n{2})?<multi_agent_mode>[\s\S]*?<\/multi_agent_mode>/g;

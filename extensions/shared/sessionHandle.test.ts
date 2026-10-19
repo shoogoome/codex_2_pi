@@ -42,7 +42,7 @@ describe("sessionHandle", () => {
     const { owner, consumer } = sharedBusHosts();
     const handle = { id: "shared" };
     attachSessionHandle(owner, "__pi_tasks_handle__", handle);
-    expect(consumer.events.__pi_tasks_handle__).toBeUndefined();
+    expect((consumer.events as Record<string, unknown>).__pi_tasks_handle__).toBeUndefined();
     expect(getSessionHandle(consumer, "__pi_tasks_handle__")).toBe(handle);
   });
 

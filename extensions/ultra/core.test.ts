@@ -2,10 +2,40 @@ import { describe, expect, it } from "vitest";
 import {
   EXPLICIT_MULTI_AGENT_MODE_PROMPT,
   ULTRA_WORKFLOW_PROMPT,
+  applyUltraReasoningEffort,
+  isUltraCapableModel,
+  resolveUltraNativeEffort,
   getUltraWorkflowState,
   toolsForUltraTaskAgentActivation,
   upsertUltraWorkflowPrompt,
 } from "./core.js";
+
+describe("Codex Ultra model semantics", () => {
+  const model = {
+    provider: "openai-codex",
+    api: "openai-codex-responses",
+    id: "gpt-5.6-sol",
+  };
+
+  it("recognizes only Codex Responses models", () => {
+    expect(isUltraCapableModel(model)).toBe(true);
+    expect(isUltraCapableModel({ ...model, api: "openai-completions" })).toBe(false);
+    expect(isUltraCapableModel({ ...model, provider: "other" })).toBe(false);
+  });
+
+  it("resolves the highest supported native effort like Codex", () => {
+    expect(resolveUltraNativeEffort({ ...model, thinkingLevelMap: { max: "max" } })).toBe("max");
+    expect(resolveUltraNativeEffort({ ...model, thinkingLevelMap: { xhigh: "xhigh" } })).toBe("xhigh");
+  });
+
+  it("adds the resolved effort without mutating the provider payload", () => {
+    const payload = { model: model.id, input: [] };
+    const result = applyUltraReasoningEffort(payload, model) as Record<string, unknown>;
+    expect(result).toEqual({ ...payload, reasoning_effort: "max" });
+    expect(payload).not.toHaveProperty("reasoning_effort");
+    expect(applyUltraReasoningEffort(result, model)).toBe(result);
+  });
+});
 
 describe("Ultra workflow prompt", () => {
   it("upserts one idempotent workflow block", () => {
