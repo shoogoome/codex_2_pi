@@ -64,6 +64,7 @@ describe("compaction-aware worker fork", () => {
       { type: "custom", id: "metrics", customType: "cost-usage/snapshot", data: { huge: "x".repeat(1_000_000) } },
       { type: "custom", id: "speed", customType: "token-speed/snapshot" },
       { type: "custom", id: "monitor", customType: "monitor/metric" },
+      { type: "custom", id: "progress-entry", customType: "tasks/progress", data: { details: { summary: "tool started" } } },
       { type: "custom", id: "state", customType: "extension/state", data: { necessary: true } },
       { type: "custom_message", id: "progress", customType: "tasks/progress", content: "tool started", display: false },
       { type: "custom_message", id: "context", customType: "memory", content: "keep this", display: false },

@@ -40,7 +40,10 @@ export function selectForkEntries(branch: readonly SessionEntry[]): SessionEntry
     }
   }
   const selected = [...settings.values(), ...branch.slice(start)].filter((entry) => {
-    if (entry.type === "custom" && TELEMETRY_TYPES.has(entry.customType)) return false;
+    if (
+      entry.type === "custom" &&
+      (TELEMETRY_TYPES.has(entry.customType) || entry.customType === "tasks/progress")
+    ) return false;
     // These are filtered from provider requests by tasks/contextFilter, not
     // conversation. Do not copy thousands of worker progress notifications.
     return !(entry.type === "custom_message" && entry.customType === "tasks/progress");
