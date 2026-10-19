@@ -37,11 +37,13 @@ const EXT_ROOT = join(REPO_ROOT, "extensions");
  * package.json pointing at index.ts and continue to load via jiti (correct,
  * just not sped up).
  *   - pets:     resolves ../catalog (spritesheet.png, pet.json) from import.meta.url
+ *   - codebuddy-reasoning: must use jiti host aliases; native JS imports can
+ *     resolve an older workspace pi-ai instead of the running Pi version.
  * "shared" is skipped implicitly (no index.ts entry; it is imported by others).
  * (imagegen was historically skipped for a SKILL.md resource; the codex-port
  * rewrite has no resource deps and bundles normally.)
  */
-const SKIP = new Set(["pets", "shared", "honeypot"]);
+const SKIP = new Set(["pets", "shared", "honeypot", "codebuddy-reasoning"]);
 
 /** Discover extension directories that have an index.ts entry point. */
 function discoverExtensions() {
@@ -108,6 +110,15 @@ async function main() {
       `  ok  ${name.padEnd(18)} -> ${relative(REPO_ROOT, outfile)}  (${(bytes / 1024).toFixed(1)} KB${warns ? `, ${warns} warning(s)` : ""})`,
     );
   }
+  // The stable dots account gateway runs independently of any Pi session.
+  // Keep this portable Node 18 bundle in the published Channel package as well.
+  await build({
+    entryPoints: [join(EXT_ROOT, "channel", "src", "dotsAccountCli.ts")],
+    outfile: join(EXT_ROOT, "channel", "dist", "dots-account.js"),
+    bundle: true, format: "esm", platform: "node", target: "node18",
+    logLevel: "warning",
+  });
+  console.log("  ok  dots-account       -> extensions/channel/dist/dots-account.js (standalone OAuth gateway)");
   const skipped = [...SKIP].filter((n) => n !== "shared");
   console.log(`\nDone. Bundled ${results.length}. Skipped (unbundled, resource deps): ${skipped.join(", ") || "none"}.`);
   checkDuplicateInlining(results);

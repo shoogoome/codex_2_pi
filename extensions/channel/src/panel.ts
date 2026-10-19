@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import {
   matchesKey,
   truncateToWidth,
@@ -57,17 +58,22 @@ interface ChannelForm {
   host: string;
   port: string;
   token: string;
+  mcpAuth: "bearer" | "none";
   callbackUrl: string;
   callbackToken: string;
 }
 
 type FormRow =
-  | { kind: "choice"; key: "protocol" | "direction" | "scope" | "delivery" | "wake"; label: string }
+  | { kind: "choice"; key: "protocol" | "direction" | "scope" | "delivery" | "wake" | "mcpAuth"; label: string }
   | { kind: "field"; key: "name" | "host" | "port" | "token" | "callbackUrl" | "callbackToken"; label: string; secret?: boolean }
   | { kind: "submit" };
 
 const MAX_VISIBLE = 10;
-const PROTOCOLS: ChannelProtocol[] = ["http", "wechat"];
+const PROTOCOLS: ChannelProtocol[] = ["http", "wechat", "mcp", "dots"];
+
+function isMcpProtocol(protocol: ChannelProtocol): boolean {
+  return protocol === "mcp" || protocol === "dots";
+}
 const DIRECTIONS: ChannelDirection[] = ["inbound", "outbound", "both"];
 const SCOPES: ChannelScopeKind[] = ["selected", "all"];
 const DELIVERIES: ChannelDelivery[] = ["steer", "followUp", "nextTurn"];
@@ -119,9 +125,10 @@ function initialForm(channel: ChannelDefinition | undefined, sessionId: string):
     scope: channel?.scope.kind ?? "selected",
     delivery: channel?.delivery ?? "steer",
     wake: channel?.wake ?? true,
-    host: channel?.http?.host ?? "127.0.0.1",
-    port: String(channel?.http?.port ?? 0),
-    token: channel?.http?.token ?? "",
+    host: channel?.dots?.host ?? channel?.mcp?.host ?? channel?.http?.host ?? "127.0.0.1",
+    port: String(channel?.dots?.port ?? channel?.mcp?.port ?? channel?.http?.port ?? 0),
+    token: channel?.dots?.token ?? channel?.mcp?.token ?? channel?.http?.token ?? "",
+    mcpAuth: channel?.dots?.auth ?? channel?.mcp?.auth ?? "bearer",
     callbackUrl: channel?.http?.callbackUrl ?? "",
     callbackToken: channel?.http?.callbackToken ?? "",
   };
@@ -141,6 +148,7 @@ export class ChannelPanel implements Component {
   private status?: string;
   private statusColor = "dim";
   private form?: ChannelForm;
+  private generatedMcpToken?: string;
 
   constructor(
     private readonly theme: ChannelPanelTheme,
@@ -213,6 +221,7 @@ export class ChannelPanel implements Component {
   }
 
   handleInput(data: string): void {
+    this.generatedMcpToken = undefined;
     if (matchesKey(data, "ctrl+c")) {
       this.done();
       return;
@@ -294,14 +303,18 @@ export class ChannelPanel implements Component {
     if (matchesKey(data, "escape")) {
       this.view = { kind: "list" }; this.cursor = 0;
     } else if (matchesKey(data, "up")) this.cursor = Math.max(0, this.cursor - 1);
-    else if (matchesKey(data, "down")) this.cursor = Math.min(3, this.cursor + 1);
+    else if (matchesKey(data, "down")) this.cursor = Math.min(5, this.cursor + 1);
     else if (matchesKey(data, "return")) {
-      if (this.cursor >= 2) {
+      if (this.cursor === 2 || this.cursor === 3) {
         this.requestedPiAction = { action: "create", mode: this.cursor === 2 ? "direct" : "group" };
         this.done(); return;
       }
       this.form = initialForm(undefined, this.deps.sessionId);
-      this.form.protocol = this.cursor === 0 ? "http" : "wechat";
+      this.form.protocol = this.cursor === 5 ? "dots" : this.cursor === 4 ? "mcp" : this.cursor === 0 ? "http" : "wechat";
+      if (this.form.protocol === "dots") {
+        this.form.name = "我的 dots";
+        this.form.delivery = "followUp";
+      }
       this.view = { kind: "form" }; this.cursor = 0;
     }
     this.requestRender?.();
@@ -377,7 +390,12 @@ export class ChannelPanel implements Component {
       { kind: "choice", key: "delivery", label: "Delivery" },
       { kind: "choice", key: "wake", label: "Auto-trigger Pi" },
     ];
-    if (form.protocol === "http") {
+    if (isMcpProtocol(form.protocol)) {
+      rows.push({ kind: "field", key: "host", label: "Bind host" });
+      rows.push({ kind: "field", key: "port", label: "Bind port" });
+      rows.push({ kind: "choice", key: "mcpAuth", label: "MCP auth" });
+      if (form.mcpAuth === "bearer") rows.push({ kind: "field", key: "token", label: "MCP token", secret: true });
+    } else if (form.protocol === "http") {
       if (form.direction !== "outbound") {
         rows.push({ kind: "field", key: "host", label: "Bind host" });
         rows.push({ kind: "field", key: "port", label: "Bind port" });
@@ -419,11 +437,35 @@ export class ChannelPanel implements Component {
     if (matchesKey(data, "left") || matchesKey(data, "right")) {
       if (current.kind !== "choice") return;
       const direction = matchesKey(data, "left") ? -1 : 1;
-      if (current.key === "protocol") form.protocol = nextValue(PROTOCOLS, form.protocol, direction);
-      else if (current.key === "direction") form.direction = nextValue(DIRECTIONS, form.direction, direction);
-      else if (current.key === "scope") form.scope = nextValue(SCOPES, form.scope, direction);
+      if (current.key === "protocol") {
+        form.protocol = nextValue(PROTOCOLS, form.protocol, direction);
+        if (isMcpProtocol(form.protocol)) {
+          form.scope = "selected";
+          if (form.protocol === "dots" && !this.view.id) {
+            if (!form.name) form.name = "我的 dots";
+            form.delivery = "followUp";
+          }
+          this.status = form.protocol === "dots"
+            ? "dots 仅允许多会话范围；MCP 工具 + Events，默认 Bearer 鉴权。"
+            : "MCP 仅允许多会话范围；只暴露显式挂载的会话。";
+          this.statusColor = "accent";
+        }
+      } else if (current.key === "direction") form.direction = nextValue(DIRECTIONS, form.direction, direction);
+      else if (current.key === "scope") {
+        if (isMcpProtocol(form.protocol)) {
+          this.status = `${form.protocol === "dots" ? "dots" : "MCP"} 不支持全部会话；请显式挂载需要暴露的会话。`;
+          this.statusColor = "warning";
+        } else form.scope = nextValue(SCOPES, form.scope, direction);
+      }
       else if (current.key === "delivery") form.delivery = nextValue(DELIVERIES, form.delivery, direction);
       else if (current.key === "wake") form.wake = !form.wake;
+      else if (current.key === "mcpAuth") {
+        form.mcpAuth = form.mcpAuth === "bearer" ? "none" : "bearer";
+        this.status = form.mcpAuth === "none"
+          ? `鉴权已关闭：任何可访问端点的人均可向此会话发消息和读取回复。${form.protocol === "dots" ? "dots 消息与事件订阅对所有可达者开放，仅限联调。" : ""}`
+          : "已启用 Bearer 鉴权。";
+        this.statusColor = form.mcpAuth === "none" ? "warning" : "accent";
+      }
       if (form.delivery === "nextTurn") form.wake = false;
       this.requestRender?.();
       return;
@@ -451,6 +493,17 @@ export class ChannelPanel implements Component {
       ? []
       : [...new Set([...(existing?.scope.sessionIds ?? []), this.deps.sessionId])];
     const port = Number(form.port);
+    const generatedMcpToken = isMcpProtocol(form.protocol) && form.mcpAuth === "bearer" && !form.token ? randomBytes(32).toString("hex") : undefined;
+    const listener = existing?.dots ?? existing?.mcp;
+    const mcpOptions = {
+      host: form.host.trim(),
+      port,
+      token: generatedMcpToken ?? form.token,
+      auth: form.mcpAuth,
+      maxBodyBytes: listener?.maxBodyBytes ?? 64 * 1024,
+      rateLimitPerMinute: listener?.rateLimitPerMinute ?? 30,
+      idempotencyTtlMs: listener?.idempotencyTtlMs ?? 10 * 60 * 1000,
+    };
     const candidate: ChannelDefinition = {
       id: existing?.id ?? `channel-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
       name: form.name.trim(),
@@ -478,7 +531,11 @@ export class ChannelPanel implements Component {
               ...(existing?.http?.callbackHeaders ? { callbackHeaders: existing.http.callbackHeaders } : {}),
             },
           }
-        : { wechat: existing?.wechat ?? {} }),
+        : form.protocol === "mcp"
+          ? { mcp: mcpOptions }
+          : form.protocol === "dots"
+            ? { dots: { ...existing?.dots, ...mcpOptions } }
+            : { wechat: existing?.wechat ?? {} }),
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
@@ -488,7 +545,13 @@ export class ChannelPanel implements Component {
       this.requestRender?.();
       return;
     }
-    if (candidate.protocol === "http" && !Number.isInteger(port)) {
+    if (isMcpProtocol(candidate.protocol) && candidate.scope.kind !== "selected") {
+      this.status = `${candidate.protocol === "dots" ? "dots" : "MCP"} 不支持全部会话；请使用多会话范围并显式挂载。`;
+      this.statusColor = "error";
+      this.requestRender?.();
+      return;
+    }
+    if ((candidate.protocol === "http" || isMcpProtocol(candidate.protocol)) && !Number.isInteger(port)) {
       this.status = "Bind port must be an integer.";
       this.statusColor = "error";
       this.requestRender?.();
@@ -497,8 +560,14 @@ export class ChannelPanel implements Component {
     const id = candidate.id;
     this.run(
       `saving ${candidate.name}`,
-      () => this.deps.saveChannel(candidate),
-      `saved ${candidate.name}`,
+      async () => {
+        await this.deps.saveChannel(candidate);
+        this.generatedMcpToken = generatedMcpToken;
+      },
+      generatedMcpToken
+        ? `saved ${candidate.name} · MCP token 仅本次显示，请妥善保存`
+        : isMcpProtocol(candidate.protocol) && mcpOptions.auth === "none"
+          ? `saved ${candidate.name} · 警告：MCP 鉴权已关闭${candidate.protocol === "dots" ? "；事件订阅也已开放" : ""}` : `saved ${candidate.name}`,
     );
     this.form = undefined;
     this.view = { kind: "details", id };
@@ -541,11 +610,21 @@ export class ChannelPanel implements Component {
     else if (this.view.kind === "details") lines = this.renderDetails(w);
     else if (this.view.kind === "form") lines = this.renderForm(w);
     else lines = this.renderRemove(w);
+    if (this.generatedMcpToken) {
+      // Keep the complete credential visible even on narrow terminals, rather
+      // than truncating it behind the long one-time status message.
+      const tokenLines = [this.row(" MCP Bearer token (one-time):", w)];
+      const chunkSize = Math.max(1, w - 1);
+      for (let index = 0; index < this.generatedMcpToken.length; index += chunkSize) {
+        tokenLines.push(this.row(` ${this.generatedMcpToken.slice(index, index + chunkSize)}`, w));
+      }
+      lines.splice(Math.max(0, lines.length - 1), 0, ...tokenLines);
+    }
     return lines.map((line) => truncateToWidth(line, Math.max(0, Math.floor(width)), "", true));
   }
 
   private renderAddType(width: number): string[] {
-    const options = ["HTTP Channel", "微信 Channel", "Pi 双人频道（最多 2 人）", "Pi 群频道（最多 32 人）"];
+    const options = ["HTTP Channel", "微信 Channel", "Pi 双人频道（最多 2 人）", "Pi 群频道（最多 32 人）", "MCP 服务（暴露当前会话）", "dots Channel（MCP 工具 + Events）"];
     return [this.top("创建 Channel 类型", width), ...options.map((option, index) => this.row(`${index === this.cursor ? "❯" : " "} ${option}`, width)), this.hint("↑↓选择 · Enter 创建 · Esc 返回", width), this.bottom(width)];
   }
 
@@ -632,6 +711,15 @@ export class ChannelPanel implements Component {
     if (channel.protocol === "http") {
       if (direction !== "outbound") lines.push(this.row(` Ingress: http://${channel.http?.host}:${item.runtime?.port ?? channel.http?.port} · token ***`, width));
       if (direction !== "inbound") lines.push(this.row(` Callback: ${channel.http?.callbackUrl ?? "—"} · auth ${channel.http?.callbackToken ? "***" : "—"}`, width));
+    } else if (isMcpProtocol(channel.protocol)) {
+      const listener = channel.protocol === "dots" ? channel.dots : channel.mcp;
+      lines.push(this.row(` MCP endpoint: ${item.runtime?.localUrl ?? `http://${listener?.host}:${item.runtime?.port ?? listener?.port}/mcp`} · ${item.runtime?.connection === "account" ? "OAuth2.1 account gateway" : listener?.auth === "none" ? "auth none (WARNING)" : "token ***"}`, width));
+      lines.push(this.row(" Exposes this mounted session only; no direct shell/file tools or chat history.", width));
+      if (channel.protocol === "dots") {
+        lines.push(this.row(" dots: MCP tools + MCP 2.0 Events; default Bearer, explicit none is public test-only.", width));
+        lines.push(this.row(" Remote dots need a separately configured HTTPS endpoint; no tunnel is opened automatically.", width));
+        lines.push(this.row(" Queued replies/events do not prove the client read or processed them; verify wake-up separately.", width));
+      }
     } else {
       lines.push(this.row(` Credentials: ~/.pi/agent/channel/wechat/${channel.id}/credentials.json`, width));
     }

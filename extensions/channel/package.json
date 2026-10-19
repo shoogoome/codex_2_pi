@@ -1,7 +1,7 @@
 {
   "name": "pi-channel-extension",
   "version": "0.1.0",
-  "description": "Named multi-session HTTP and WeChat ClawBot channels for Pi.",
+  "description": "Named HTTP, MCP, dots OAuth account/Events, WeChat and local Pi channels.",
   "type": "module",
   "main": "./index.ts",
   "pi": {
@@ -10,6 +10,7 @@
     ]
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
     "qrcode-terminal": "^0.12.0"
   },
   "peerDependencies": {

@@ -1,9 +1,9 @@
-import type {
-  Context,
-  Model,
-  SimpleStreamOptions,
-} from "@earendil-works/pi-ai";
-import { streamSimple as streamSimpleOpenAICompletions } from "@earendil-works/pi-ai/api/openai-completions";
+import {
+  openAICompletionsApi,
+  type Context,
+  type Model,
+  type SimpleStreamOptions,
+} from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const CODEBUDDY_PROVIDER = "codebuddy";
@@ -37,34 +37,11 @@ function streamCodeBuddyCompletions(
 ) {
   const originalOnPayload = options?.onPayload;
 
-  // New sessions can contain a system message in `context.messages`, while
-  // pi-ai's estimator expects system text in `context.systemPrompt`. Normalize
-  // that boundary here, and tolerate partially populated history blocks.
-  const rawMessages = (context as any).messages as Array<any>;
-  const systemMessages = rawMessages
-    .filter((message) => message.role === "system" && typeof message.content === "string")
-    .map((message) => message.content as string);
-  const normalizedContext = {
-    ...context,
-    systemPrompt: [context.systemPrompt, ...systemMessages].filter(Boolean).join("\n\n") || undefined,
-    tools: context.tools ?? [],
-    messages: rawMessages
-      .filter((message) => message.role !== "system")
-      .map((message) => ({
-        ...message,
-        content: Array.isArray(message.content)
-          ? message.content.map((block: any) => {
-              if (block.type === "text") return { ...block, text: block.text ?? "" };
-              if (block.type === "thinking") return { ...block, thinking: block.thinking ?? "" };
-              if (block.type === "toolCall") {
-                return { ...block, name: block.name ?? "", arguments: block.arguments ?? {} };
-              }
-              return block;
-            })
-          : message.content ?? [],
-      })),
-  } as Context;
-  return streamSimpleOpenAICompletions(model as Model<"openai-completions">, normalizedContext, {
+  // Pi aliases /compat to the host runtime. A direct /api/* import can resolve
+  // to an older workspace dependency instead, which cannot read host transcripts.
+  // Keep system messages (prompt sections and tool deltas) intact and let the
+  // host's API implementation perform its own context conversion.
+  return openAICompletionsApi().streamSimple(model as Model<"openai-completions">, context, {
     ...options,
     onPayload: async (payload, currentModel) => {
       const replaced = await originalOnPayload?.(payload, currentModel);

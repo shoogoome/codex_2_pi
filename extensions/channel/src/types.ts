@@ -4,7 +4,7 @@ export const CHANNEL_CUSTOM_TYPE = "channel/message";
 
 export type ChannelDelivery = "steer" | "followUp" | "nextTurn";
 /** Persisted v1 configurations intentionally do not contain ephemeral Pi rooms. */
-export type ExternalChannelProtocol = "http" | "wechat";
+export type ExternalChannelProtocol = "http" | "wechat" | "mcp" | "dots";
 export type ChannelProtocol = ExternalChannelProtocol;
 export type ChannelRuntimeProtocol = ExternalChannelProtocol | "pi";
 export type ChannelDirection = "inbound" | "outbound" | "both";
@@ -30,6 +30,19 @@ export interface HttpChannelOptions {
   callbackHeaders?: Record<string, string>;
 }
 
+/** Streamable HTTP MCP listener exposing only the explicitly mounted Pi session. */
+export interface McpChannelOptions extends ChannelConfig {
+  /** Defaults to bearer; disabling auth must be explicit. */
+  auth?: "bearer" | "none";
+}
+
+/** ChatGPT dots: MCP messaging plus durable MCP Events webhook subscriptions. */
+export interface DotsChannelOptions extends McpChannelOptions {
+  subscriptionTtlMs?: number;
+  retryIntervalMs?: number;
+  maxAttempts?: number;
+}
+
 export interface WechatChannelOptions {
   /** iLink/ClawBot API 地址；扫码响应可覆盖为实际区域地址。 */
   baseUrl?: string;
@@ -49,6 +62,8 @@ export interface ChannelDefinition {
   wake: boolean;
   http?: HttpChannelOptions;
   wechat?: WechatChannelOptions;
+  mcp?: McpChannelOptions;
+  dots?: DotsChannelOptions;
   createdAt: string;
   updatedAt: string;
 }
@@ -70,6 +85,8 @@ export interface ChannelImage {
 }
 
 export interface ChannelMessage {
+  /** Explicit false for intentionally unauthenticated transports. */
+  authenticated?: boolean;
   id: string;
   source: string;
   content: string;
@@ -173,6 +190,8 @@ export interface ChannelRuntimeSnapshot {
   host?: string;
   port?: number;
   localUrl?: string;
+  /** dots account gateway mode reuses one fixed OAuth connection. */
+  connection?: "account" | "session";
 }
 
 export interface ChannelSendRequest {

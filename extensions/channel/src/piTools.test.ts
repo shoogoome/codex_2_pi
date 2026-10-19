@@ -27,6 +27,18 @@ describe("channel_manage tool", () => {
   it("defines each management action and rejects wrong fields in discriminated parameters", () => {
     const valid = [
       { action: "create", name: "协作", mode: "group", identity },
+      { action: "create", protocol: "pi", name: "协作", mode: "direct", identity },
+      { action: "create", protocol: "http", name: "dot", http: { callbackUrl: "https://example.com" } },
+      { action: "create", protocol: "wechat", name: "wx" },
+      { action: "create", protocol: "dots", name: "dot", dots: { auth: "none", subscriptionTtlMs: 60_000, retryIntervalMs: 100, maxAttempts: 3 } },
+      { action: "update", channel: "dot", dots: { token: "new" } },
+      { action: "create", protocol: "mcp", name: "session", mcp: { host: "127.0.0.1", port: 0 } },
+      { action: "update", channel: "session", mcp: { token: "new-token" } },
+      { action: "create", protocol: "mcp", name: "no-auth", mcp: { auth: "none" } },
+      { action: "update", channel: "dot", direction: "inbound" },
+      { action: "restart" }, { action: "restart", channel: "dot" },
+      { action: "delete", channel: "dot", confirm: true },
+      ...["status", "auth", "mount", "unmount", "enable", "disable"].map((action) => ({ action, channel: "dot" })),
       { action: "join", pairing_code: "code", identity, local_name: "alias" },
       { action: "list" }, { action: "members", channel: "room" },
       { action: "update_identity", channel: "room", identity },
@@ -36,6 +48,14 @@ describe("channel_manage tool", () => {
     for (const input of valid) expect(Value.Check(PiChannelManageParams, input)).toBe(true);
     for (const input of [
       { action: "create", name: "room", mode: "group" },
+      { action: "create", protocol: "http", name: "dot", identity },
+      { action: "create", protocol: "smtp", name: "dot" },
+      { action: "create", protocol: "mcp", name: "session", mcp: { callbackUrl: "https://example.com" } },
+      { action: "create", protocol: "mcp", name: "session", mcp: { auth: "invalid" } },
+      { action: "create", protocol: "dots", name: "dot", dots: { callbackUrl: "https://example.com" } },
+      { action: "create", protocol: "dots", name: "dot", dots: { maxAttempts: 21 } },
+      { action: "delete", channel: "dot", confirm: false },
+      { action: "update", channel: "dot", scope: "all" },
       { action: "join", pairing_code: "code", identity: { displayName: "x" } },
       { action: "destroy", channel: "room" },
       { action: "update_identity", channel: "room", identity, memberId: "other" },

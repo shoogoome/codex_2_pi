@@ -76,7 +76,7 @@ export function createMultiSessionChannel(
     protocol: ChannelProtocol;
     name: string;
     session: ChannelSessionIdentity;
-    protocolConfig?: Pick<ChannelDefinition, "http" | "wechat">;
+    protocolConfig?: Pick<ChannelDefinition, "http" | "wechat" | "mcp" | "dots">;
   },
 ): ChannelDefinition {
   const now = new Date().toISOString();

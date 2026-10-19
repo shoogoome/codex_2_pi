@@ -4,7 +4,7 @@
   "type": "module",
   "main": "index.ts",
   "pi": {
-    "extensions": ["dist/index.js"]
+    "extensions": ["index.ts"]
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

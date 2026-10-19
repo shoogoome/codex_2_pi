@@ -20,6 +20,8 @@ import type {
   ChannelScopeKind,
   ChannelSettings,
   HttpChannelOptions,
+  McpChannelOptions,
+  DotsChannelOptions,
 } from "./types.js";
 
 const EMPTY_SETTINGS: ChannelSettings = { version: 1, channels: [] };
@@ -106,6 +108,41 @@ function parseHttp(value: unknown, directions: Iterable<ChannelDirection>): Http
   };
 }
 
+function parseMcp(value: unknown): McpChannelOptions {
+  const raw = isRecord(value) ? value : {};
+  const host = text(raw.host, "127.0.0.1");
+  if (!host || /\s/.test(host)) throw new Error("mcp.host must not contain whitespace");
+  const token = text(raw.token);
+  const auth = raw.auth ?? "bearer";
+  if (auth !== "bearer" && auth !== "none") throw new Error("mcp.auth must be bearer or none");
+  if (auth === "bearer" && !token) throw new Error("mcp.token is required when mcp.auth is bearer");
+  if (/[\r\n]/.test(token) || token.length > 4096) {
+    throw new Error("mcp.token must be a single line no longer than 4096 characters");
+  }
+  return {
+    host,
+    port: integer(raw.port, 0, 0, 65535, "mcp.port"),
+    auth,
+    token,
+    maxBodyBytes: integer(raw.maxBodyBytes, DEFAULT_MAX_BODY_BYTES, 1024, 10 * 1024 * 1024, "mcp.maxBodyBytes"),
+    rateLimitPerMinute: integer(raw.rateLimitPerMinute, DEFAULT_RATE_LIMIT_PER_MINUTE, 1, 10_000, "mcp.rateLimitPerMinute"),
+    idempotencyTtlMs: integer(raw.idempotencyTtlMs, DEFAULT_IDEMPOTENCY_TTL_MS, 1_000, 24 * 60 * 60 * 1000, "mcp.idempotencyTtlMs"),
+  };
+}
+
+function parseDots(value: unknown): DotsChannelOptions {
+  const raw = isRecord(value) ? value : {};
+  let listener: McpChannelOptions;
+  try { listener = parseMcp(raw); }
+  catch (error) { throw new Error((error instanceof Error ? error.message : String(error)).replace(/mcp\./g, "dots.")); }
+  return {
+    ...listener,
+    subscriptionTtlMs: integer(raw.subscriptionTtlMs, 60 * 60 * 1000, 60_000, 24 * 60 * 60 * 1000, "dots.subscriptionTtlMs"),
+    retryIntervalMs: integer(raw.retryIntervalMs, 1_000, 100, 60_000, "dots.retryIntervalMs"),
+    maxAttempts: integer(raw.maxAttempts, 6, 1, 20, "dots.maxAttempts"),
+  };
+}
+
 function parseChannel(value: unknown, index: number): ChannelDefinition {
   if (!isRecord(value)) throw new Error(`channels[${index}] must be an object`);
   const id = text(value.id);
@@ -113,8 +150,8 @@ function parseChannel(value: unknown, index: number): ChannelDefinition {
   const name = text(value.name);
   if (!NAME_PATTERN.test(name)) throw new Error(`channels[${index}].name must contain 1-64 printable characters`);
   const protocol = value.protocol;
-  if (protocol !== "http" && protocol !== "wechat") {
-    throw new Error(`channels[${index}].protocol must be http or wechat`);
+  if (protocol !== "http" && protocol !== "wechat" && protocol !== "mcp" && protocol !== "dots") {
+    throw new Error(`channels[${index}].protocol must be http, wechat, mcp, or dots`);
   }
   const direction = value.direction;
   if (direction !== "inbound" && direction !== "outbound" && direction !== "both") {
@@ -128,6 +165,9 @@ function parseChannel(value: unknown, index: number): ChannelDefinition {
   // `session` was the pre-multi-session shape. Treat it as selected with one
   // mount so existing configs migrate without losing credentials or routing.
   const kind: ChannelScopeKind = rawKind === "session" ? "selected" : rawKind;
+  if ((protocol === "mcp" || protocol === "dots") && kind !== "selected") {
+    throw new Error(`channels[${index}] MCP/dots channels require selected scope; explicitly mount each exposed session`);
+  }
   const sessionIds = Array.isArray(rawScope.sessionIds)
     ? [...new Set(rawScope.sessionIds.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "").map((entry) => entry.trim()))]
     : [];
@@ -147,7 +187,7 @@ function parseChannel(value: unknown, index: number): ChannelDefinition {
       sessionDirections[normalizedId] = rawDirection;
     }
   }
-  const delivery = value.delivery ?? "steer";
+  const delivery = value.delivery ?? (protocol === "dots" ? "followUp" : "steer");
   if (delivery !== "steer" && delivery !== "followUp" && delivery !== "nextTurn") {
     throw new Error(`channels[${index}].delivery is invalid`);
   }
@@ -164,6 +204,8 @@ function parseChannel(value: unknown, index: number): ChannelDefinition {
     delivery,
     wake: delivery === "nextTurn" ? false : value.wake !== false,
     ...(protocol === "http" ? { http: parseHttp(value.http, [direction, ...Object.values(sessionDirections)]) } : {}),
+    ...(protocol === "mcp" ? { mcp: parseMcp(value.mcp) } : {}),
+    ...(protocol === "dots" ? { dots: parseDots(value.dots) } : {}),
     ...(protocol === "wechat"
       ? { wechat: isRecord(value.wechat) && text(value.wechat.baseUrl) ? { baseUrl: text(value.wechat.baseUrl) } : {} }
       : {}),
@@ -242,11 +284,13 @@ export function allowsOutbound(direction: ChannelDirection): boolean {
 
 export function createChannelDefinition(input: {
   name: string;
-  protocol: "http" | "wechat";
+  protocol: "http" | "wechat" | "mcp" | "dots";
   direction: ChannelDirection;
   scope: ChannelScopeKind;
   sessionId: string;
   http?: Partial<HttpChannelOptions>;
+  mcp?: Partial<McpChannelOptions>;
+  dots?: Partial<DotsChannelOptions>;
 }): ChannelDefinition {
   const now = new Date().toISOString();
   const scope = {
@@ -261,7 +305,7 @@ export function createChannelDefinition(input: {
     direction: input.direction,
     ...(input.scope === "all" ? {} : { sessionDirections: { [input.sessionId]: input.direction } }),
     scope,
-    delivery: "steer",
+    delivery: input.protocol === "dots" ? "followUp" : "steer",
     wake: true,
     ...(input.protocol === "http"
       ? {
@@ -276,7 +320,21 @@ export function createChannelDefinition(input: {
             ...(input.http?.callbackToken ? { callbackToken: input.http.callbackToken } : {}),
           },
         }
-      : { wechat: {} }),
+      : input.protocol === "mcp"
+        ? {
+            mcp: {
+              host: input.mcp?.host ?? "127.0.0.1",
+              port: input.mcp?.port ?? 0,
+              token: input.mcp?.token ?? "",
+              auth: input.mcp?.auth ?? "bearer",
+              maxBodyBytes: input.mcp?.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES,
+              rateLimitPerMinute: input.mcp?.rateLimitPerMinute ?? DEFAULT_RATE_LIMIT_PER_MINUTE,
+              idempotencyTtlMs: input.mcp?.idempotencyTtlMs ?? DEFAULT_IDEMPOTENCY_TTL_MS,
+            },
+          }
+        : input.protocol === "dots"
+          ? { dots: { ...parseDots(input.dots) } }
+          : { wechat: {} }),
     createdAt: now,
     updatedAt: now,
   };

@@ -1,6 +1,6 @@
 # Channel 扩展
 
-`extensions/channel` 是 Pi 的具名多通道通信中心。它把协议连接、会话挂载、通信方向和名称路由拆开管理：一个 Pi 会话可同时使用 HTTP / 微信 ClawBot Channel 和本机 Pi 双人/群频道，模型能看到名称、能力及 Pi 成员职责，并通过 `channel_send` 把阶段性产物发送到指定接收方。
+`extensions/channel` 是 Pi 的具名多通道通信中心。它把协议连接、会话挂载、通信方向和名称路由拆开管理：一个 Pi 会话可同时使用 HTTP / 微信 ClawBot / MCP / dots Channel 和本机 Pi 双人/群频道，模型能看到名称、能力及 Pi 成员职责，并通过 `channel_send` 把阶段性产物发送到指定接收方。
 
 原来的单 HTTP 入站模式仍兼容，见“旧配置兼容”。
 
@@ -15,7 +15,7 @@
 面板列表会同时显示：
 
 - Channel 名称（也是 Pi 路由时使用的名称）
-- 协议：`http` / `wechat` / `pi`（双人或群）
+- 协议：`http` / `wechat` / `mcp`（当前会话服务）/ `dots`（MCP Events 桥接）/ `pi`（双人或群）
 - 当前 Pi 会话的方向：`对端 → Pi` / `Pi → 对端` / `双向`
 - 范围：`多会话` / `全部会话`
 - 当前会话是否挂载
@@ -25,18 +25,18 @@
 
 | 按键 | 作用 |
 |---|---|
-| `a` | 选择协议并新建 Channel，包括 Pi 双人/群频道 |
+| `a` | 选择协议并新建 Channel，包括 MCP 会话服务和 Pi 双人/群频道 |
 | `j` | 使用配对码加入 Pi 频道 |
 | `Enter` | 查看 Channel 详情 |
 | `e` | 编辑名称、协议、范围、连接参数，以及**当前 Pi 会话自己的方向** |
 | `Space` | 启用 / 禁用 |
 | `m` | 为当前会话挂载 / 卸载“多会话” Channel |
-| `r` | 重启外部 HTTP/微信传输并重新读取配置；Pi 频道不受影响 |
+| `r` | 重启外部 HTTP/微信/MCP 传输并重新读取配置；Pi 频道不受影响 |
 | `l` | 打开通用登录/认证选择器；可选择已有可认证 Channel，或选择协议新建后认证 |
 | `x` | 删除配置（微信凭证保留，避免误删后无法恢复） |
 | `Esc` | 返回 / 关闭面板 |
 
-HTTP/微信配置写入 `~/.pi/agent/channel/config.json`，目录权限为 `0700`，文件权限为 `0600`。Token 会以明文保存在这个用户私有文件中，面板显示时会遮罩。
+HTTP/微信/MCP/dots 配置写入 `~/.pi/agent/channel/config.json`，目录权限为 `0700`，文件权限为 `0600`。Token 会以明文保存在这个用户私有文件中，面板显示时会遮罩。
 
 ## 本机 Pi 双人/群频道
 
@@ -48,7 +48,7 @@ HTTP/微信配置写入 `~/.pi/agent/channel/config.json`，目录权限为 `070
 2. 创建后取得配对码和到期时间，在需要加入的另一个 Pi 打开 `/channel`，按 `j` 输入配对码与对端自己的工作身份。
 3. 在 Pi 频道详情查看创建者、成员数、连接状态和各成员职责；可更新本人介绍、退出，创建者还可查看/刷新/撤销配对码或确认销毁。
 
-`direct` 双人频道最多 **2 人**，`group` 群频道最多 **32 人**，均包含创建者。群消息广播给其他在线成员，不回送发送者；不提供群内定向私信，私聊请另建双人频道。显示名可以相同，成员 ID 不会因此合并。路由名在当前 Pi 内不区分大小写且必须唯一；加入时同名冲突需要显式 `local_name`，不会覆盖已有 HTTP/微信/Pi 路由。
+`direct` 双人频道最多 **2 人**，`group` 群频道最多 **32 人**，均包含创建者。群消息广播给其他在线成员，不回送发送者；不提供群内定向私信，私聊请另建双人频道。显示名可以相同，成员 ID 不会因此合并。路由名在当前 Pi 内不区分大小写且必须唯一；加入时同名冲突需要显式 `local_name`，不会覆盖已有 HTTP/微信/MCP/Pi 路由。
 
 本人身份示例：
 
@@ -78,6 +78,8 @@ channel_manage(action="pairing", channel="登录协作", operation="show|rotate|
 channel_send(channel="登录协作", content="POST /login 已增加 code 字段，请前端更新错误映射；测试已通过。")
 ```
 
+Pi 的 `create` 可显式传 `protocol="pi"`；省略时保持原有 `name/mode/identity` 格式兼容。HTTP/微信/MCP 不需要 Pi 工作身份，使用下节的外部频道参数；MCP 创建参数另见“MCP 会话服务”。
+
 `operation` 取 `show`、`rotate`、`revoke` 之一，不是合并字符串。`destroy` 与配对码管理仅创建者可用；普通成员只能退出自身，创建者的 `leave` 会拒绝并提示使用确认销毁。禁用 `--channel=false` 或 `PI_CHANNEL=0` 时不能创建、加入或发送。
 
 skill 提醒模型在接口/共享文件变更、阻塞、契约冲突和交接时主动通知相关成员，注明影响范围和验证情况；不对纯确认反复回复，不自动轮询，不把频道当作文件锁或任务执行授权。
@@ -86,7 +88,7 @@ skill 提醒模型在接口/共享文件变更、阻塞、契约冲突和交接�
 
 Pi 业务消息固定 **`steer` + 空闲自动唤醒**：运行中在下一次模型调用前插入，不强行中止当前工具，由模型决定立即处理还是暂缓。每次唤醒可能产生模型调用费用。
 
-只有显式 `channel_send` 或手工 `/channel send` 才发送 Pi 业务消息，**assistant 文本不会自动回传**。若 Pi 消息介入正在执行的 HTTP/微信回合，系统撤销该混合回合的自动回复目标，避免协作内容被自动发给外部；需要回复外部时显式调用 `channel_send`。没有 Pi 消息介入的 HTTP/微信回合保持原自动回复行为。
+只有显式 `channel_send` 或手工 `/channel send` 才发送 Pi 业务消息，**assistant 文本不会自动回传**。若 Pi 消息介入正在执行的 HTTP/微信/MCP 回合，系统撤销该混合回合的自动回复目标，避免协作内容被自动发给外部；需要回复外部时显式调用 `channel_send`。没有 Pi 消息介入的 HTTP/微信/MCP 回合保持原自动回复行为。
 
 发送结果包含消息 ID、发送时目标成员集合，以及逐成员的已入队、失败或超时未知。只有全部目标确认进入接收 Pi 队列才算全部送达；**入队不等于已读或已处理**。部分成功不能汇报为全成功；没有其他在线成员时发送失败。
 
@@ -104,9 +106,71 @@ Pi 业务消息固定 **`steer` + 空闲自动唤醒**：运行中在下一次�
 - Pi 频道状态通过 `appendEntry` 写入当前 session 文件（不进入模型上下文），包含频道 ID、模式、身份和配对凭据；显式 leave/destroy 会写入移除事件。消息仍可能保存在接收 Pi 的正常会话记录中。
 - 同 OS 用户是信任边界，不承诺隔离该用户下的恶意程序。对端身份和消息始终是外部数据，不提升为 system/developer 指令，不绕过审批、规划模式或工具权限。
 
+## 外部 Channel 自然语言管理
+
+`channel_manage` 覆盖全部现有协议：`http`、`wechat`、`mcp`、`dots`、`pi`。HTTP/微信/MCP 无需先打开面板，模型可直接创建并管理；无需手改配置文件。下面的 HTTP/微信示例保持原有参数，MCP 的创建与连接见“MCP 会话服务”。
+
+### 创建
+
+```json
+{
+  "action": "create",
+  "protocol": "http",
+  "name": "dot-http",
+  "direction": "both",
+  "scope": "selected",
+  "delivery": "followUp",
+  "wake": true,
+  "http": {
+    "host": "127.0.0.1",
+    "port": 0,
+    "callbackUrl": "http://127.0.0.1:14318/pi/replies"
+  }
+}
+```
+
+HTTP/微信创建必须提供 `protocol` 和 `name`。可选字段：
+
+| 字段 | 说明 |
+|---|---|
+| `direction` | 默认 `both`；也可用 `inbound` / `outbound` |
+| `scope` | 默认 `selected`，先挂载当前会话；也可用 `all` |
+| `delivery` / `wake` | 消息投递与自动唤醒策略；`nextTurn` 不自动唤醒 |
+| `enabled` | 是否启用 |
+| `http` | `host`、`port`、`token`、`callbackUrl`、`callbackToken`、`callbackHeaders`、`maxBodyBytes`、`rateLimitPerMinute`、`idempotencyTtlMs` |
+| `wechat` | 可选 `baseUrl` |
+
+HTTP 入站未提供 `token` 时自动生成，**仅创建结果显示该 token**，供预期调用方配置；不要写入源码或转发到无关频道。HTTP `both` / `outbound` 必须提供 `callbackUrl`。默认 listener 绑定本机，创建 Channel 不会自动提供公网 HTTPS 隧道。
+
+微信示例：
+
+```text
+channel_manage(action="create", protocol="wechat", name="我的微信")
+channel_manage(action="auth", channel="我的微信")
+```
+
+创建微信配置不代表已登录。`auth` 返回二维码及状态文本，不依赖交互面板；仍需用户扫码并在微信确认，不能声称自动完成登录。
+
+### 查询与管理
+
+| 操作 | 参数 |
+|---|---|
+| 合并列出 Pi 与外部频道 | `action:"list"` |
+| 查询外部频道状态 | `action:"status", channel` |
+| 更新外部配置 | `action:"update", channel`，以及可选 `name/direction/delivery/wake/http/wechat/mcp` |
+| 当前会话挂载 / 卸载 | `action:"mount"` / `"unmount", channel` |
+| 启用 / 禁用 | `action:"enable"` / `"disable", channel` |
+| 重启外部传输 | `action:"restart", channel?`；省略频道时重启外部传输，不重启 Pi 频道 |
+| 协议认证 | `action:"auth", channel`；仅支持注册了认证适配器的协议，MCP 服务支持可选 Bearer token，不走扫码认证 |
+| 删除外部配置 | `action:"delete", channel, confirm:true`；仅在用户明确要求删除时执行 |
+
+`list` / `status` 返回脱敏外部状态，不暴露 listener token、callback token 或认证 headers。Pi 的成员、身份、配对及销毁操作仍遵循上一节的权限规则，不能用外部 `delete` 绕过创建者权限。
+
+**配置保存成功与连接就绪是两件事。** 创建或更新后应检查返回的运行时状态：端口占用、缺少微信登录等可能导致 `error` 或尚未就绪。不得把“配置已保存”汇报为“已连接对端”；发送成功也不代表对端已读。
+
 ## 多 Channel 与作用域
 
-以下持久化作用域与通信方向适用于 HTTP/微信；Pi 频道始终双向且必须显式配对，不支持 `all` 自动挂载。
+以下持久化作用域与通信方向适用于外部 Channel。HTTP/微信支持 `selected` 与 `all`；MCP/dots 仅支持 `selected`，只为显式挂载的会话启动服务，拒绝 `all`，避免隐式暴露所有会话。Pi 频道始终双向且必须显式配对，不支持 `all` 自动挂载。
 
 每个 Channel 都有稳定 `id` 和用户可读的唯一 `name`。名称不区分大小写匹配，最长 64 个可打印字符。
 
@@ -180,6 +244,121 @@ channel_send(channel: string, content?: string, image_path?: string, message_id?
 ```
 
 Channel 名称可以包含空格；命令会按已配置名称做最长前缀匹配。
+
+## MCP 会话服务
+
+`protocol="mcp"` 把**当前 Pi 会话**作为 MCP 服务提供给外部客户端，采用官方 MCP SDK 的 [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http)，端点为 `/mcp`。它是服务端能力，不是连接外部 MCP server 的客户端，也不替代 `/mcp` 命令。
+
+### 创建与连接
+
+最小创建请求：
+
+```json
+{
+  "action": "create",
+  "protocol": "mcp",
+  "name": "我的会话"
+}
+```
+
+可选通用字段包括 `direction`（默认 `both`）、`delivery`、`wake` 和 `enabled`。`scope` 只接受 `selected`，创建时先挂载当前会话，**不接受 `all`**。其它会话必须显式挂载才会启动自己的服务；默认随机端口时，每个服务只暴露它所在的 Pi 会话，不会跨会话合并回复。
+
+可选 `mcp` 配置：
+
+| 字段 | 说明 |
+|---|---|
+| `host` / `port` | 默认 `127.0.0.1:0`，端口 `0` 表示自动分配 |
+| `auth` | 默认 `bearer`；显式设为 `none` 关闭鉴权 |
+| `token` | `bearer` 模式要求非空，创建时省略则自动生成；`none` 模式不要求 token |
+| `maxBodyBytes` | 请求体字节上限 |
+| `rateLimitPerMinute` | 请求限流配置 |
+| `idempotencyTtlMs` | 入站消息 ID 去重保留时间，默认 10 分钟 |
+
+创建结果包含脱敏频道状态，以及仅供预期连接方使用的 `listenerToken` 和连接配置。例如：
+
+```json
+{
+  "mcpClientConfig": {
+    "url": "http://127.0.0.1:15432/mcp",
+    "headers": {
+      "Authorization": "Bearer <创建结果中的 token>"
+    }
+  }
+}
+```
+
+端口以工具实际返回为准，不要照抄示例端口。将 `mcpClientConfig` 放入支持 Streamable HTTP 和自定义 headers 的 MCP 客户端配置中；token 不应写入源码或无关频道。`list` / `status`、发现文件和模型 Channel registry 不返回 token。`/channel` 面板的新建类型中也可选择 MCP，并编辑监听地址、端口和 token；MCP 不需要 callback URL 或扫码 `auth`。
+
+### 可选鉴权
+
+默认保留 Bearer 鉴权，旧配置省略 `auth` 时也保持此行为。仅清空 token 不会关闭鉴权。需要匿名访问时显式创建：
+
+```json
+{"action":"create","protocol":"mcp","name":"本机免鉴权会话","mcp":{"auth":"none"}}
+```
+
+已有服务可用 `channel_manage(action="update", channel="我的会话", mcp={auth:"none"})` 关闭鉴权，或在面板将 **MCP auth** 切为 `none`。匿名创建结果只返回 URL，不生成 token，也不返回 `Authorization` header；`list/status` 会显示 `auth:"none"`，工具和面板会提示警告。重新启用可传 `mcp:{auth:"bearer",token:"你的非空 token"}`；若已有 token，省略 token 可继续使用它。面板重新启用且 token 为空时会自动生成。
+
+**关闭鉴权后，任何能连接端点的人都可调用该服务允许的会话工具并读取共享回复**，可能触发模型费用和已授权操作。仅在可信本机环境或上游网关已负责访问控制时使用；关闭 Bearer 不会关闭 Host、Origin、限流和请求大小检查。此选项仅影响 MCP，不改变 HTTP Channel 的鉴权。
+
+### 对外提供的工具
+
+| MCP 工具 | 参数与语义 |
+|---|---|
+| `pi_session_info` | 返回当前会话名称、ID 和通信能力；不返回 cwd、会话历史或底层工具列表 |
+| `pi_send_message` | `{content, id?}`；将文字作为认证的外部 Channel 输入异步投递给当前会话，返回 `accepted` / `duplicate` / `messageId`，不等待模型完成 |
+| `pi_read_replies` | `{after?: number, limit?: number, instanceId?: string}`；按游标读取本 Channel 已写入的出站消息，读取本身不会触发模型 |
+
+典型流程：
+
+1. 连接并完成 MCP 初始化，调用 `pi_session_info` 核实会话。
+2. 调用 `pi_send_message({content:"请对齐桥接协议", id:"dot-request-1"})`，保留消息 ID。`accepted` 只代表入队，不是处理完成。
+3. 稍后调用 `pi_read_replies({after:0})`。响应含 `messages`、`nextCursor`、`oldestCursor`、`truncated` 和服务实例 `instanceId`；每条消息含 `sequence`、`id`、`content`、可选 `replyTo` 和 `sentAt`。
+4. 处理成功后保存 `nextCursor`，下次用 `after:nextCursor, instanceId` 继续读取；携带旧实例 ID 会明确返回 `stale_cursor`，须从新实例的游标 0 重新读取。`truncated` 表示旧回复已不在保留窗口内；`instanceId` 变化表示服务已重启，必须丢弃旧游标并从新实例重新读取，不能把重置后的空结果当成旧请求已完成。
+
+重试同一入站逻辑消息时使用原 ID 和相同正文，在去重窗口内返回重复结果，不再次投递；同 ID、不同正文会拒绝。默认缓存时间为 10 分钟，可用 `idempotencyTtlMs` 调整。没有稳定 ID 的重试可能产生重复消息，超时后不要盲目换 ID 重发。
+
+### 方向与回复边界
+
+- `both`：允许 `pi_send_message` 和 `pi_read_replies`。该 Channel 单独触发的 assistant 文本按现有外部回复规则写入信箱；Pi 协作消息介入、与其它外部 Channel 混合，或 MCP 消息介入本地任务（包括启动前的认证/压缩等预处理阶段）时，撤销自动回复目标，需显式 `channel_send`，避免自动转发无关任务内容。
+- `inbound`：只允许向 Pi 投递消息；禁止读取回复，也禁止 Pi 向该 Channel 发送。
+- `outbound`：禁止向 Pi 投递消息；允许读取回复，Pi 可用 `channel_send` 主动写入信箱。
+
+`channel_send` 的成功仅表示回复已写入信箱，**不是客户端已收到、已读或已处理**。所有通过该 Channel 访问控制的客户端（免鉴权时为任何可连接者）共享同一信箱和会话，不提供客户端间隔离；只把 token 给需要看到该信箱的人。同一模型回合可能合并多条入站消息，`replyTo` 是路由提示，不保证每个入站 ID 都有独立的最终回复。
+
+MCP 只暴露本 Channel 新产生的回复，不自动导出历史会话、其它 Channel 消息、cwd、文件或 read/bash 等底层工具。入站仍受原有 approvals、plan mode 和工具权限约束；不过允许向当前助手发任务本身就可能触发模型费用和已授权工具操作，应按任务入口而非只读接口保护 token。Pi 回答时仍可使用已有会话上下文，因此“不自动导出历史”不代表对回答内容做了隐私脱敏。
+
+### 内存信箱与生命周期
+
+回复信箱最多保留 **100 条 / 总计 1 MiB**，单条最多 **64 KiB**，不是持久存储或可靠离线队列。客户端应及时读取并自行保存需要保留的回复。
+
+服务仅在当前 Pi 进程及挂载会话存活时运行；停用、卸载、关闭会话、`/reload` 或重启服务都会清空未读回复、重置游标并更换 `instanceId`。当前外部 Channel 配置保存流程会重启全部外部传输，因此即使保存的是另一个外部 Channel，也会重置 MCP 信箱；Pi 双人/群频道不受此重启影响。配置仍会保存，恢复会话后可重新启动服务，但不会补投丢失的信箱内容。`port:0` 重启后实际端口也可能改变，应重新查询状态或发现文件。
+
+### 鉴权与远程接入
+
+- 默认所有 `/mcp` 请求要求 Bearer token；显式 `mcp.auth:"none"` 可关闭。`/health` 仅提供不含会话隐私的健康状态。
+- 默认监听本机，并校验 Host；默认拒绝所有带 `Origin` 的请求（包括带正确 token 的请求），不支持浏览器直接跨域调用，需要服务端代理。
+- 若要让远程客户端连接，必须取得用户授权，并使用 TLS 反代与来源 ACL；若关闭内置 Bearer，应由上游网关提供等效访问控制；不自动创建公网域名、隧道或 OAuth 服务。使用本机默认监听地址的反代应把上游 Host 覆盖为 `127.0.0.1:<实际端口>`，不要透传公网域名绕过或误触 Host 校验。
+- 这是 Bearer header 鉴权，不是 OAuth。启用 `bearer` 时客户端必须支持自定义 `Authorization` header，`none` 模式无需该 header；ChatGPT/dot 是否允许配置并能主动调用、持续检查回复，需要在对应账号和客户端实测，不能仅凭服务创建成功宣称已接通。
+
+## dots：Pi ↔ ChatGPT dots
+
+**正式账户模式**：已保存 `~/.pi/agent/channel/dots/account.json` 时自动复用固定 OAuth 账户入口，新建/恢复 Channel 无需重新添加 ChatGPT 连接；一次性配对明确授权整个专用设备集合，Events 可显式订阅 `channel_id="*"` 覆盖未来 dots Channel。没有账户配置时使用下面的会话 listener 模式。见 [固定账户入口](dots-account-bridge.md)。
+
+新增 `protocol="dots"`，使用独立 `dots` 配置：
+
+```json
+{
+  "action": "create",
+  "protocol": "dots",
+  "name": "我的 dot",
+  "dots": { "host": "127.0.0.1", "port": 0 }
+}
+```
+
+它复用当前会话消息工具，但额外实现 **MCP 2.0 Events（2026-07-28）** 的 `server/discover`、`events/list`、`events/subscribe`、`events/unsubscribe`。事件为 `pi.message.created`，严格过滤当前 session/channel；ChatGPT 提供 callback URL/签名 secret，Pi 验证 challenge 后持久保存订阅，并将显式出站消息的事件持久排队，经 Standard Webhooks 签名 HTTPS 投递。不是未公开的 Dot API，也不是把普通 MCP 读信误当后台唤醒。
+
+默认 `selected + both + followUp + wake=true`、本机随机端口、自动 Bearer token；显式 `dots.auth="none"` 可关闭鉴权，含事件订阅也对所有可达客户端开放。默认不自动创建域名/隧道/OAuth，不改微信配置。`status` 返回脱敏事件计数；outbox/订阅按 channel+session 私有持久化，手工回复信箱仍为内存。没有订阅不补发历史事件，Webhook 2xx 不代表 dot 已处理。完整配置、临时 HTTPS、认证兼容性和唤醒验收见 [dots Channel](dots.md)。
 
 ## HTTP 协议
 
@@ -316,7 +495,7 @@ X-Pi-Channel: 产物群
 - 当前会话必须挂载 Channel，方向为 `outbound` 或 `both`。联系人必须先向机器人发送消息，以获得接收人和 `context_token`；主动发送使用最后活跃联系人。
 - `occupied` 会话也可共享凭证和联系人状态发送图片，无需抢占长轮询锁。
 - `content` 可省略；有说明时，先发图片，再单独发送一条文字消息，使用同一接收人。微信 iLink 会拒绝同一个 `item_list` 混放图片和文字（`invalid arguments`）。超过 1200 字符的长文本请单独发送。
-- HTTP 和本机 Pi 频道拒绝 `image_path`；不要与仅用于 Pi 文本查询的 `message_id` 同时传入。
+- HTTP、MCP 和本机 Pi 频道拒绝 `image_path`；不要与仅用于 Pi 文本查询的 `message_id` 同时传入。
 - `/channel send` 仍是文本命令；自动回复仍只回传 assistant 文本，不会自动上传工具生成的图片，发送图片需要显式调用 `channel_send`。
 - 工具仅在图片及可选说明均发送成功后返回 `delivered: true`，表示接口接受，不代表联系人已读。若只有说明发送失败，返回 `delivered: false`、`imageDelivered: true` 并提示“图片已发送”，此时只补发文字，不重发图片。其它失败或超时不自动重发；发送阶段超时可能已送达，重试可能重复。
 
@@ -405,7 +584,7 @@ X-Pi-Channel: 产物群
 |---|---|
 | `/channel` | 打开 TUI 面板 |
 | `/channel status` | 输出当前会话全部 Channel 状态和发现文件 |
-| `/channel restart` | 重读配置并重启当前会话挂载的 HTTP/微信传输；Pi 频道保持不变 |
+| `/channel restart` | 重读配置并重启当前会话挂载的 HTTP/微信/MCP 传输；Pi 频道保持不变 |
 | `/channel auth [name]` | 打开通用协议认证选择器，或直接认证指定 Channel |
 | `/channel login [name]` | `auth` 的兼容别名，不绑定具体协议 |
 | `/channel auth --protocol <protocol>` | 只选择指定协议的已有/新建认证目标 |
@@ -419,7 +598,7 @@ X-Pi-Channel: 产物群
 ~/.pi/agent/channels/<session-and-hash>.json
 ```
 
-version 2 记录会话 ID/名称、PID、cwd，以及当前 Channel 的名称、协议、方向、状态和 HTTP 实际端口；Pi 频道只写无秘密的状态摘要，不包含任何 Token 或配对码，不用于自动加入或授权。HTTP `port: 0` 的调用方应从这里读取实际端口。
+version 2 记录会话 ID/名称、PID、cwd，以及当前 Channel 的名称、协议、方向、状态和 HTTP/MCP 实际端口及地址；Pi 频道只写无秘密的状态摘要，不包含任何 Token 或配对码，不用于自动加入或授权。HTTP/MCP `port: 0` 的调用方应从这里读取实际端口和 URL；MCP 的 URL 带 `/mcp` 路径。
 
 正常 shutdown / reload 会清理本实例的记录；强制 kill 后可能残留，调用方需结合 PID、状态和 `/health` 判断。
 

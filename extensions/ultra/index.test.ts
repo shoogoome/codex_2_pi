@@ -116,12 +116,12 @@ describe("Ultra controller registration", () => {
     }
   });
 
-  it("advertises Ultra only for Codex subscription Sol/Terra", () => {
+  it("allows Ultra for any active model", () => {
     const { handle } = createHarness();
     expect(handle.isCapable({ provider: "openai-codex", id: "gpt-5.6-sol" })).toBe(true);
-    expect(handle.isCapable({ provider: "openai-codex", id: "gpt-5.6-terra" })).toBe(true);
-    expect(handle.isCapable({ provider: "openai-codex", id: "gpt-5.6-luna" })).toBe(false);
-    expect(handle.isCapable({ provider: "codebuddy", id: "gpt-5.6-sol" })).toBe(false);
+    expect(handle.isCapable({ provider: "openai-codex", id: "gpt-5.6-luna" })).toBe(true);
+    expect(handle.isCapable({ provider: "codebuddy", id: "any-model" })).toBe(true);
+    expect(handle.isCapable(undefined)).toBe(false);
   });
 });
 
@@ -150,9 +150,9 @@ describe("Ultra request semantics", () => {
     expect(result.systemPrompt).toBe(`base\n\n${EXPLICIT_MULTI_AGENT_MODE_PROMPT}`);
   });
 
-  it("clears an Ultra workflow block on non-Ultra models", async () => {
+  it("clears an Ultra workflow block and keeps explicit mode on other models", async () => {
     const { ctx, handlers } = createHarness({
-      model: { provider: "openai-codex", id: "gpt-5.6-luna" },
+      model: { provider: "codebuddy", id: "any-model" },
     });
     const [result] = await fire(
       handlers,
@@ -161,7 +161,7 @@ describe("Ultra request semantics", () => {
       ctx,
     );
 
-    expect(result.systemPrompt).toBe("base");
+    expect(result.systemPrompt).toBe(`base\n\n${EXPLICIT_MULTI_AGENT_MODE_PROMPT}`);
   });
 
   it("keeps the combined mode and workflow blocks idempotent", async () => {
@@ -421,7 +421,7 @@ describe("Ultra session lifecycle", () => {
     expect(harness.getActiveTools()).toEqual(["read", "grep"]);
   });
 
-  it("disables on native-effort and unsupported-model changes", async () => {
+  it("disables on native-effort changes and survives model changes", async () => {
     const thinking = createHarness();
     thinking.handle.enable(thinking.ctx);
     await fire(
@@ -447,7 +447,7 @@ describe("Ultra session lifecycle", () => {
       },
       model.ctx,
     );
-    expect(model.handle.isEnabled()).toBe(false);
-    expect(model.entries.at(-1)?.data).toEqual({ enabled: false });
+    expect(model.handle.isEnabled()).toBe(true);
+    expect(model.entries).toHaveLength(1);
   });
 });

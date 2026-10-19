@@ -50,11 +50,9 @@ interface ModelRef {
   provider?: string;
 }
 
-/** Codex 0.144 advertises Ultra only for subscription Sol and Terra. */
+/** Ultra is available for any active model; native max support is checked at enable time. */
 export function isUltraCapableModel(model: ModelRef | undefined): boolean {
-  if (!model || model.provider !== "openai-codex") return false;
-  const id = model.id.toLowerCase();
-  return id === "gpt-5.6-sol" || id === "gpt-5.6-terra";
+  return Boolean(model?.id);
 }
 
 const MULTI_AGENT_MODE_BLOCK = /(?:\n{2})?<multi_agent_mode>[\s\S]*?<\/multi_agent_mode>/g;

@@ -48,7 +48,7 @@
 | `extensions/compact-continue` | Pi 阈值压缩后保守判断是否仍有工作：仅在 toolResult、截断/tool-use 回合或未完成计划等强信号下隐藏续跑一次，并让真实用户/自动队列优先。 | `--compact-continue`（默认开）· `--compact-continue=false` 关闭 |
 | `extensions/agents-context` | 补充加载 `AGENTS.md`/`CLAUDE.md`、`.claude/rules`、`@include`、条件 paths 规则，去重后隐藏注入。 | `--agents-context`（默认开）· `PI_AGENTS_CONTEXT=0` |
 | `extensions/settings-env` | 从全局和项目 `settings.json` 的顶层 `env` 读取变量并注入 Pi 进程；已有环境默认优先。 | `env` · `envOverride` |
-| `extensions/channel` | 多 Channel 通信中心：管理 HTTP/微信及本机 Pi 双人/群频道；配对码加入、成员职责感知、创建者转发，模型可自然语言管理并发送协作消息。保留外部通信方向与旧 `PI_CHANNEL_*` 兼容。 | `/channel` 面板 · `channel_manage` · `channel_send` · `/channel status\|restart\|auth\|login\|send` |
+| `extensions/channel` | 多 Channel 通信中心：管理 HTTP/微信、本机 Pi 双人/群频道，以及 MCP 会话服务与原生 dots Events 桥接；模型可自然语言管理并发送协作消息。保留外部通信方向与旧 `PI_CHANNEL_*` 兼容。 | `/channel` 面板 · `channel_manage` · `channel_send` · `/channel status\|restart\|auth\|login\|send` |
 | `extensions/memory` | Claude Code 风格自动长期记忆：按当前模型窗口动态限额，全局 `memory.contextRatio` 设置占比（默认 2%），限制累计注入；按需提炼，支持备份去重目录并收拢会话已注入记忆。 | `/memory [list\|show\|init\|compact]` · `/memory-compact` · `/remember <text>` |
 | `extensions/approvals` | 唯一审批闸门:权限模式 × 规则库 × 命令安全 × 受保护路径 × MCP 逐工具，统一 allow/ask/deny。 | `/approvals [mode\|rules\|allow\|ask\|deny\|remove]` |
 | `extensions/plan-mode` | 只读规划闸门:仅可探查，模型提交计划经批准后才恢复写工具。 | `/plan [on\|off]` · `Alt+P` · `exit_plan_mode` |
@@ -59,7 +59,7 @@
 | `extensions/loop` | Claude Code 风格定时循环：立即执行一次提示词，之后在 agent 空闲时按间隔重复；会话内生效并自动过期。 | `/loop [interval] <prompt>` · `/loop list` · `/loop cancel <id\|all>` |
 | `extensions/cursor` | Cursor 订阅原生 provider：显式 OAuth、实时模型发现、HTTP/2 协议与 Pi 工具执行闭环；不读取 Keychain/IDE 登录态。 | `/login cursor` · `/model cursor` · `/cursor [status\|models\|refresh\|usage]` · [详情](docs/extensions/cursor.md) |
 | `extensions/local-models` | 发现本地大模型运行时（Ollama、LM Studio）并注册为 localhost OpenAI 兼容 provider。 | `/local-models [list\|pull\|ensure_ready]` · `/ollama` · `/lm` |
-| `extensions/codebuddy-reasoning` | 对齐 CodeBuddy 原生 `gpt-5.6-sol` 请求参数，使 High thinking 返回并展示可见推理摘要。 | （无命令，自动生效） |
+| `extensions/codebuddy-reasoning` | 清理 CodeBuddy 网关不支持的旧请求字段；原样透传 Pi 系统提示和工具声明，兼容 DeepSeek 等模型的结构化工具调用。 | （无命令，自动生效） |
 | `extensions/webfetch` | 客户端联网抓取（移植 Claude WebFetch）:URL→fetch→HTML 转 markdown 交模型阅读;SSRF 防护(私有段+连接前 DNS 守卫)、10MB 流式截断、15min 缓存。 | 工具 `webfetch` · `--webfetch`（默认开） |
 | `extensions/mcp` | 内置 MCP 客户端:读 `.pi/mcp.json` 连 server，暴露 `mcp__<server>__<tool>`，审批由 approvals 兜底。 | `/mcp [list\|status\|add\|remove\|reconnect]` |
 | `extensions/plugin-loader` | Claude 风格插件管理器：Marketplace、安装/更新/卸载、user/project/local scope，并接入 skills/commands/themes/styles/hooks/agents/MCP。 | `/plugin` · `/plugin marketplace …` · `/plugin install\|remove\|update …` |
@@ -72,17 +72,25 @@
 | `extensions/web` | 浏览器 Web UI：管理整机 `~/.pi/agent/sessions` 的 Pi 会话并从 CLI 到 Web 聊天；后端零依赖 HTTP + SSE，每个会话一个 `pi --mode rpc` 子进程，支持流式事件/工具调用/图片/审批对话框。 | `/web` · `/web status\|stop` · `--web` / `--web-host` / `--web-port` / `--web-token` |
 | `extensions/honeypot` | LLM 攻防蜜罐实验：同步 jailbreak-prompts、DecoyPot/CTF 场景、NERV 风格蓝队检测与 prompt-manager 清单导出（授权红队评测）。 | `/honeypot` · `--honeypot=true` · [详情](docs/extensions/honeypot.md) |
 
-## Named Channels（HTTP + 微信 ClawBot + 本机 Pi）
+### CodeBuddy 工具调用兼容性与实测
+
+`codebuddy-reasoning` 使用 `index.ts` 源码入口和 Pi 主进程的 `/compat` API，不能改回 `dist/index.js`：原生 JS 加载可能绕过 Pi 的依赖别名，落到工作区旧版 `pi-ai`，使新版系统提示和工具声明丢失。
+
+可运行 `python3 extensions/codebuddy-reasoning/fixtures/liveAcceptance.py` 做真实验收（需要已有 CodeBuddy 配置，会产生模型调用费用）。脚本启动独立 Pi，分别测试 `read`、`codemode → read` 和当前已配置扩展的加载方式，读取临时随机标记并验证工具执行事件；不打印凭据或原始请求。用 `--case direct|codemode|configured|configured-codemode` 可单独测试，模型可通过 `PI_ACCEPTANCE_PROVIDER` / `PI_ACCEPTANCE_MODEL` 覆盖。
+
+## Named Channels（HTTP + 微信 ClawBot + MCP 服务 + dots + 本机 Pi）
 
 多个独立 Pi 开发同一项目的不同模块时，可在 `/channel` 创建 **Pi 双人/群频道**，用配对码加入并填写各自的工作介绍。首版支持 **macOS/Linux、同机器同 OS 用户**，通过私有 Unix socket 通信；双人最多 2 人，群最多 32 人（含创建者）。
 
-- **自然语言操作**：内置 `pi-channel-collaboration` skill，模型通过 `channel_manage` 创建/加入、查成员、改本人介绍、退出或确认销毁，用 `channel_send` 发送接口变更、阻塞和阶段成果。
+- **自然语言操作**：`channel_manage` 支持全部现有协议（`http` / `wechat` / `mcp` / `dots` / `pi`）。可创建 HTTP/微信/MCP/dots 频道、查看脱敏状态、修改配置、挂载/卸载、启停、重启及确认删除；微信支持扫码认证，Pi 频道继续支持配对加入、成员职责、本人介绍和确认销毁。用 `channel_send` 发送消息与阶段成果。
 - **会话恢复生命周期**：创建者进程负责转发；显式销毁才删除状态。会话关闭、`/new`、`/reload` 或进程重启会把操作状态写入当前 session JSONL，恢复同一 session 时重建固定频道并自动重连，不新增 Channel 配置文件。打开面板、编辑外部配置及 `/channel restart` 不影响 Pi 频道。
 - **配对与身份**：邀请默认 30 分钟有效，可刷新/撤销；码会进入创建/显式查看的工具结果和当前会话，勿发送到无关频道。成员有独立 ID、会话/cwd 与工作职责，不会因同项目自动加入。
-- **可控投递**：业务消息使用 `steer`，空闲自动唤醒；不强制中止工具，不自动回传 assistant 文本。成员事件不单独唤醒。Pi 消息介入 HTTP/微信回合时停止该混合回合的自动回复，外发需显式选目标。
+- **可控投递**：业务消息使用 `steer`，空闲自动唤醒；不强制中止工具，不自动回传 assistant 文本。成员事件不单独唤醒。Pi 消息介入 HTTP/微信/MCP 回合时停止该混合回合的自动回复，外发需显式选目标。
 - **真实回执**：逐成员区分已入队、失败、未知，入队不等于已处理；同 ID/正文在 10 分钟内重试仅查询结果，不重播。正文最多 64 KiB，每成员每分钟 30 条，每接收者 100 条待确认；重启期间不补投离线消息，仅恢复频道连接。
 
 ### HTTP / 微信持久化频道
+
+例如 `channel_manage(action="create", protocol="http", name="dot-http", direction="both", http={callbackUrl:"http://127.0.0.1:14318/pi/replies"})` 可直接创建并挂载双向 HTTP Channel；入站 token 未提供时自动生成，仅在创建结果显示。HTTP 出站必须提供 `callbackUrl`。微信用 `protocol="wechat"` 创建后，再调用 `channel_manage(action="auth", channel="频道名")` 获取二维码并由用户扫码。`list` / `status` 不返回 token。配置保存成功不等于传输已就绪，应检查返回的运行时状态，尤其是 `error`。
 
 执行 `/channel auth`（`/channel login` 是兼容别名）会打开通用认证目标选择器：选择已有 Channel，或选择某个支持认证的协议来新建 Channel。当前首个认证适配器是微信 ClawBot，选中后扫码即可；后续 OAuth、设备码等协议可注册自己的认证适配器，不会把 `login` 固定等同于微信。也可执行 `/channel` 打开类似 `/plugin` 的配置面板，在列表按 `l` 打开同一通用认证选择器。
 
@@ -100,7 +108,24 @@ curl "http://<机器IP>:4317/v1/messages" \
   -d '{"source":"alertmanager","content":"生产环境出现告警，请检查"}'
 ```
 
-HTTP/微信配置保存在私有文件 `~/.pi/agent/channel/config.json`（`0600`）；微信凭证按 Channel 隔离保存。Pi 频道状态写入当前 session JSONL，不写入该配置文件。完整面板操作、协议字段、安全限制及扫码流程见 [`docs/extensions/channel.md`](docs/extensions/channel.md)。
+HTTP/微信/MCP/dots 配置保存在私有文件 `~/.pi/agent/channel/config.json`（`0600`）；微信凭证按 Channel 隔离保存。Pi 频道状态写入当前 session JSONL，不写入该配置文件。完整面板操作、协议字段、安全限制及扫码流程见 [`docs/extensions/channel.md`](docs/extensions/channel.md)。
+
+### 将当前会话暴露为 MCP 服务
+
+调用 `channel_manage(action="create", protocol="mcp", name="我的会话")`，或在 `/channel` 面板选择新增 MCP 类型。默认创建仅挂载当前会话的 `selected` Channel，监听 `127.0.0.1:0` 并自动生成 token；创建结果提供 `listenerToken` 和 `mcpClientConfig`（实际 `/mcp` URL 与 Bearer header），`list` / `status` 不返回 token。MCP 不支持 `scope="all"`。鉴权可选：创建时传 `mcp:{auth:"none"}` 或在面板关闭 **MCP auth**，则仅返回 URL，无需 token/header；默认仍为 `bearer`。
+
+这是基于官方 SDK 的 **Streamable HTTP 服务端**，不是 `/mcp` 所管理的外部 MCP 客户端。连接方使用 `pi_send_message({content,id?})` 异步投递，再用 `pi_read_replies({after,limit?})` 读取本 Channel 的回复；`pi_session_info` 只提供会话名称、ID 和能力。不直接开放会话历史、cwd 或 read/bash 等底层工具。入队不等于处理完成，`channel_send` 写入回复信箱也不等于客户端已读；获准连接的客户端共享该信箱（免鉴权时为任何可连接者）。
+
+回复信箱仅在内存中保留最多 100 条、总计 1 MiB，单条最多 64 KiB；重启、停用/卸载、`/reload`、关闭会话或保存外部 Channel 配置导致的传输重启都会丢失未读回复。客户端应检查 `instanceId`，变化后丢弃旧游标。服务依赖当前 Pi 进程存活，不是独立后台服务。
+
+默认 `/mcp` 请求要求 Bearer token，可显式设 `mcp.auth:"none"` 关闭；免鉴权意味着任何能连接端点的人都可使用会话服务。两种模式都拒绝带 `Origin` 的浏览器请求并校验 Host；公网接入需用户授权的 TLS 反代和来源 ACL，不自动提供域名或 OAuth。Bearer 模式客户端须能发送自定义 header，免鉴权模式只需 URL；ChatGPT/dot 能否使用该连接仍需实测。详见 [MCP 会话服务](docs/extensions/channel.md#mcp-会话服务)。
+
+
+### Pi ↔ dots 原生 Channel
+
+`channel_manage(action="create", protocol="dots", name="我的 dot")`，或在 `/channel` 新增 **dots · MCP Events**。这是独立于普通 `mcp` 的 Channel 类型：dot 使用 MCP 工具给当前 Pi 会话发消息；Pi 用 `channel_send` 发消息时，为已存在订阅持久排队 `pi.message.created`，通过 Standard Webhooks 签名回调通知现有 ChatGPT dot。支持 MCP 2.0 Events 发现、订阅/退订、challenge 验证、私有订阅/outbox 持久化、有界重试/死信、跨重启恢复与 callback SSRF 防护。
+
+默认本机随机端口、Bearer 鉴权、`selected + both + followUp + wake=true`；不自动创建公网入口或 OAuth。显式 `dots:{auth:"none"}` 可用于 ChatGPT 无认证联调（包括事件订阅），但所有可达者共享此 Channel，不能视为身份验证或生产安全隔离。MCP 手工回复信箱仍是内存，Webhook 2xx 只代表平台接收，不证明 dot 已被唤醒；真实订阅及停止轮询后的唤醒需单独验收。不会自动接通或发送微信。已支持固定账户网关＋成熟 AS OAuth：本机一次保存账户连接后，新建/恢复 dots Channel 自动共用同一 ChatGPT 连接；用户可显式订阅整个专用 dots 集合（含未来 Channel），无需逐 Channel 重配插件。真实首次 OAuth/刷新/后台唤醒须用户验收，见 [账户入口与首次绑定](docs/extensions/dots-account-bridge.md)。传输配置详见 [dots Channel](docs/extensions/dots.md)。
 
 ## 命令
 

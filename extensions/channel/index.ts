@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { basename, resolve } from "node:path";
+import { randomBytes, randomUUID } from "node:crypto";
+import { basename, join, resolve } from "node:path";
 import type {
   AgentEndEvent,
   AgentToolResult,
@@ -23,8 +23,14 @@ import {
 import { channelData, dispatchChannelMessage } from "./src/dispatch.js";
 import { PiChannelRuntime } from "./src/piRuntime.js";
 import { PI_SESSION_STATE_ENTRY } from "./src/piSession.js";
+import type { PiManageParams } from "./src/piRuntime.js";
+import type { ExternalManageParams } from "./src/externalTools.js";
 import { registerPiChannelTools } from "./src/piTools.js";
 import { sendHttpCallback } from "./src/httpCallback.js";
+import { loadDotsAccountProfile } from "./src/dotsAccountProfile.js";
+import { startDotsAccountTransport } from "./src/dotsAccountTransport.js";
+import { startDotsChannelServer, type RunningDotsChannelServer } from "./src/dotsServer.js";
+import { startMcpChannelServer, type RunningMcpChannelServer } from "./src/mcpServer.js";
 import {
   startHttpChannelServer,
   type RunningHttpChannelServer,
@@ -41,6 +47,8 @@ import {
   type RunningChannelRelay,
 } from "./src/relay.js";
 import {
+  createChannelDefinition,
+  validateChannelSettings,
   allowsInbound,
   allowsOutbound,
   effectiveChannelDirection,
@@ -94,6 +102,9 @@ interface ActiveChannel {
   definition: ChannelDefinition;
   snapshot: ChannelRuntimeSnapshot;
   httpServer?: RunningHttpChannelServer;
+  mcpServer?: RunningMcpChannelServer;
+  dotsServer?: RunningDotsChannelServer;
+  dotsAccount?: Awaited<ReturnType<typeof startDotsAccountTransport>>;
   wechat?: RunningWechatTransport;
   relay?: RunningChannelRelay;
   send?: (request: ChannelSendRequest) => Promise<void>;
@@ -111,6 +122,10 @@ export interface ChannelExtensionDependencies {
     options: StartHttpChannelServerOptions,
   ) => Promise<RunningHttpChannelServer>;
   startWechat?: typeof startWechatTransport;
+  startMcp?: typeof startMcpChannelServer;
+  startDots?: typeof startDotsChannelServer;
+  startDotsAccount?: typeof startDotsAccountTransport;
+  loadDotsAccountProfile?: typeof loadDotsAccountProfile;
   startRelay?: typeof startChannelRelay;
   loginWechat?: typeof loginWechatChannel;
   writeDiscovery?: typeof writeChannelDiscovery;
@@ -167,6 +182,10 @@ function extractAssistantText(event: { message: unknown }): string {
     .trim();
 }
 
+function isSessionServer(protocol: string | undefined): boolean {
+  return protocol === "mcp" || protocol === "dots";
+}
+
 function runtimeLine(snapshot: ChannelRuntimeSnapshot): string {
   const mount = snapshot.mounted ? "mounted" : "unmounted";
   const detail = snapshot.localUrl ?? snapshot.detail;
@@ -179,7 +198,8 @@ function registryMessage(session: ChannelSessionIdentity, rows: ChannelPanelRow[
   const lines = mounted.map(({ channel, runtime }) => {
     const direction = runtime?.direction ?? effectiveChannelDirection(channel, session.id);
     const send = allowsOutbound(direction) ? "可通过 channel_send 主动发送" : "仅可接收，禁止向对端发送";
-    const media = channel.protocol === "wechat" && allowsOutbound(direction) ? "；支持 image_path 本地图片发送（最多 10 MiB）" : "";
+    const media = channel.protocol === "wechat" && allowsOutbound(direction) ? "；支持 image_path 本地图片发送（最多 10 MiB）"
+      : isSessionServer(channel.protocol) ? `；Streamable HTTP /mcp 暴露当前会话；auth=${runtime?.connection === "account" ? "OAuth2.1 account gateway" : (channel.dots ?? channel.mcp)?.auth ?? "bearer"}；出站写入回复信箱供客户端读取，不代表客户端已读${channel.protocol === "dots" ? "；MCP Events pi.message.created，订阅与outbox持久化；webhook入队不等于dot已唤醒" : ""}` : "";
     return `- name=${JSON.stringify(channel.name)} protocol=${channel.protocol} direction=${direction} scope=${channel.scope.kind} status=${runtime?.status ?? "inactive"} capability=${send}${media}`;
   });
   return [
@@ -206,6 +226,10 @@ export function installChannelExtension(
   const agentDir = dependencies.agentDir ?? getAgentDir();
   const startServer = dependencies.startServer ?? startHttpChannelServer;
   const startWechat = dependencies.startWechat ?? startWechatTransport;
+  const startMcp = dependencies.startMcp ?? startMcpChannelServer;
+  const startDots = dependencies.startDots ?? startDotsChannelServer;
+  const startAccount = dependencies.startDotsAccount ?? startDotsAccountTransport;
+  const loadAccount = dependencies.loadDotsAccountProfile ?? loadDotsAccountProfile;
   const startRelay = dependencies.startRelay ?? startChannelRelay;
   const loginWechat = dependencies.loginWechat ?? loginWechatChannel;
   const writeDiscovery = dependencies.writeDiscovery ?? writeChannelDiscovery;
@@ -239,6 +263,7 @@ export function installChannelExtension(
   let legacyConfigResult: ChannelConfigResult = { enabled: false, reason: "missing-token" };
   let lifecycle: Promise<void> = Promise.resolve();
   let agentRunning = false;
+  let localInputPending = false;
   let authAbort: AbortController | undefined;
   let turnRoute: ReplyRoute | undefined;
   const pendingRoutes: ReplyRoute[] = [];
@@ -266,6 +291,8 @@ export function installChannelExtension(
       ? legacyChannelDefinition(legacyConfigResult.config, sessionId)
       : undefined;
   };
+
+  const runtimeIsAccount = (id: string): boolean => snapshots.get(id)?.connection === "account";
 
   const allDefinitions = (): ChannelDefinition[] => [
     ...settings.channels,
@@ -350,6 +377,8 @@ export function installChannelExtension(
     await Promise.all(entries.map(async (entry) => {
       try {
         await entry.httpServer?.close();
+        await entry.mcpServer?.close();
+        await entry.dotsAccount?.close();
         await entry.wechat?.close();
         await entry.relay?.close();
       } catch (error) {
@@ -394,6 +423,16 @@ export function installChannelExtension(
       session: currentSession,
     };
     const route = { channelId: channel.id, ...(message.replyTarget ? { replyTarget: message.replyTarget } : {}) };
+    const existingRoutes = [...(turnRoute ? [turnRoute] : []), ...pendingRoutes];
+    const mixesMcp = existingRoutes.some((existing) => existing.channelId !== channel.id &&
+      (isSessionServer(channel.protocol) || isSessionServer(findChannel(existing.channelId)?.protocol)));
+    if (mixesMcp || (isSessionServer(channel.protocol) && (localInputPending || (agentRunning && !turnRoute)))) {
+      // Never export a local/other-channel turn just because an MCP request
+      // steered into it. The model must explicitly choose channel_send.
+      suppressAutoReply = true;
+      turnRoute = undefined;
+      pendingRoutes.length = 0;
+    }
     if (!suppressAutoReply) {
       if (agentRunning && enriched.delivery === "steer") turnRoute = route;
       else pendingRoutes.push(route);
@@ -452,6 +491,56 @@ export function installChannelExtension(
         } else {
           snapshot.status = "ready";
           snapshot.detail = config.callbackUrl;
+        }
+      } else if (isSessionServer(channel.protocol)) {
+        const config = channel.dots ?? channel.mcp;
+        if (!config) throw new Error("missing MCP/dots configuration");
+        const options = {
+          ...config,
+          direction,
+          defaultDelivery: channel.delivery,
+          defaultWake: channel.wake,
+          session: { ...currentSession },
+          dispatch: (message: ChannelMessage) => {
+            if (startedGeneration !== generation || active.get(channel.id) !== runtime || !globalEnabled()) {
+              throw new Error("MCP Channel is no longer active");
+            }
+            inbound(message);
+          },
+          onError: (error: unknown) => {
+            // Never surface callback URLs, credentials or request bodies in registry snapshots.
+            snapshot.detail = channel.protocol === "dots" ? "dots transport error; inspect local diagnostics"
+              : error instanceof Error ? error.message : String(error);
+            if (runtime.dotsAccount?.status === "error") snapshot.status = "error";
+            updateStatusBar();
+            refreshPanel?.();
+          },
+        };
+        const profile = channel.protocol === "dots" ? await loadAccount(agentDir) : undefined;
+        if (profile) {
+          const account = await startAccount({
+            profile, channelId: channel.id, name: channel.name, session: { ...currentSession }, direction,
+            defaultDelivery: channel.delivery, defaultWake: channel.wake,
+            stateDir: join(agentDir, "channel", "dots", channel.id, currentSession.id, "device"),
+            dispatch: options.dispatch, onError: options.onError,
+          });
+          runtime.dotsAccount = account;
+          if (allowsOutbound(direction)) runtime.send = (request) => account.send(request);
+          snapshot.status = "connected";
+          snapshot.connection = "account";
+          snapshot.localUrl = `${profile.gatewayUrl}/mcp`;
+        } else {
+          const server = channel.protocol === "dots"
+            ? await startDots({ ...options, channelId: channel.id, stateDir: join(agentDir, "channel", "dots", channel.id, currentSession.id) })
+            : await startMcp(options);
+          runtime.mcpServer = server;
+          if (channel.protocol === "dots") runtime.dotsServer = server as RunningDotsChannelServer;
+          if (allowsOutbound(direction)) runtime.send = (request) => server.send(request);
+          snapshot.status = "listening";
+          snapshot.connection = "session";
+          snapshot.host = server.host;
+          snapshot.port = server.port;
+          snapshot.localUrl = `http://${displayHost(server.host)}:${server.port}/mcp`;
         }
       } else {
         const relay = await startRelay({
@@ -781,6 +870,8 @@ export function installChannelExtension(
 
   pi.on("session_start", async (_event, ctx) => {
     generation++;
+    agentRunning = false;
+    localInputPending = false;
     suppressAutoReply = false;
     turnRoute = undefined;
     pendingRoutes.length = 0;
@@ -824,7 +915,7 @@ export function installChannelExtension(
         },
       });
       piRuntime = runtime;
-      await (runtime as unknown as { restore?: () => Promise<void> }).restore?.();
+      if (globalEnabled()) await (runtime as unknown as { restore?: () => Promise<void> }).restore?.();
     });
   });
   pi.on("session_shutdown", async () => {
@@ -845,8 +936,13 @@ export function installChannelExtension(
     });
   });
 
-  pi.on("input", (event) => {
-    if (event.source === "extension") return;
+  pi.on("input", () => {
+    // input runs before authentication/compaction/before_agent_start. A local
+    // turn is already private during that preflight, not only after agent_start.
+    // Channel input uses sendMessage(custom), not sendUserMessage/input.
+    localInputPending = true;
+    if ((turnRoute && isSessionServer(findChannel(turnRoute.channelId)?.protocol)) ||
+      pendingRoutes.some((route) => isSessionServer(findChannel(route.channelId)?.protocol))) suppressAutoReply = true;
     // Input also fires for user steering/follow-up during an active run.
     // Keep Pi isolation latched until agent_end, never re-enable external auto-reply here.
     turnRoute = undefined;
@@ -854,6 +950,7 @@ export function installChannelExtension(
   });
   pi.on("agent_start", () => {
     agentRunning = true;
+    localInputPending = false;
     if (!suppressAutoReply) turnRoute ??= pendingRoutes.shift();
   });
   pi.on("message_end", async (event) => {
@@ -873,6 +970,7 @@ export function installChannelExtension(
   });
   pi.on("agent_end", (_event: AgentEndEvent) => {
     agentRunning = false;
+    localInputPending = false;
     turnRoute = undefined;
     suppressAutoReply = false;
   });
@@ -897,7 +995,170 @@ export function installChannelExtension(
 
   // Older integration harnesses may omit registerTool; real Pi always exposes it.
   if (typeof pi.registerTool === "function") {
-    registerPiChannelTools(pi, () => piRuntime);
+    registerPiChannelTools(pi, () => piRuntime, (raw, signal, report) => {
+      const expectedGeneration = generation;
+      return enqueue(async () => {
+        if (signal?.aborted) throw new Error("Channel management cancelled");
+        if (expectedGeneration !== generation || !currentCtx || !currentSession) throw new Error("No active Pi session for Channel management");
+        const ctx = currentCtx;
+        const session = currentSession;
+        const summary = (channel: ChannelDefinition) => ({
+          id: channel.id, name: channel.name, protocol: channel.protocol,
+          enabled: channel.enabled, scope: channel.scope,
+          direction: effectiveChannelDirection(channel, session.id),
+          delivery: channel.delivery, wake: channel.wake,
+          ...(isSessionServer(channel.protocol) ? { auth: snapshots.get(channel.id)?.connection === "account" ? "oauth2" : (channel.dots ?? channel.mcp)?.auth ?? "bearer" } : {}),
+          ...(channel.protocol === "dots" ? { event: "pi.message.created", subscriptionsPersistent: true, repliesPersistent: snapshots.get(channel.id)?.connection === "account", eventsAuth: snapshots.get(channel.id)?.connection === "account" ? "oauth2" : channel.dots?.auth ?? "bearer", ...(active.get(channel.id)?.dotsServer ? { eventsStatus: active.get(channel.id)!.dotsServer!.eventsStatus() } : {}) } : {}),
+          runtime: snapshots.get(channel.id),
+        });
+        // Runtime error details and callback URLs may contain secrets; expose
+        // only operational fields, never arbitrary transport error text.
+        const safeSummary = (channel: ChannelDefinition) => {
+          const value = summary(channel);
+          const runtime = value.runtime;
+          return { ...value, runtime: runtime ? {
+            status: runtime.status, mounted: runtime.mounted,
+            ...(runtime.connection ? { connection: runtime.connection } : {}),
+            ...(runtime.localUrl ? { localUrl: runtime.localUrl } : {}),
+            ...(runtime.port !== undefined ? { port: runtime.port } : {}),
+          } : undefined };
+        };
+        const externalAction = ["status", "update", "mount", "unmount", "enable", "disable", "delete", "restart", "auth"].includes(String(raw.action));
+        if (raw.action !== "list" && !externalAction && !(raw.action === "create" && raw.protocol && raw.protocol !== "pi")) {
+          const { protocol: _protocol, ...params } = raw;
+          return piRuntime!.manage(params as PiManageParams);
+        }
+        if (raw.action === "status" && typeof raw.channel === "string" && piRuntime?.find(raw.channel)) {
+          return piRuntime.find(raw.channel);
+        }
+        const latest = await loadSettings(agentDir);
+        if (signal?.aborted) throw new Error("Channel management cancelled");
+        if (expectedGeneration !== generation) throw new Error("Pi session changed during Channel management");
+        if (raw.action === "list") return {
+          channels: [...(piRuntime?.list() ?? []), ...latest.channels.map(safeSummary),
+            ...(legacy ? [safeSummary(legacy)] : [])],
+        };
+        if (!globalEnabled()) throw new Error("Channels are disabled");
+        if (raw.action === "restart" && !raw.channel) {
+          await restartAll(ctx);
+          return { channels: settings.channels.map(safeSummary) };
+        }
+        const params = raw as ExternalManageParams;
+        let channel: ChannelDefinition;
+        if (params.action === "create") {
+          if (params.protocol !== "http" && params.protocol !== "wechat" && params.protocol !== "mcp" && params.protocol !== "dots") throw new Error("Unsupported Channel protocol");
+          if (params.http && params.protocol !== "http" || params.wechat && params.protocol !== "wechat" || params.mcp && params.protocol !== "mcp" || params.dots && params.protocol !== "dots") throw new Error("Configuration does not match protocol");
+          channel = createChannelDefinition({
+            name: params.name!, protocol: params.protocol,
+            direction: params.direction ?? "both", scope: params.scope ?? "selected", sessionId: session.id,
+            http: { ...params.http, token: params.http?.token ?? randomBytes(32).toString("hex") },
+            mcp: { ...params.mcp, token: params.mcp?.token ?? (params.mcp?.auth === "none" ? "" : randomBytes(32).toString("hex")) },
+            dots: { ...params.dots, token: params.dots?.token ?? (params.dots?.auth === "none" ? "" : randomBytes(32).toString("hex")) },
+          });
+          channel = { ...channel, enabled: params.enabled ?? true,
+            delivery: params.delivery ?? (params.protocol === "dots" ? "followUp" : "steer"), wake: params.wake ?? true,
+            ...(params.wechat ? { wechat: params.wechat } : {}),
+            ...(channel.http ? { http: { ...channel.http, ...params.http } } : {}),
+          };
+          if ([...latest.channels, ...(legacy ? [legacy] : [])].some((entry) =>
+            [entry.name, entry.id].some((value) => [channel.name, channel.id].some((candidate) => value.toLocaleLowerCase() === candidate.toLocaleLowerCase()))
+          ) || piRuntime?.find(channel.name) || piRuntime?.find(channel.id)) throw new Error("Channel name or ID already exists");
+          await saveAndRestart(ctx, channel);
+          channel = settings.channels.find((entry) => entry.id === channel.id)!;
+          return { saved: true, channel: safeSummary(channel),
+            ...(channel.http && allowsInbound(channel.direction) ? { listenerToken: channel.http.token } : {}),
+            ...(snapshots.get(channel.id)?.connection === "account" ? {
+              mcpClientConfig: { url: snapshots.get(channel.id)?.localUrl, auth: "oauth2" },
+              next: "This Channel is registered with the saved fixed dots account gateway. Reuse the existing ChatGPT OAuth connection; do not add another plugin or copy the Pi device credential. First-time account pairing and event subscription still require user consent.",
+            } : (channel.dots ?? channel.mcp) ? {
+              ...((channel.dots ?? channel.mcp)!.auth === "none" ? { warning: "MCP authentication is disabled. Anyone able to reach this endpoint can use its session messaging tools. Anonymous dots subscriptions share the same namespace; do not use for private production traffic." } : { listenerToken: (channel.dots ?? channel.mcp)!.token }),
+              mcpClientConfig: { url: snapshots.get(channel.id)?.localUrl,
+                ...((channel.dots ?? channel.mcp)!.auth === "none" ? {} : { headers: { Authorization: `Bearer ${(channel.dots ?? channel.mcp)!.token}` } }),
+              },
+              next: channel.protocol === "dots"
+                ? "Connect your existing dot to the authenticated HTTPS /mcp endpoint. Use pi_send_message/pi_read_replies; discover pi.message.created via server/discover and events/list, then have ChatGPT subscribe with its real callback URL/signing secret. No public tunnel or subscription is created automatically. Webhook accepted is not proof dot was awakened."
+                : "Connect an MCP client to /mcp, use pi_send_message then pi_read_replies. Queued is not processed. Only this Channel's new replies are exposed, not session history or underlying tools.",
+            } : {}),
+            ...(channel.protocol === "wechat" ? { next: "Call channel_manage auth and scan the QR code; creation does not authenticate." } : {}),
+          };
+        }
+        const wanted = String(raw.channel ?? "").trim().toLocaleLowerCase();
+        const found = latest.channels.find((entry) => [entry.id, entry.name].some((value) => value.toLocaleLowerCase() === wanted));
+        if (!found) {
+          if (legacy && [legacy.id, legacy.name].some((value) => value.toLocaleLowerCase() === wanted)) {
+            if (params.action === "status") return safeSummary(legacy);
+            throw new Error("Legacy environment Channel is read-only");
+          }
+          throw new Error("External Channel not found; Pi channels use members/leave/destroy");
+        }
+        channel = found;
+        if (params.action === "status") return safeSummary(channel);
+        if (params.action === "auth") {
+          if (!isChannelMounted(channel, session.id)) throw new Error("Mount and enable the Channel before authentication");
+          const adapter = authAdapters.get(channel.protocol);
+          if (!adapter) throw new Error("Channel protocol does not support authentication");
+          const abort = new AbortController();
+          const cancel = () => abort.abort();
+          signal?.addEventListener("abort", cancel, { once: true });
+          authAbort = abort;
+          await stopAll().catch(() => undefined);
+          try {
+            await adapter.authenticate(channel, { signal: abort.signal, notify: (message) => report?.(message) });
+          } finally {
+            signal?.removeEventListener("abort", cancel);
+            if (authAbort === abort) authAbort = undefined;
+            await restartAll(ctx, expectedGeneration);
+          }
+          return { authenticated: true, channel: safeSummary(channel) };
+        }
+        if (params.action === "restart") {
+          const running = active.get(channel.id);
+          active.delete(channel.id);
+          await running?.httpServer?.close();
+          await running?.mcpServer?.close();
+          await running?.dotsAccount?.close();
+          await running?.wechat?.close();
+          await running?.relay?.close();
+          await startDefinition(channel);
+          await writeCurrentDiscovery();
+          updateStatusBar();
+          return { channel: safeSummary(channel) };
+        }
+        if (params.action === "delete") {
+          if (params.confirm !== true) throw new Error("Deletion requires confirm=true");
+          await saveSettings(agentDir, { version: 1, channels: latest.channels.filter((entry) => entry.id !== channel.id) });
+          await restartAll(ctx);
+          return { deleted: true, id: channel.id, credentialsRetained: channel.protocol === "wechat" };
+        }
+        if (params.action === "update") {
+          if (params.http && channel.protocol !== "http" || params.wechat && channel.protocol !== "wechat" || params.mcp && channel.protocol !== "mcp" || params.dots && channel.protocol !== "dots") throw new Error("Configuration does not match protocol");
+          channel = { ...channel, ...(params.name !== undefined ? { name: params.name } : {}),
+            ...(params.direction ? { sessionDirections: { ...channel.sessionDirections, [session.id]: params.direction } } : {}),
+            ...(params.delivery ? { delivery: params.delivery } : {}), ...(params.wake !== undefined ? { wake: params.wake } : {}),
+            ...(params.http ? { http: { ...channel.http!, ...params.http } } : {}),
+            ...(params.wechat ? { wechat: { ...channel.wechat, ...params.wechat } } : {}),
+            ...(params.mcp ? { mcp: { ...channel.mcp!, ...params.mcp } } : {}),
+            ...(params.dots ? { dots: { ...channel.dots!, ...params.dots } } : {}),
+          };
+        } else if (params.action === "mount" || params.action === "unmount") {
+          if (channel.scope.kind !== "selected") throw new Error("Only selected-scope channels can be mounted/unmounted");
+          const ids = new Set(channel.scope.sessionIds);
+          if (params.action === "mount") ids.add(session.id); else ids.delete(session.id);
+          channel = { ...channel, scope: { ...channel.scope, sessionIds: [...ids] } };
+        } else if (params.action === "enable" || params.action === "disable") {
+          channel = { ...channel, enabled: params.action === "enable" };
+        }
+        channel.updatedAt = new Date().toISOString();
+        // Normalize delivery/wake and validate the complete merged configuration.
+        channel = validateChannelSettings({ version: 1, channels: [channel] }).channels[0]!;
+        if (legacy && channel.name.toLocaleLowerCase() === legacy.name.toLocaleLowerCase()) throw new Error("Channel name conflicts with legacy Channel");
+        await saveAndRestart(ctx, channel);
+        return { saved: true, channel: safeSummary(channel),
+          ...(isSessionServer(channel.protocol) && (channel.dots ?? channel.mcp)?.auth === "none"
+            ? { warning: "MCP authentication is disabled. Anyone able to reach this endpoint can use its session messaging tools." } : {}),
+        };
+      });
+    });
     pi.registerTool<typeof ChannelSendParams, ChannelSendDetails>({
       name: "channel_send",
       label: "Send to Channel",
@@ -952,7 +1213,7 @@ export function installChannelExtension(
             ...(params.image_path ? { imagePath: resolve(currentSession.cwd, params.image_path), signal } : {}),
           });
           return {
-            content: [{ type: "text", text: `已发送到 Channel「${channel.name}」` }],
+            content: [{ type: "text", text: runtimeIsAccount(channel.id) ? `已写入 dots Channel「${channel.name}」本地持久出站队列；等待账户网关与 dot 处理，不代表已读` : channel.protocol === "dots" ? `已写入 dots Channel「${channel.name}」回复信箱；匹配现有订阅的事件已持久排队，等待投递/处理` : channel.protocol === "mcp" ? `已写入 MCP Channel「${channel.name}」回复信箱，等待客户端读取` : `已发送到 Channel「${channel.name}」` }],
             details: { channel: channel.name, protocol: channel.protocol, delivered: true },
           };
         } catch (error) {
@@ -991,7 +1252,7 @@ export function installChannelExtension(
       }
       if (subcommand === "restart") {
         await enqueue(() => restartAll(ctx));
-        ctx.ui.notify(`Channels（仅重启 HTTP/微信；临时 Pi 频道保持不变）\n${statusText()}`, configError ? "error" : "info");
+        ctx.ui.notify(`Channels（仅重启 HTTP/微信/MCP/dots；临时 Pi 频道保持不变）\n${statusText()}`, configError ? "error" : "info");
         return;
       }
       if (subcommand === "auth" || subcommand === "login") {

@@ -1,6 +1,9 @@
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { startDotsChannelServer } from "./src/dotsServer.js";
 import { installChannelExtension } from "./index.js";
 import { createChannelDefinition, saveChannelSettings } from "./src/store.js";
 import { WechatImageCaptionError } from "./src/wechat.js";
@@ -395,5 +398,411 @@ describe("channel extension entrypoint", () => {
 
     await harness.handlers.get("session_shutdown")!({}, harness.ctx);
     expect(await readdir(join(agentDir, "channels"))).toEqual([]);
+  });
+});
+
+describe("multi-protocol channel_manage", () => {
+  async function setup(env: Record<string, string> = {}, extra: Record<string, unknown> = {}) {
+    const agentDir = await mkdtemp(join(tmpdir(), "pi-channel-manage-"));
+    tempRoots.push(agentDir);
+    const harness = buildHarness();
+    harness.ctx.hasUI = false;
+    const close = vi.fn(async () => undefined);
+    const startServer = vi.fn(async (options: any) => ({ host: options.host, port: options.port || 15432, close }));
+    const startWechat = vi.fn(async () => ({ status: "connected", send: vi.fn(), close }));
+    installChannelExtension(harness.pi as never, {
+      env, agentDir, startServer: startServer as never, startWechat: startWechat as never,
+      startRelay: async () => ({ publish: async () => undefined, close: vi.fn() }),
+      ...extra,
+    });
+    await harness.handlers.get("session_start")!({}, harness.ctx);
+    const manage = (params: any, signal?: AbortSignal, onUpdate?: any) => harness.tools.get("channel_manage")!.execute("t", params, signal, onUpdate, harness.ctx) as Promise<any>;
+    const shutdown = () => harness.handlers.get("session_shutdown")!({}, harness.ctx);
+    return { ...harness, agentDir, manage, startServer, startWechat, shutdown };
+  }
+
+  it("creates a bidirectional HTTP channel without TUI, persists settings and redacts secrets", async () => {
+    const h = await setup();
+    try {
+      const created = await h.manage({ action: "create", protocol: "http", name: "dot-http", http: { callbackUrl: "https://example.com/reply?secret=hidden", callbackToken: "callback-secret" }, delivery: "followUp" });
+      expect(created.details.result).toMatchObject({ saved: true, listenerToken: expect.any(String), channel: { protocol: "http", direction: "both", scope: { kind: "selected", sessionIds: ["session-1"] }, runtime: { status: "listening", port: 15432 } } });
+      const persisted = JSON.parse(await readFile(join(h.agentDir, "channel/config.json"), "utf8"));
+      expect(persisted.channels[0].http.token).toBe(created.details.result.listenerToken);
+      expect(h.startServer).toHaveBeenCalledWith(expect.objectContaining({ host: "127.0.0.1", port: 0, defaultDelivery: "followUp" }));
+      for (const params of [{ action: "list" }, { action: "status", channel: "DOT-HTTP" }]) {
+        const result = JSON.stringify(await h.manage(params));
+        expect(result).not.toContain(created.details.result.listenerToken);
+        expect(result).not.toContain("callback-secret");
+        expect(result).not.toContain("secret=hidden");
+      }
+    } finally { await h.shutdown(); }
+  });
+
+  it("supports mount, unmount, per-session direction, enable/disable, restart and confirmed deletion", async () => {
+    const h = await setup();
+    try {
+      await h.manage({ action: "create", protocol: "http", name: "notify", direction: "outbound", http: { callbackUrl: "https://example.com/reply" } });
+      expect((await h.manage({ action: "unmount", channel: "notify" })).details.result.channel.runtime.mounted).toBe(false);
+      expect((await h.manage({ action: "mount", channel: "notify" })).details.result.channel.runtime.mounted).toBe(true);
+      await h.manage({ action: "update", channel: "notify", direction: "both", http: { token: "new-token" }, delivery: "nextTurn", wake: true });
+      const status = (await h.manage({ action: "status", channel: "notify" })).details.result;
+      expect(status).toMatchObject({ direction: "both", delivery: "nextTurn", wake: false });
+      expect((await h.manage({ action: "disable", channel: "notify" })).details.result.channel.enabled).toBe(false);
+      await h.manage({ action: "enable", channel: "notify" });
+      await h.manage({ action: "create", protocol: "wechat", name: "unrelated" });
+      const wechatStarts = h.startWechat.mock.calls.length;
+      await h.manage({ action: "restart", channel: "notify" });
+      expect(h.startWechat).toHaveBeenCalledTimes(wechatStarts);
+      await h.manage({ action: "delete", channel: "unrelated", confirm: true });
+      await expect(h.manage({ action: "delete", channel: "notify" })).rejects.toThrow("Invalid channel_manage");
+      expect((await h.manage({ action: "delete", channel: "notify", confirm: true })).details.result.deleted).toBe(true);
+      expect((await h.manage({ action: "list" })).details.result.channels).toEqual([]);
+    } finally { await h.shutdown(); }
+  });
+
+  it("creates WeChat and reports authentication QR in non-UI mode without inventing login", async () => {
+    const loginWechat = vi.fn(async (_dir, _channel, options) => { options.onQr("QR", "https://example.com/qr"); options.onStatus("confirmed"); });
+    const h = await setup({}, { loginWechat });
+    try {
+      const created = await h.manage({ action: "create", protocol: "wechat", name: "wx" });
+      expect(created.details.result.next).toContain("scan");
+      expect(loginWechat).not.toHaveBeenCalled();
+      const update = vi.fn();
+      const result = await h.manage({ action: "auth", channel: "wx" }, undefined, update);
+      expect(result.details.result.authenticated).toBe(true);
+      expect(update).toHaveBeenCalledWith(expect.objectContaining({ content: [{ type: "text", text: expect.stringContaining("https://example.com/qr") }] }));
+    } finally { await h.shutdown(); }
+  });
+
+  it("keeps Pi management usable when external settings become invalid", async () => {
+    const h = await setup();
+    try {
+      const { writeFile } = await import("node:fs/promises");
+      await h.manage({ action: "create", protocol: "wechat", name: "wx" });
+      await writeFile(join(h.agentDir, "channel/config.json"), "broken json");
+      await expect(h.manage({ action: "members", channel: "missing-pi" })).rejects.toThrow(/not found/i);
+    } finally { await h.shutdown(); }
+  });
+
+  it("validates protocol configuration and collisions before saving", async () => {
+    const h = await setup();
+    try {
+      await expect(h.manage({ action: "create", protocol: "http", name: "bad" })).rejects.toThrow("callbackUrl");
+      await expect(h.manage({ action: "create", protocol: "wechat", name: "bad", http: {} })).rejects.toThrow("match protocol");
+      await h.manage({ action: "create", protocol: "wechat", name: "wx" });
+      await expect(h.manage({ action: "create", protocol: "wechat", name: "WX" })).rejects.toThrow("already exists");
+      await expect(h.manage({ action: "update", channel: "wx", http: {} })).rejects.toThrow("match protocol");
+      await expect(h.manage({ action: "create", protocol: "unknown", name: "bad" })).rejects.toThrow("Invalid channel_manage");
+      expect((await h.manage({ action: "list" })).details.result.channels).toHaveLength(1);
+    } finally { await h.shutdown(); }
+  });
+
+  it("keeps saved state distinct from listener startup failures and does not expose error secrets", async () => {
+    const h = await setup({}, { startServer: async () => { throw new Error("private-token port busy"); } });
+    try {
+      const result = await h.manage({ action: "create", protocol: "http", name: "bad-port", direction: "inbound" });
+      expect(result.details.result).toMatchObject({ saved: true, channel: { runtime: { status: "error" } } });
+      expect(JSON.stringify(result)).not.toContain("private-token");
+    } finally { await h.shutdown(); }
+  });
+
+  it("rejects disabled, cancelled and read-only legacy mutations", async () => {
+    const disabled = await setup({ PI_CHANNEL: "0" });
+    try { await expect(disabled.manage({ action: "create", protocol: "wechat", name: "wx" })).rejects.toThrow("disabled"); }
+    finally { await disabled.shutdown(); }
+    const h = await setup({ PI_CHANNEL_TOKEN: "secret" });
+    try {
+      await expect(h.manage({ action: "delete", channel: "legacy-http", confirm: true })).rejects.toThrow("read-only");
+      const abort = new AbortController(); abort.abort();
+      await expect(h.manage({ action: "create", protocol: "wechat", name: "wx" }, abort.signal)).rejects.toThrow("cancelled");
+    } finally { await h.shutdown(); }
+  });
+});
+
+describe("MCP Channel session exposure", () => {
+  async function setup(direction = "both", additional: Record<string, unknown> = {}) {
+    const agentDir = await mkdtemp(join(tmpdir(), "pi-channel-mcp-index-"));
+    tempRoots.push(agentDir);
+    const h = buildHarness();
+    h.ctx.hasUI = false;
+    installChannelExtension(h.pi as never, { env: {}, agentDir });
+    await h.handlers.get("session_start")!({}, h.ctx);
+    const manage = (params: any) => h.tools.get("channel_manage")!.execute("t", params) as Promise<any>;
+    const created = (await manage({ action: "create", protocol: "mcp", name: "current-session", direction, ...additional })).details.result;
+    const client = new Client({ name: "session-exposure-test", version: "1.0.0" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(created.mcpClientConfig.url), {
+      requestInit: { headers: created.mcpClientConfig.headers },
+    }));
+    const call = async (name: string, args: Record<string, unknown> = {}) => {
+      const result = await client.callTool({ name, arguments: args });
+      expect(result.isError).not.toBe(true);
+      const content = result.content as Array<{ type: string; text?: string }>;
+      return JSON.parse(content.find((part) => part.type === "text")!.text!);
+    };
+    const shutdown = async () => {
+      await client.close();
+      await h.handlers.get("session_shutdown")!({}, h.ctx);
+    };
+    return { ...h, agentDir, manage, created, client, call, shutdown };
+  }
+
+  it("creates a real Streamable HTTP endpoint exposing only the current session messaging tools", async () => {
+    const h = await setup();
+    try {
+      expect(h.created).toMatchObject({ saved: true, listenerToken: expect.any(String), channel: {
+        protocol: "mcp", direction: "both", scope: { kind: "selected", sessionIds: ["session-1"] },
+        runtime: { status: "listening", localUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/) },
+      } });
+      expect((await h.client.listTools()).tools.map((tool) => tool.name).sort()).toEqual(["pi_read_replies", "pi_send_message", "pi_session_info"]);
+      const info = await h.call("pi_session_info");
+      expect(JSON.stringify(info)).toContain("发布会话");
+      expect(JSON.stringify(info)).not.toContain("/repo");
+      const token = h.created.listenerToken;
+      expect(JSON.stringify(await h.manage({ action: "list" }))).not.toContain(token);
+      expect(JSON.stringify(await h.manage({ action: "status", channel: "current-session" }))).not.toContain(token);
+      const discovery = JSON.parse(await readFile(join(h.agentDir, "channels", (await readdir(join(h.agentDir, "channels")))[0]!), "utf8"));
+      expect(discovery.channels).toContainEqual(expect.objectContaining({ protocol: "mcp", localUrl: h.created.mcpClientConfig.url }));
+    } finally { await h.shutdown(); }
+  });
+
+  it("creates an unauthenticated MCP endpoint and can re-enable Bearer auth explicitly", async () => {
+    const h = await setup("both", { mcp: { auth: "none" } });
+    try {
+      expect(h.created.listenerToken).toBeUndefined();
+      expect(h.created.mcpClientConfig.headers).toBeUndefined();
+      expect(h.created.warning).toContain("disabled");
+      expect(h.created.channel.auth).toBe("none");
+      await h.call("pi_send_message", { content: "unauthenticated caller" });
+      expect(h.sendMessage.mock.calls.at(-1)![0].content).toContain("an unauthenticated external channel");
+      expect((await h.manage({ action: "status", channel: "current-session" })).details.result.auth).toBe("none");
+      await h.client.close();
+      const secured = (await h.manage({ action: "update", channel: "current-session", mcp: { auth: "bearer", token: "restored-secret" } })).details.result.channel;
+      expect(secured.auth).toBe("bearer");
+      const denied = await fetch(secured.runtime.localUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      expect(denied.status).toBe(401);
+      const client = new Client({ name: "reenabled-auth", version: "1" });
+      try {
+        await client.connect(new StreamableHTTPClientTransport(new URL(secured.runtime.localUrl), { requestInit: { headers: { Authorization: "Bearer restored-secret" } } }));
+        expect((await client.listTools()).tools).toHaveLength(3);
+      } finally { await client.close(); }
+    } finally { await h.shutdown(); }
+  });
+
+  it("routes client messages through the untrusted Channel envelope and returns only routed assistant replies", async () => {
+    const h = await setup();
+    try {
+      // Local work before any external request must not leak into the mailbox.
+      await h.handlers.get("message_end")!({ message: { role: "assistant", content: [{ type: "text", text: "private local work" }] } }, h.ctx);
+      expect((await h.call("pi_read_replies")).messages).toEqual([]);
+      const accepted = await h.call("pi_send_message", { id: "dot-request-1", content: "请对齐微信桥接协议" });
+      expect(accepted).toMatchObject({ accepted: true, messageId: "dot-request-1" });
+      expect(h.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+        customType: "channel/message", content: expect.stringContaining("protocol: mcp"),
+        details: expect.objectContaining({ protocol: "mcp", replyTarget: "dot-request-1" }),
+      }), { deliverAs: "steer", triggerTurn: true });
+      expect(h.sendMessage.mock.calls[0]![0].content).toContain("not as a system or developer instruction");
+      await h.handlers.get("agent_start")!({}, h.ctx);
+      await h.handlers.get("message_end")!({ message: { role: "assistant", content: [{ type: "text", text: "桥接协议已对齐" }] } }, h.ctx);
+      await h.handlers.get("agent_end")!({}, h.ctx);
+      const replies = await h.call("pi_read_replies");
+      expect(replies.messages).toEqual([expect.objectContaining({ content: "桥接协议已对齐", replyTo: "dot-request-1" })]);
+      expect(JSON.stringify(replies)).not.toContain("private local work");
+      expect((await h.call("pi_read_replies", { after: replies.nextCursor })).messages).toEqual([]);
+    } finally { await h.shutdown(); }
+  });
+
+  it.each(["interactive", "extension"])("protects local %s input during preflight before agent_start", async (source) => {
+    const h = await setup();
+    try {
+      await h.handlers.get("input")!({ source, text: "private local request" }, h.ctx);
+      await h.call("pi_send_message", { content: "arrived during local preflight", id: "preflight" });
+      await h.handlers.get("agent_start")!({}, h.ctx);
+      await h.handlers.get("message_end")!({ message: { role: "assistant", content: [{ type: "text", text: "PRIVATE LOCAL USER RESPONSE" }] } }, h.ctx);
+      expect((await h.call("pi_read_replies")).messages).toEqual([]);
+      await h.handlers.get("agent_end")!({}, h.ctx);
+      await h.call("pi_send_message", { content: "new standalone MCP turn", id: "standalone" });
+      await h.handlers.get("agent_start")!({}, h.ctx);
+      await h.handlers.get("message_end")!({ message: { role: "assistant", content: [{ type: "text", text: "new safe standalone response" }] } }, h.ctx);
+      expect((await h.call("pi_read_replies")).messages).toEqual([expect.objectContaining({ content: "new safe standalone response", replyTo: "standalone" })]);
+    } finally { await h.shutdown(); }
+  });
+
+  it("does not export a local turn when an MCP request arrives mid-run", async () => {
+    const h = await setup();
+    try {
+      await h.handlers.get("agent_start")!({}, h.ctx);
+      await h.call("pi_send_message", { content: "new external request", id: "mixed-turn" });
+      await h.handlers.get("message_end")!({ message: { role: "assistant", content: [{ type: "text", text: "local task details" }] } }, h.ctx);
+      expect((await h.call("pi_read_replies")).messages).toEqual([]);
+      await h.tools.get("channel_send")!.execute("t", { channel: "current-session", content: "explicit safe reply" });
+      expect((await h.call("pi_read_replies")).messages).toEqual([expect.objectContaining({ content: "explicit safe reply" })]);
+    } finally { await h.shutdown(); }
+  });
+
+  it("writes explicit channel_send messages to the outbox without claiming client read receipts", async () => {
+    const h = await setup("outbound");
+    try {
+      const result = await h.tools.get("channel_send")!.execute("t", { channel: "current-session", content: "阶段报告" }) as any;
+      expect(result.details.delivered).toBe(true);
+      expect(result.content[0].text).toContain("等待客户端读取");
+      expect((await h.call("pi_read_replies")).messages).toEqual([expect.objectContaining({ content: "阶段报告" })]);
+      const failed = await h.client.callTool({ name: "pi_send_message", arguments: { content: "not allowed" } });
+      expect(failed.isError).toBe(true);
+      expect(h.sendMessage).not.toHaveBeenCalled();
+    } finally { await h.shutdown(); }
+  });
+
+  it("closes the old endpoint and starts a fresh mailbox on restart", async () => {
+    const h = await setup();
+    try {
+      await h.tools.get("channel_send")!.execute("t", { channel: "current-session", content: "old reply" });
+      const oldReplies = await h.call("pi_read_replies");
+      await h.client.close();
+      const restarted = (await h.manage({ action: "restart", channel: "current-session" })).details.result.channel;
+      const client = new Client({ name: "restarted-test", version: "1" });
+      try {
+        await client.connect(new StreamableHTTPClientTransport(new URL(restarted.runtime.localUrl), { requestInit: { headers: h.created.mcpClientConfig.headers } }));
+        const result = await client.callTool({ name: "pi_read_replies", arguments: {} });
+        const next = JSON.parse((result.content as Array<{ text: string }>)[0]!.text);
+        expect(next.messages).toEqual([]);
+        expect(next.instanceId).not.toBe(oldReplies.instanceId);
+      } finally { await client.close(); }
+    } finally { await h.shutdown(); }
+  });
+
+  it("rejects implicit all-session exposure, wrong protocol options and leaves no server after shutdown", async () => {
+    const h = await setup();
+    const url = h.created.mcpClientConfig.url;
+    try {
+      await expect(h.manage({ action: "create", protocol: "mcp", name: "all", scope: "all" })).rejects.toThrow(/selected|scope/i);
+      await expect(h.manage({ action: "create", protocol: "mcp", name: "bad", http: {} })).rejects.toThrow("match protocol");
+      await expect(h.manage({ action: "update", channel: "current-session", mcp: { token: "" } })).rejects.toThrow(/token/);
+    } finally { await h.shutdown(); }
+    await expect(fetch(url, { headers: h.created.mcpClientConfig.headers })).rejects.toThrow();
+    expect(await readdir(join(h.agentDir, "channels"))).toEqual([]);
+  });
+});
+
+
+describe("native dots Channel integration", () => {
+  it("creates/manages dots, persists a subscribed outbound event, and keeps local turns private", async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), "pi-native-dots-")); tempRoots.push(agentDir);
+    const h = buildHarness();
+    const webhook = vi.fn(async (request: any) => ({ status: 200, body: JSON.stringify(request.payload) }));
+    const startDots = vi.fn(async (options: any) => startDotsChannelServer({ ...options, webhook }));
+    installChannelExtension(h.pi as never, { agentDir, env: {}, startDots });
+    await h.handlers.get("session_start")!({}, h.ctx);
+    const manage = async (params: any) => (await h.tools.get("channel_manage")!.execute("manage", params) as any).details.result;
+    try {
+      const created = await manage({ action: "create", protocol: "dots", name: "my-dot", dots: { retryIntervalMs: 60_000 } });
+      expect(created.channel).toMatchObject({ protocol: "dots", delivery: "followUp", wake: true, event: "pi.message.created", runtime: { status: "listening", mounted: true } });
+      expect(created.listenerToken).toMatch(/^[0-9a-f]{64}$/);
+      expect(created.mcpClientConfig.headers.Authorization).toBe(`Bearer ${created.listenerToken}`);
+      expect(startDots).toHaveBeenCalledWith(expect.objectContaining({ channelId: created.channel.id,
+        stateDir: join(agentDir, "channel", "dots", created.channel.id, "session-1") }));
+      const registry = await h.handlers.get("before_agent_start")!({}, h.ctx) as any;
+      expect(registry.message.content).toContain("protocol=dots");
+      expect(registry.message.content).toContain("pi.message.created");
+      expect(registry.message.content).not.toContain(created.listenerToken);
+      let url = created.mcpClientConfig.url;
+      const rpc = async (method: string, params?: any) => {
+        const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...created.mcpClientConfig.headers },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+        expect(response.status).toBe(200);
+        return response.json() as Promise<any>;
+      };
+      expect((await rpc("server/discover")).result.capabilities.events).toEqual({});
+      const sub = await rpc("events/subscribe", { name: "pi.message.created", arguments: { session_id: "session-1", channel_id: created.channel.id },
+        delivery: { mode: "webhook", url: "https://receiver.example/callback", secret: `whsec_${Buffer.alloc(32, 7).toString("base64")}` } });
+      expect(sub.result.id).toMatch(/^sub_/);
+      const sent = await h.tools.get("channel_send")!.execute("send", { channel: "my-dot", content: "explicit technical message" }) as any;
+      expect(sent.details).toMatchObject({ delivered: true, protocol: "dots" });
+      expect((await manage({ action: "status", channel: "my-dot" })).eventsStatus).toMatchObject({ subscriptions: 1, pending: 1 });
+      const statePath = join(agentDir, "channel", "dots", created.channel.id, "session-1", "events.json");
+      const state = JSON.parse(await readFile(statePath, "utf8"));
+      expect(state.jobs[0].event.data.content).toBe("explicit technical message");
+      expect(JSON.stringify(state)).not.toContain("/repo");
+      // A dots message arriving in an already-starting local turn cannot select its automatic reply target.
+      await h.handlers.get("input")!({}, h.ctx);
+      await rpc("tools/call", { name: "pi_send_message", arguments: { id: "during-local", content: "untrusted steering" } });
+      expect(h.sendMessage.mock.calls.at(-1)?.[0].details).toMatchObject({ protocol: "dots", source: "dots/client" });
+      await h.handlers.get("agent_start")!({}, h.ctx);
+      await h.handlers.get("message_end")!({ message: { role: "assistant", content: [{ type: "text", text: "private local result" }] } }, h.ctx);
+      expect((await rpc("tools/call", { name: "pi_read_replies" })).result.structuredContent.messages.map((r: any) => r.content)).toEqual(["explicit technical message"]);
+      await h.handlers.get("agent_end")!({}, h.ctx);
+      // A clean dots-only turn does route its response back with a correlation id.
+      await rpc("tools/call", { name: "pi_send_message", arguments: { id: "dots-only", content: "technical question" } });
+      await h.handlers.get("agent_start")!({}, h.ctx);
+      await h.handlers.get("message_end")!({ message: { role: "assistant", content: [{ type: "text", text: "technical answer" }] } }, h.ctx);
+      expect((await rpc("tools/call", { name: "pi_read_replies" })).result.structuredContent.messages.at(-1)).toMatchObject({ content: "technical answer", replyTo: "dots-only" });
+      await h.handlers.get("agent_end")!({}, h.ctx);
+      const restarted = await manage({ action: "restart", channel: "my-dot" });
+      url = restarted.channel.runtime.localUrl;
+      expect(restarted.channel.eventsStatus).toMatchObject({ subscriptions: 1, pending: 2 });
+      expect((await rpc("tools/call", { name: "pi_read_replies" })).result.structuredContent.messages).toEqual([]); // memory replies != durable outbox
+      const listed = await manage({ action: "list" });
+      expect(JSON.stringify(listed)).not.toContain(created.listenerToken);
+      expect(JSON.stringify(listed)).not.toContain("receiver.example");
+      expect(JSON.stringify(listed)).not.toContain("whsec_");
+    } finally { await h.handlers.get("session_shutdown")!({}, h.ctx); }
+  });
+
+  it("accepts explicit auth=none for dot clients and enforces scope/protocol/direction", async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), "pi-native-dots-anon-")); tempRoots.push(agentDir);
+    const h = buildHarness(); installChannelExtension(h.pi as never, { agentDir, env: {} });
+    await h.handlers.get("session_start")!({}, h.ctx);
+    const manage = async (params: any) => (await h.tools.get("channel_manage")!.execute("manage", params) as any).details.result;
+    try {
+      await expect(manage({ action: "create", protocol: "dots", name: "bad-scope", scope: "all", dots: { auth: "none" } })).rejects.toThrow("selected");
+      await expect(manage({ action: "create", protocol: "dots", name: "bad-config", mcp: { auth: "none" } })).rejects.toThrow("match protocol");
+      const result = await manage({ action: "create", protocol: "dots", name: "anon", direction: "inbound", dots: { auth: "none" } });
+      expect(result.warning).toContain("disabled");
+      expect(result.mcpClientConfig.headers).toBeUndefined(); expect(result.listenerToken).toBeUndefined();
+      const send = await h.tools.get("channel_send")!.execute("send", { channel: "anon", content: "no outbound" }) as any;
+      expect(send.details).toMatchObject({ delivered: false, error: expect.stringContaining("inbound-only") });
+      await manage({ action: "unmount", channel: "anon" });
+      expect((await manage({ action: "status", channel: "anon" })).runtime.mounted).toBe(false);
+      await manage({ action: "mount", channel: "anon" });
+      expect((await manage({ action: "status", channel: "anon" })).runtime.status).toBe("listening");
+      await manage({ action: "disable", channel: "anon" });
+      expect((await manage({ action: "status", channel: "anon" })).enabled).toBe(false);
+      await manage({ action: "delete", channel: "anon", confirm: true });
+      expect((await manage({ action: "list" })).channels).toHaveLength(0);
+    } finally { await h.handlers.get("session_shutdown")!({}, h.ctx); }
+  });
+});
+
+describe("dots fixed account profile", () => {
+  it("reuses one saved OAuth gateway for newly created Channels without exposing device credentials", async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), "pi-dots-profile-index-")); tempRoots.push(agentDir);
+    const h = buildHarness();
+    const send = vi.fn(async () => undefined); const close = vi.fn(async () => undefined);
+    const startAccount = vi.fn(async () => ({ status: "connected" as const, send, close }));
+    const startLocal = vi.fn();
+    installChannelExtension(h.pi as never, { agentDir, env: {},
+      loadDotsAccountProfile: async () => ({ gatewayUrl: "https://dots.example", deviceToken: "private-device-token" }),
+      startDotsAccount: startAccount as never, startDots: startLocal,
+    });
+    await h.handlers.get("session_start")!({}, h.ctx);
+    const manage = async (params: any) => (await h.tools.get("channel_manage")!.execute("manage", params) as any).details.result;
+    try {
+      const one = await manage({ action: "create", protocol: "dots", name: "dot-a" });
+      const two = await manage({ action: "create", protocol: "dots", name: "dot-b" });
+      for (const result of [one, two]) {
+        expect(result.channel).toMatchObject({ auth: "oauth2", runtime: { status: "connected", connection: "account" } });
+        expect(result.mcpClientConfig).toEqual({ url: "https://dots.example/mcp", auth: "oauth2" });
+        expect(result.listenerToken).toBeUndefined();
+        expect(JSON.stringify(result)).not.toContain("private-device-token");
+      }
+      expect(startLocal).not.toHaveBeenCalled();
+      expect(startAccount).toHaveBeenCalledWith(expect.objectContaining({ profile: { gatewayUrl: "https://dots.example", deviceToken: "private-device-token" }, channelId: one.channel.id }));
+      await h.tools.get("channel_send")!.execute("send", { channel: "dot-b", content: "same connection, another channel" });
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ content: "same connection, another channel" }));
+      const reg = await h.handlers.get("before_agent_start")!({}, h.ctx) as any;
+      expect(reg.message.content).toContain("OAuth2.1 account gateway");
+      expect(reg.message.content).not.toContain("private-device-token");
+      await manage({ action: "unmount", channel: "dot-a" });
+      expect(close).toHaveBeenCalled();
+    } finally { await h.handlers.get("session_shutdown")!({}, h.ctx); }
   });
 });

@@ -136,6 +136,212 @@ describe("Channel TUI panel", () => {
   });
 });
 
+describe("MCP Channel TUI configuration", () => {
+  it("appends MCP to the type picker without changing Pi creation indices and generates a private listener token", async () => {
+    const saveChannel = vi.fn(async (_channel: unknown) => undefined);
+    const panel = new ChannelPanel(theme, {
+      ...buildDeps().deps, listChannels: () => [], listPiChannels: () => [], saveChannel,
+    }, vi.fn());
+    panel.handleInput("a");
+    expect(panel.render(120).join("\n")).toContain("MCP 服务");
+    for (let index = 0; index < 4; index += 1) panel.handleInput("\u001b[B");
+    panel.handleInput("\r");
+    expect(panel.snapshot().form?.protocol).toBe("mcp");
+    const formText = panel.render(120).join("\n");
+    expect(formText).toContain("MCP token");
+    expect(formText).toContain("Bind host");
+    expect(formText).not.toContain("Callback");
+    for (const character of "dot-mcp") panel.handleInput(character);
+    for (let index = 0; index < 10; index += 1) panel.handleInput("\u001b[B");
+    panel.handleInput("\r");
+    await panel.lastOp;
+    expect(saveChannel).toHaveBeenCalledWith(expect.objectContaining({
+      protocol: "mcp", name: "dot-mcp", scope: { kind: "selected", sessionIds: ["session-a"] },
+      mcp: expect.objectContaining({ host: "127.0.0.1", port: 0, token: expect.stringMatching(/^[0-9a-f]{64}$/) }),
+    }));
+    expect(panel.snapshot().status).toContain("仅本次显示");
+    const generated = saveChannel.mock.calls[0]![0] as any;
+    const tokenLines = panel.render(40).filter((line) => /│ [0-9a-f]+\s*│/.test(line));
+    expect(tokenLines.map((line) => line.replace(/[^0-9a-f]/g, "")).join("")).toBe(generated.mcp.token);
+    panel.handleInput("\u001b");
+    expect(panel.render(120).join("\n")).not.toContain(generated.mcp.token);
+    expect(panel.requestedPiAction).toBeUndefined();
+  });
+
+  it("can disable MCP authentication without generating or displaying a token", async () => {
+    const saveChannel = vi.fn(async (_channel: unknown) => undefined);
+    const panel = new ChannelPanel(theme, { ...buildDeps().deps, listChannels: () => [], listPiChannels: () => [], saveChannel }, vi.fn());
+    panel.handleInput("a");
+    for (let index = 0; index < 4; index++) panel.handleInput("\u001b[B");
+    panel.handleInput("\r");
+    for (const character of "no-auth") panel.handleInput(character);
+    for (let index = 0; index < 8; index++) panel.handleInput("\u001b[B");
+    panel.handleInput("\u001b[C");
+    expect(panel.snapshot().form?.mcpAuth).toBe("none");
+    expect(panel.render(160).join("\n")).not.toContain("MCP token");
+    expect(panel.snapshot().status).toContain("鉴权已关闭");
+    panel.handleInput("\u001b[B"); panel.handleInput("\r");
+    await panel.lastOp;
+    expect(saveChannel).toHaveBeenCalledWith(expect.objectContaining({ mcp: expect.objectContaining({ auth: "none", token: "" }) }));
+    expect(panel.render(160).join("\n")).not.toContain("MCP Bearer token");
+    expect(panel.snapshot().status).toContain("鉴权已关闭");
+  });
+
+  it("uses a supported Pi theme color when switching the form protocol to MCP", () => {
+    const strictTheme = { ...theme, fg: (color: string, text: string) => {
+      if (color === "info") throw new Error("info is not a Pi ThemeColor");
+      return text;
+    } };
+    const panel = new ChannelPanel(strictTheme, { ...buildDeps().deps, listChannels: () => [] }, vi.fn());
+    panel.handleInput("a");
+    panel.handleInput("\u001b[B");
+    panel.handleInput("\u001b[C"); panel.handleInput("\u001b[C");
+    expect(panel.snapshot().form?.protocol).toBe("mcp");
+    expect(() => panel.render(100)).not.toThrow();
+  });
+
+  it("keeps MCP scope explicitly selected when the user tries all sessions", () => {
+    const panel = new ChannelPanel(theme, {
+      ...buildDeps().deps, listChannels: () => [], listPiChannels: () => [],
+    }, vi.fn());
+    panel.handleInput("a");
+    for (let index = 0; index < 4; index += 1) panel.handleInput("\u001b[B");
+    panel.handleInput("\r");
+    for (let index = 0; index < 3; index += 1) panel.handleInput("\u001b[B");
+    panel.handleInput("\u001b[C");
+    expect(panel.snapshot().form?.scope).toBe("selected");
+    expect(panel.snapshot().status).toContain("MCP 不支持全部会话");
+  });
+
+  it("shows a masked MCP endpoint and preserves transport limits while editing the local direction", async () => {
+    const channel = createChannelDefinition({
+      name: "dot-mcp", protocol: "mcp", direction: "both", scope: "selected", sessionId: "session-a",
+      mcp: { token: "private-mcp-token", host: "127.0.0.1", port: 4321, maxBodyBytes: 8192, rateLimitPerMinute: 12, idempotencyTtlMs: 12345 },
+    });
+    channel.scope.sessionIds.push("session-b");
+    channel.sessionDirections = { "session-a": "both", "session-b": "outbound" };
+    const saveChannel = vi.fn(async () => undefined);
+    const panel = new ChannelPanel(theme, {
+      ...buildDeps().deps, listChannels: () => [{ channel }], saveChannel,
+    }, vi.fn());
+    panel.handleInput("\r");
+    const details = panel.render(160).join("\n");
+    expect(details).toContain("http://127.0.0.1:4321/mcp");
+    expect(details).toContain("token ***");
+    expect(details).not.toContain("private-mcp-token");
+    expect(details).not.toContain("Credentials:");
+    panel.handleInput("e");
+    expect(panel.snapshot().form).toMatchObject({ host: "127.0.0.1", port: "4321", token: "private-mcp-token" });
+    panel.handleInput("\u001b[B"); panel.handleInput("\u001b[B"); panel.handleInput("\u001b[C");
+    for (let index = 0; index < 8; index += 1) panel.handleInput("\u001b[B");
+    panel.handleInput("\r");
+    await panel.lastOp;
+    expect(saveChannel).toHaveBeenCalledWith(expect.objectContaining({
+      mcp: channel.mcp, direction: "both", scope: channel.scope,
+      sessionDirections: { "session-a": "inbound", "session-b": "outbound" },
+    }));
+  });
+});
+
+describe("dots Channel TUI configuration", () => {
+  function addDots(saveChannel = vi.fn(async (_channel: unknown) => undefined)): ChannelPanel {
+    const panel = new ChannelPanel(theme, {
+      ...buildDeps().deps, listChannels: () => [], listPiChannels: () => [], saveChannel,
+    }, vi.fn());
+    panel.handleInput("a");
+    expect(panel.render(120).join("\n")).toContain("dots Channel");
+    for (let index = 0; index < 5; index++) panel.handleInput("\u001b[B");
+    panel.handleInput("\r");
+    return panel;
+  }
+
+  it("appends a dots picker entry with session-only defaults and generates a masked Bearer listener", async () => {
+    const saveChannel = vi.fn(async (_channel: unknown) => undefined);
+    const panel = addDots(saveChannel);
+    expect(panel.snapshot().form).toMatchObject({
+      name: "我的 dots", protocol: "dots", direction: "both", scope: "selected", delivery: "followUp", wake: true,
+      host: "127.0.0.1", port: "0", mcpAuth: "bearer",
+    });
+    const formText = panel.render(160).join("\n");
+    expect(formText).toContain("MCP token");
+    expect(formText).not.toContain("Callback");
+    for (let index = 0; index < 10; index++) panel.handleInput("\u001b[B");
+    panel.handleInput("\r");
+    await panel.lastOp;
+    expect(saveChannel).toHaveBeenCalledWith(expect.objectContaining({
+      protocol: "dots", name: "我的 dots", delivery: "followUp", wake: true,
+      scope: { kind: "selected", sessionIds: ["session-a"] },
+      dots: expect.objectContaining({ auth: "bearer", token: expect.stringMatching(/^[0-9a-f]{64}$/) }),
+    }));
+    expect(saveChannel.mock.calls[0]![0]).not.toHaveProperty("mcp");
+    expect(panel.requestedPiAction).toBeUndefined();
+  });
+
+  it("keeps dots explicitly selected and permits auth none only with an Events warning", async () => {
+    const saveChannel = vi.fn(async (_channel: unknown) => undefined);
+    const panel = addDots(saveChannel);
+    for (let index = 0; index < 3; index++) panel.handleInput("\u001b[B");
+    panel.handleInput("\u001b[C");
+    expect(panel.snapshot().form?.scope).toBe("selected");
+    expect(panel.snapshot().status).toContain("dots 不支持全部会话");
+    for (let index = 0; index < 5; index++) panel.handleInput("\u001b[B");
+    panel.handleInput("\u001b[C");
+    expect(panel.snapshot().form?.mcpAuth).toBe("none");
+    expect(panel.snapshot().status).toMatch(/事件订阅.*(开放|可达)/);
+    panel.handleInput("\u001b[B"); panel.handleInput("\r");
+    await panel.lastOp;
+    expect(saveChannel).toHaveBeenCalledWith(expect.objectContaining({ dots: expect.objectContaining({ auth: "none", token: "" }) }));
+    expect(panel.snapshot().status).toMatch(/事件订阅.*(开放|可达)/);
+  });
+
+  it("preserves dots retry limits and other sessions when editing, and explains remote/read boundaries", async () => {
+    const channel = createChannelDefinition({
+      name: "dot-events", protocol: "dots", direction: "both", scope: "selected", sessionId: "session-a",
+      dots: { token: "private-dots-token", host: "127.0.0.1", port: 4321, maxBodyBytes: 8192,
+        rateLimitPerMinute: 12, idempotencyTtlMs: 12345, subscriptionTtlMs: 60000, retryIntervalMs: 2000, maxAttempts: 4 },
+    });
+    channel.scope.sessionIds.push("session-b");
+    channel.sessionDirections = { "session-a": "both", "session-b": "outbound" };
+    const saveChannel = vi.fn(async () => undefined);
+    const panel = new ChannelPanel(theme, {
+      ...buildDeps().deps, listChannels: () => [{ channel }], saveChannel,
+    }, vi.fn());
+    panel.handleInput("\r");
+    const details = panel.render(220).join("\n");
+    expect(details).toContain("http://127.0.0.1:4321/mcp");
+    expect(details).toContain("MCP 2.0 Events");
+    expect(details).toContain("default Bearer");
+    expect(details).toContain("separately configured HTTPS");
+    expect(details).toContain("do not prove the client read");
+    expect(details).not.toContain("private-dots-token");
+    expect(details).not.toContain("Credentials:");
+    panel.handleInput("e");
+    expect(panel.snapshot().form).toMatchObject({ host: "127.0.0.1", port: "4321", token: "private-dots-token" });
+    panel.handleInput("\u001b[B"); panel.handleInput("\u001b[B"); panel.handleInput("\u001b[C");
+    for (let index = 0; index < 8; index++) panel.handleInput("\u001b[B");
+    panel.handleInput("\r");
+    await panel.lastOp;
+    expect(saveChannel).toHaveBeenCalledWith(expect.objectContaining({
+      dots: channel.dots, direction: "both", scope: channel.scope,
+      sessionDirections: { "session-a": "inbound", "session-b": "outbound" },
+    }));
+  });
+
+  it("can cycle a plain add form to dots without introducing unsupported colors or all scope", () => {
+    const panel = new ChannelPanel(theme, { ...buildDeps().deps, listChannels: () => [] }, vi.fn());
+    panel.handleInput("a"); panel.handleInput("\u001b[B"); panel.handleInput("\u001b[D");
+    expect(panel.snapshot().form).toMatchObject({ protocol: "dots", name: "我的 dots", scope: "selected", delivery: "followUp" });
+    expect(() => panel.render(100)).not.toThrow();
+  });
+
+  it.each([1, 2, 12, 24, 48, 80])("keeps dots picker and form within %s terminal columns", (width) => {
+    const panel = addDots();
+    for (const line of panel.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    panel.handleInput("\u001b"); panel.handleInput("a");
+    for (const line of panel.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+  });
+});
+
 function piRow(): PiPanelRow {
   return { id: "pi1", name: "项目协作", protocol: "pi", mode: "group", status: "connected", ownerMemberId: "owner", selfMemberId: "self", revision: 1,
     members: [{ memberId: "owner", instanceId: "i", sessionId: "s", cwd: "/repo", identity: { displayName: "界面负责人", introduction: "私有介绍" } }],

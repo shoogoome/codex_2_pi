@@ -224,7 +224,7 @@ export default function ultraExtension(pi: ExtensionAPI): void {
     if (!model || !isUltraCapableModel(model)) {
       if (options.notify !== false) {
         ctx.ui.notify(
-          `Ultra is available for openai-codex/gpt-5.6-sol and openai-codex/gpt-5.6-terra; current model is ${model ? `${model.provider}/${model.id}` : "unknown"}.`,
+          `Ultra requires an active model with native max effort; current model is ${model ? `${model.provider}/${model.id}` : "unknown"}.`,
           "warning",
         );
       }
@@ -300,7 +300,7 @@ export default function ultraExtension(pi: ExtensionAPI): void {
   }
 
   // Codex MultiAgentV2 always carries an explicit mode. Ultra selects proactive;
-  // every other Sol/Terra effort keeps delegation explicit-request-only. The
+  // every non-Ultra effort keeps delegation explicit-request-only. The
   // Ultra-owned workflow block is present only while its task tool is usable.
   pi.on("before_agent_start", async (event, ctx) => {
     const capable = isUltraCapableModel(ctx.model);
