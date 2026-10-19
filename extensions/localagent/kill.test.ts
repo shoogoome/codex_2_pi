@@ -10,13 +10,14 @@ import { registerTask } from "../tasks/framework.js";
 import { createTaskStateBase } from "../tasks/Task.js";
 import type { LocalAgentTaskState } from "./types.js";
 
-const fakePi: any = { events: {}, sendMessage: vi.fn() };
+const fakePi: any = { events: {}, sendMessage: vi.fn(), appendEntry: vi.fn() };
 
 beforeEach(() => {
   _setDefaultTaskStoreForTest(createTaskStore());
   _resetTaskOutputDirForTest();
   _resetProgressForTest();
   fakePi.sendMessage.mockReset();
+  fakePi.appendEntry.mockReset();
 });
 
 afterEach(() => {
@@ -85,19 +86,22 @@ describe("killLocalAgentTask", () => {
     fakePi.sendMessage.mockImplementation(() => {
       order.push("notify");
     });
+    fakePi.appendEntry.mockImplementation(() => {
+      order.push("progress");
+    });
 
     await killLocalAgentTask(fakePi, store, "a2");
     expect(store.getTask("a2")?.status).toBe("killed");
     expect((store.getTask("a2") as LocalAgentTaskState).session).toBeUndefined();
     expect((store.getTask("a2") as LocalAgentTaskState).cleanup).toBeUndefined();
-    // notify 是 tasks/notification 的 sendMessage,后面紧跟一次 tasks/progress kind=kill
-    // 的 sendMessage。两次在 notifyTaskTerminal 之后顺序触发。`tasks/summary` 已被
-    // 移除(task_agent 的 renderResult 接管了终态展示)。
-    expect(order).toEqual(["abort", "cleanup", "dispose", "notify", "notify"]);
+    // 终态通知走 sendMessage，进度记录走 appendEntry；两者都在清理后发生。
+    expect(order).toEqual(["abort", "cleanup", "dispose", "notify", "progress"]);
     const customTypes = fakePi.sendMessage.mock.calls.map(
       (c: unknown[]) => (c[0] as { customType?: string }).customType,
     );
-    expect(customTypes).toEqual(["tasks/notification", "tasks/progress"]);
+    expect(customTypes).toEqual(["tasks/notification"]);
+    expect(fakePi.appendEntry.mock.calls.map(([customType]: [string]) => customType))
+      .toEqual(["tasks/progress"]);
   });
 
   it.each(["tasks/notification", "tasks/progress"])("%s 投递失败仍清理且重复 kill 不重复 dispose", async (failingType) => {
@@ -111,6 +115,9 @@ describe("killLocalAgentTask", () => {
     fakePi.sendMessage.mockImplementation((message: { customType: string }) => {
       if (message.customType === failingType) throw failure;
     });
+    fakePi.appendEntry.mockImplementation((customType: string) => {
+      if (customType === failingType) throw failure;
+    });
 
     await expect(killLocalAgentTask(fakePi, store, state.id)).resolves.toBeUndefined();
     expect(store.getTask(state.id)).toMatchObject({ status: "killed", session: undefined, cleanup: undefined });
@@ -119,14 +126,17 @@ describe("killLocalAgentTask", () => {
     expect(log).toHaveBeenCalledWith(failure,
       failingType === "tasks/notification" ? "killLocalAgent notify" : "emitTaskProgress");
     expect(fakePi.sendMessage.mock.calls.map(([message]: [{ customType: string }]) => message.customType))
-      .toEqual(["tasks/notification", "tasks/progress"]);
+      .toEqual(["tasks/notification"]);
+    expect(fakePi.appendEntry.mock.calls.map(([customType]: [string]) => customType))
+      .toEqual(["tasks/progress"]);
 
     await killLocalAgentTask(fakePi, store, state.id);
     expect(abort).toHaveBeenCalledTimes(1);
     expect(cleanup).toHaveBeenCalledTimes(1);
     expect(dispose).toHaveBeenCalledTimes(1);
     expect(evict).toHaveBeenCalledTimes(1);
-    expect(fakePi.sendMessage).toHaveBeenCalledTimes(2);
+    expect(fakePi.sendMessage).toHaveBeenCalledTimes(1);
+    expect(fakePi.appendEntry).toHaveBeenCalledTimes(1);
   });
 
   it("进度发布函数抛错仍清理进度和输出", async () => {

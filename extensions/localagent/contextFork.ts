@@ -1,6 +1,6 @@
 // A worker inherits the active context, not the parent's append-only archive.
 // Never call forkFrom/open on the parent: both reparse all historical entries.
-import { open, unlink } from "node:fs/promises";
+// Workers are one-shot sessions, so use the same in-memory mode as --no-session.
 import type { SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 
 const TELEMETRY_TYPES = new Set([
@@ -63,30 +63,22 @@ export function selectForkEntries(branch: readonly SessionEntry[]): SessionEntry
   }));
 }
 
-type ForkSdk = { SessionManager: Pick<typeof SessionManager, "create" | "open"> };
+type ForkSdk = { SessionManager: Pick<typeof SessionManager, "inMemory"> };
 
-/** Persist a small independent child with provenance; stream one entry at a time. */
-export async function createContextFork(
+type InMemorySessionManager = {
+  // SessionManager intentionally keeps this low-level operation private. It is
+  // used here only to retain the original IDs required by compaction/context_edit.
+  _appendEntry(entry: SessionEntry): void;
+};
+
+/** Create a small independent, non-persistent child with provenance. */
+export function createContextFork(
   sdk: ForkSdk,
   parentSessionFile: string,
   cwd: string,
   branch: readonly SessionEntry[],
-  sessionDir?: string,
-): Promise<SessionManager> {
-  const entries = selectForkEntries(branch);
-  const fresh = sdk.SessionManager.create(cwd, sessionDir, { parentSession: parentSessionFile });
-  const path = fresh.getSessionFile();
-  const header = fresh.getHeader();
-  if (!path || !header) throw new Error("Cannot create persistent fork session");
-  const file = await open(path, "wx");
-  try {
-    await file.writeFile(`${JSON.stringify({ ...header, parentSession: parentSessionFile })}\n`);
-    for (const entry of entries) await file.writeFile(`${JSON.stringify(entry)}\n`);
-    await file.close();
-    return sdk.SessionManager.open(path);
-  } catch (error) {
-    await file.close().catch(() => {});
-    await unlink(path).catch(() => {});
-    throw error;
-  }
+): SessionManager {
+  const child = sdk.SessionManager.inMemory(cwd, { parentSession: parentSessionFile }) as unknown as InMemorySessionManager;
+  for (const entry of selectForkEntries(branch)) child._appendEntry(entry);
+  return child as unknown as SessionManager;
 }

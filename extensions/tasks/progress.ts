@@ -1,4 +1,4 @@
-// Task progress messages — pushed to TUI/RPC via sendMessage(deliverAs:"nextTurn", triggerTurn:false).
+// Task progress records — persisted via appendEntry and rendered by the task panel.
 //
 // Spike-verified at extensions/spike-progress-context/ that this primitive does NOT enter
 // the parent LLM's next provider request payload — the message lands in the session jsonl
@@ -7,11 +7,10 @@
 // Use this for in-flight progress (sub-agent tool calls, sub-shell milestones). For terminal
 // status, use `notifyTaskTerminal` in `notifications.ts` (it has CAS guard + LLM context routing).
 //
-// Rendering layer: this customType is the *data plane* — events still hit the session jsonl
-// (used by hydrate / debug tooling) and `installProgressContextFilter` strips them from the
-// LLM payload. It does NOT paint to the main chat stream anymore — running status surfaces
-// in the task panel widget (live tokenCount + lastTool) and terminal state surfaces via the
-// `tasks/summary` customType (one compact line + Ctrl+O to expand).
+// Rendering layer: progress is persisted as a `custom` entry via appendEntry, which Pi's
+// session-context builder ignores for both normal requests and compaction. It does NOT paint
+// to the main chat stream anymore — running status surfaces in the task panel widget
+// (live tokenCount + lastTool) and terminal state surfaces via the `tasks/summary` customType.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { installCustomTypeContextFilter } from "./contextFilter.js";
@@ -46,50 +45,23 @@ export interface TaskProgressDetails {
 }
 
 /**
- * Emit a progress message to TUI/RPC.
+ * Persist a progress record without creating a `custom_message`.
  *
- * Mechanism (validated by spike `extensions/spike-progress-channels/`):
- *   - `display:true, triggerTurn:false` (no `deliverAs`) → message renders to TUI/RPC
- *     immediately AND is appended to the session jsonl as `{role:"custom", customType, ...}`.
- *   - That `role:"custom"` entry IS visible to the next provider request — it would enter
- *     the parent LLM's context.
- *   - `installProgressContextFilter(pi)` MUST be called once at extension load to register
- *     a `pi.on("context")` handler that strips these entries before LLM sees them.
- *
- * Why not `deliverAs:"nextTurn"`? Empirically the message gets queued silently — no TUI
- * render, no jsonl entry, no provider request entry — until the user types something and
- * then it's discarded. Useless for our purpose.
- *
- * Defensive try/catch — sendMessage failure must NOT propagate up to the producer (the
- * spawn function is mid-LLM-loop and we don't want a renderer crash to kill the agent).
+ * Pi's compaction code reads the raw session branch and does not run `context`
+ * handlers. Therefore progress must use `appendEntry` (a `custom` entry), not
+ * `sendMessage` (a `custom_message` that would be counted during compaction).
+ * Live progress is rendered by the task panel from the task store.
  */
 export function emitTaskProgress(
-  pi: Pick<ExtensionAPI, "sendMessage">,
+  pi: Pick<ExtensionAPI, "appendEntry">,
   d: Omit<TaskProgressDetails, "ts"> & { ts?: number },
 ): void {
   const details: TaskProgressDetails = { ts: Date.now(), ...d };
   try {
-    pi.sendMessage(
-      {
-        customType: TASK_PROGRESS_CUSTOM_TYPE,
-        content: details.summary,
-        // display:false — the data plane only. Pi's interactive mode skips
-        // chatContainer.addChild for custom messages whose `display` is false,
-        // so this never paints to the main stream — even though the entry
-        // still hits the session jsonl (used by hydrate / debug). Live
-        // progress surfaces via the task panel widget; terminal status
-        // surfaces via the `tasks/summary` customType.
-        //
-        // Returning `undefined` from the message renderer is NOT enough —
-        // Pi's CustomMessageComponent has its own fallback rendering that
-        // shows the orange "[tasks/progress]" label + content text when the
-        // renderer hands back undefined. Setting display:false is the only
-        // way to truly suppress the visual.
-        display: false,
-        details,
-      } as never,
-      { triggerTurn: false },
-    );
+    pi.appendEntry(TASK_PROGRESS_CUSTOM_TYPE, {
+      content: details.summary,
+      details,
+    });
   } catch (e) {
     logError(e, "emitTaskProgress");
   }
@@ -118,9 +90,8 @@ export function installProgressContextFilter(
 // `tasks/summary` customMessage with collapsible timeline.
 //
 // We keep the `tasks/progress` customType + `emitTaskProgress` + `installProgressContextFilter`
-// intact because the data still hits the session jsonl (debug tooling, hydration). Only the
-// visual layer is removed — `registerTaskProgressRenderer` now returns `undefined` so Pi's
-// renderer pipeline skips it.
+// intact for compatibility with old sessions. New progress records use appendEntry and are
+// ignored by Pi's session-context builder; the filter still removes legacy custom messages.
 
 /**
  * Register the (now-noop) TUI renderer for tasks/progress customType.

@@ -8,9 +8,9 @@ import {
 } from "./progress.js";
 
 describe("emitTaskProgress", () => {
-  it("calls pi.sendMessage with triggerTurn:false (no deliverAs)", () => {
-    const sendMessage = vi.fn();
-    const pi = { sendMessage } as never;
+  it("persists a custom entry instead of sending a custom message", () => {
+    const appendEntry = vi.fn();
+    const pi = { appendEntry } as never;
     emitTaskProgress(pi, {
       taskId: "ax12abcd",
       taskType: "local_agent",
@@ -18,24 +18,21 @@ describe("emitTaskProgress", () => {
       summary: "grep(\"foo\")",
       toolName: "grep",
     });
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    const [msg, opts] = sendMessage.mock.calls[0]!;
-    expect(msg.customType).toBe(TASK_PROGRESS_CUSTOM_TYPE);
-    expect(msg.display).toBe(false);
-    expect(msg.content).toBe("grep(\"foo\")");
-    expect(msg.details.taskId).toBe("ax12abcd");
-    expect(msg.details.kind).toBe("tool_start");
-    expect(msg.details.toolName).toBe("grep");
-    expect(typeof msg.details.ts).toBe("number");
-    expect(opts).toEqual({ triggerTurn: false });
-    expect(opts).not.toHaveProperty("deliverAs");
+    expect(appendEntry).toHaveBeenCalledTimes(1);
+    const [customType, data] = appendEntry.mock.calls[0]!;
+    expect(customType).toBe(TASK_PROGRESS_CUSTOM_TYPE);
+    expect(data.content).toBe("grep(\"foo\")");
+    expect(data.details.taskId).toBe("ax12abcd");
+    expect(data.details.kind).toBe("tool_start");
+    expect(data.details.toolName).toBe("grep");
+    expect(typeof data.details.ts).toBe("number");
   });
 
-  it("ignores throwing sendMessage (defensive try/catch)", () => {
-    const sendMessage = vi.fn(() => {
+  it("ignores throwing appendEntry (defensive try/catch)", () => {
+    const appendEntry = vi.fn(() => {
       throw new Error("boom");
     });
-    const pi = { sendMessage } as never;
+    const pi = { appendEntry } as never;
     expect(() =>
       emitTaskProgress(pi, {
         taskId: "ax12",
@@ -47,8 +44,8 @@ describe("emitTaskProgress", () => {
   });
 
   it("preserves caller-provided ts when passed", () => {
-    const sendMessage = vi.fn();
-    const pi = { sendMessage } as never;
+    const appendEntry = vi.fn();
+    const pi = { appendEntry } as never;
     emitTaskProgress(pi, {
       taskId: "ax12",
       taskType: "local_bash",
@@ -56,8 +53,8 @@ describe("emitTaskProgress", () => {
       summary: "echo hi",
       ts: 42,
     });
-    const [msg] = sendMessage.mock.calls[0]!;
-    expect(msg.details.ts).toBe(42);
+    const [, data] = appendEntry.mock.calls[0]!;
+    expect(data.details.ts).toBe(42);
   });
 });
 

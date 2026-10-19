@@ -1,7 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildSessionContext, SessionManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { createContextFork, selectForkEntries } from "./contextFork.js";
 
@@ -17,11 +14,6 @@ function user(id: string, text = id) {
 function compact(id: string, firstKeptEntryId: string) {
   return { type: "compaction", id, summary: "Earlier work summarized", firstKeptEntryId, tokensBefore: 1234 };
 }
-const dirs: string[] = [];
-afterEach(async () => {
-  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
-});
-
 function expectChain(entries: SessionEntry[]) {
   expect(entries.map((e) => e.parentId)).toEqual(entries.map((_, i) => i ? entries[i - 1]!.id : null));
 }
@@ -103,10 +95,9 @@ describe("compaction-aware worker fork", () => {
     expect(() => selectForkEntries(path([compact("c", "later"), user("later")]))).toThrow(/firstKeptEntryId/);
   });
 
-  it("persists only the active context without reading the parent file or copying abandoned branches", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "pi-context-fork-"));
-    dirs.push(dir);
-    const parent = SessionManager.create(dir, dir);
+  it("inherits only the active context in memory without creating a session file", () => {
+    const cwd = "/tmp/pi-context-fork";
+    const parent = SessionManager.inMemory(cwd);
     parent.appendMessage({ role: "user", content: "old".repeat(500_000), timestamp: 1 });
     const retainedId = parent.appendMessage({ role: "user", content: "retained", timestamp: 2 });
     parent.appendCompaction("old summarized", retainedId, 100_000);
@@ -114,18 +105,17 @@ describe("compaction-aware worker fork", () => {
     parent.appendMessage({ role: "user", content: "abandoned".repeat(500_000), timestamp: 4 });
     parent.branch(activeId);
     const branch = parent.getBranch();
-    // A nonexistent source proves we never reopen/reparse it. Parent linkage
-    // is provenance only; the authoritative input is the live active branch.
-    const source = join(dir, "nonexistent-parent.jsonl");
-    const child = await createContextFork({ SessionManager }, source, dir, branch, dir);
+    // Parent linkage is provenance only; the authoritative input is the live
+    // active branch. The child must use the same no-session mode as --no-session.
+    const source = "/tmp/nonexistent-parent.jsonl";
+    const child = createContextFork({ SessionManager }, source, cwd, branch);
     expect(child.getSessionId()).not.toBe(parent.getSessionId());
     expect(child.getHeader()?.parentSession).toBe(source);
+    expect(child.isPersisted()).toBe(false);
+    expect(child.getSessionFile()).toBeUndefined();
     expect(child.buildSessionContext().messages).toEqual(parent.buildSessionContext().messages);
-    const persisted = await readFile(child.getSessionFile()!, "utf8");
-    expect(persisted.length).toBeLessThan(3000);
-    expect(persisted).not.toContain("abandoned");
+    expect(JSON.stringify(child.getEntries())).not.toContain("abandoned");
     expect(parent.getEntries()).toHaveLength(5);
     expectChain(child.getBranch());
-    expect(SessionManager.open(child.getSessionFile()!).buildSessionContext()).toEqual(child.buildSessionContext());
   });
 });

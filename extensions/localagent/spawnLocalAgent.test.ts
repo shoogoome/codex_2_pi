@@ -54,6 +54,7 @@ const inheritedModel = {
 const fakePi: any = {
   events: {},
   sendMessage: vi.fn(),
+  appendEntry: vi.fn(),
   registerMessageRenderer: vi.fn(),
 };
 
@@ -86,6 +87,7 @@ beforeEach(() => {
   _resetProgressForTest();
   attachAgentCapacity(fakePi, createAgentCapacity());
   fakePi.sendMessage.mockReset();
+  fakePi.appendEntry.mockReset();
   _setSdkForTest({
     createAgentSessionServices: vi.fn().mockResolvedValue({}),
     createContextFork: vi.fn(() => forkSessionManager()),
@@ -210,9 +212,9 @@ describe("spawnLocalAgent — progress and terminal delivery", () => {
     fake.emit({ type: "agent_end", messages: [] });
     await vi.waitFor(() => expect(fake.dispose).toHaveBeenCalled());
 
-    const kinds = fakePi.sendMessage.mock.calls
-      .filter(([message]: unknown[]) => (message as { customType?: string }).customType === "tasks/progress")
-      .map(([message]: unknown[]) => (message as { details: { kind: string } }).details.kind);
+    const kinds = fakePi.appendEntry.mock.calls
+      .filter(([customType]: unknown[]) => customType === "tasks/progress")
+      .map(([, data]: unknown[]) => (data as { details: { kind: string } }).details.kind);
     expect(kinds).toEqual(expect.arrayContaining(["task_start", "tool_start", "tool_end", "task_end"]));
   });
 
