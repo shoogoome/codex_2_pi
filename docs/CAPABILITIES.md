@@ -60,7 +60,7 @@
 
 | 扩展 | 一句话能力 | 主要命令 / 入口 | 详情 |
 |---|---|---|---|
-| `webfetch` | 客户端联网抓取（移植 Claude WebFetch）：给 URL(+可选阅读意图) → fetch → HTML 转 markdown 交模型阅读。SSRF 防护（私有段拦截 + 连接前 DNS 守卫 + 重定向逐跳校验）、10MB 流式截断、100K 字符上限、15min 缓存；v1 不做二级模型问答。 | 工具 `webfetch` · `--webfetch`（默认开） | [webfetch.md](extensions/webfetch.md) |
+| `webfetch` | 联网抓取 + 网络搜索（移植 Claude WebFetch，搜索语义对齐 Codex `web.run`）：给 URL → 本地 fetch → HTML 转 markdown；给 `query`/搜索词 → DeepSeek Search 返回带标题/URL/日期/摘要的排序结果，可用 `source: "S3"` 重开；本地正文为空（SPA 空壳/403/二进制）时自动用 DeepSeek Fetch 服务端渲染兜底。SSRF 防护（私有段拦截 + 连接前 DNS 守卫 + 重定向逐跳校验）、10MB 流式截断、100K 字符上限、页面与搜索双缓存（Search/Fetch 按次计费）、408/429/5xx 退避重试。 | 工具 `webfetch` · `/webfetch [status\|reload]` · `--webfetch`（默认开） · `DEEPSEEK_API_KEY` | [webfetch.md](extensions/webfetch.md) |
 | `channel` | 通用外部 HTTP 入站：在配置 Bearer Token 后监听 `0.0.0.0:4317`，经校验、幂等和限流将外部事件按 steer/follow-up/next-turn 语义注入并可唤醒当前 Pi 会话。 | `/channel [status\|restart]` · `POST /v1/messages` · `PI_CHANNEL_TOKEN` | [channel.md](extensions/channel.md) |
 
 ### 工具

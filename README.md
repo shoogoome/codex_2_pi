@@ -60,7 +60,7 @@
 | `extensions/cursor` | Cursor 订阅原生 provider：显式 OAuth、实时模型发现、HTTP/2 协议与 Pi 工具执行闭环；不读取 Keychain/IDE 登录态。 | `/login cursor` · `/model cursor` · `/cursor [status\|models\|refresh\|usage]` · [详情](docs/extensions/cursor.md) |
 | `extensions/local-models` | 发现本地大模型运行时（Ollama、LM Studio）并注册为 localhost OpenAI 兼容 provider。 | `/local-models [list\|pull\|ensure_ready]` · `/ollama` · `/lm` |
 | `extensions/codebuddy-reasoning` | 清理 CodeBuddy 网关不支持的旧请求字段；原样透传 Pi 系统提示和工具声明，兼容 DeepSeek 等模型的结构化工具调用。 | （无命令，自动生效） |
-| `extensions/webfetch` | 客户端联网抓取（移植 Claude WebFetch）:URL→fetch→HTML 转 markdown 交模型阅读;SSRF 防护(私有段+连接前 DNS 守卫)、10MB 流式截断、15min 缓存。 | 工具 `webfetch` · `--webfetch`（默认开） |
+| `extensions/webfetch` | 联网抓取 + 网络搜索（移植 Claude WebFetch，搜索对齐 Codex `web.run`）:URL→fetch→HTML 转 markdown;或 `query`→DeepSeek Search 返回排序结果并可 `source: "S3"` 重开;本地正文为空/SPA 空壳时用 DeepSeek Fetch 服务端渲染兜底。SSRF 防护(私有段+连接前 DNS 守卫)、10MB 流式截断、搜索/页面双缓存(按次计费)。 | 工具 `webfetch` · `/webfetch [status\|reload]` · `--webfetch`（默认开） · `DEEPSEEK_API_KEY` |
 | `extensions/mcp` | 内置 MCP 客户端:读 `.pi/mcp.json` 连 server，暴露 `mcp__<server>__<tool>`，审批由 approvals 兜底。 | `/mcp [list\|status\|add\|remove\|reconnect]` |
 | `extensions/plugin-loader` | Claude 风格插件管理器：Marketplace、安装/更新/卸载、user/project/local scope，并接入 skills/commands/themes/styles/hooks/agents/MCP。 | `/plugin` · `/plugin marketplace …` · `/plugin install\|remove\|update …` |
 | `extensions/hooks-runner` | 配置驱动 hook 框架:把 Pi 生命周期事件桥接到 Claude Code JSON hook 协议，可拦截/改写/注入。 | `/hooks` · `.pi/hooks.json` |

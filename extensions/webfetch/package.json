@@ -1,7 +1,7 @@
 {
   "name": "pi-webfetch-extension",
-  "version": "0.1.0",
-  "description": "Fetch public web pages to markdown for reading — a port of Claude Code's WebFetch with local SSRF hardening, redirect policy, caching, and size caps.",
+  "version": "0.2.0",
+  "description": "Fetch public web pages to markdown and search the web — a Claude Code WebFetch port extended with DeepSeek Search/Fetch, Codex-style refs, local SSRF hardening, redirect policy, caching, retries and size caps.",
   "type": "module",
   "main": "./index.ts",
   "pi": {

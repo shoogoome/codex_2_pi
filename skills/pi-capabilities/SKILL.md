@@ -67,7 +67,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **request_user_input / ask_user_question / askUserQuestion**（user-input）：向用户提 1-3 个带选项的问题。
 - **exit_plan_mode**（plan-mode）：模型提交计划并请求退出只读规划。
 - **mcp__<server>__<tool>**（mcp）：远端 MCP 工具注册成的 Pi 原生工具。
-- **webfetch**（webfetch）：联网抓取公开 URL → HTML 转 markdown 交模型阅读；SSRF 防护 + 10MB/100K 上限 + 15min 缓存。`--webfetch` 默认开。
+- **webfetch**（webfetch）：联网抓取 + 网络搜索：给 URL → HTML 转 markdown；给 `query`（或搜索词/搜索引擎 URL）→ DeepSeek Search 返回排序结果，可用 `source: "S3"` 重开；本地正文为空时用 DeepSeek Fetch 服务端渲染兜底。SSRF 防护 + 10MB/100K 上限 + 页面/搜索双缓存。`--webfetch` 默认开；搜索需 `DEEPSEEK_API_KEY`。
 - **channel_manage**（channel）：创建/配对加入本机 Pi 双人或群频道，查询成员、维护本人职责、退出、创建者销毁及配对码管理；支持无 TUI 的模型操作。
 - **channel_send**（channel）：按精确本地路由名向 HTTP/微信/Pi 发送文本；微信还支持 `image_path` 本地图片（JPEG/PNG/GIF/WebP，最多 10 MiB），`content` 可省略或作为最多 1200 字符说明。图片必须显式发送，自动回复仅文本。Pi 返回逐成员已入队/失败/未知结果，不代表已处理，`message_id` 仅用于 Pi 文本同 ID 查询。
 
@@ -97,7 +97,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **调出以前输入过的 prompt**：`Alt+R` 反向搜索（input-history）。
 - **快速感知当前会话在做什么**：看输入框上方的 session-summary；用 `/session-summary model global <provider/model>` 给所有会话统一选择便宜的小模型。
 - **切换 TUI 观感**：`--claude-ui`（默认，Claude 风格）↔ `--claude-ui=false`（compact-ui）。
-- **抓取网页 / 查在线文档 / 读 URL 内容**：`webfetch`（公开 URL → HTML 转 markdown 交模型读；SSRF 防护;认证 / 私有页请改用 MCP 或 `gh`）。
+- **抓取网页 / 搜最新信息 / 查在线文档**：`webfetch`（`url` 读页面、`query` 走 DeepSeek Search、`source: "S3"` 重开结果；SSRF 防护；认证 / 私有页请改用 MCP 或 `gh`）。搜东西时优先它而不是猜 URL。
 - **在 settings.json 配环境变量**：用 settings-env 的顶层 `env`；项目配置覆盖全局配置，但默认不覆盖启动 Pi 时已有的变量。
 
 ## 详情文档

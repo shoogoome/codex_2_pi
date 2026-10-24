@@ -25,6 +25,7 @@
 import type { WebFetchConfig } from "./config.js";
 import { htmlToMarkdown, looksLikeHtml } from "./html.js";
 import type { TtlCache } from "./cache.js";
+import { mergeSignal } from "./request.js";
 import { checkUrl, isPermittedRedirect, isIpLiteral, isPrivateAddress } from "./validate.js";
 
 /** Cap same-host redirect hops (matches common client defaults). */
@@ -48,6 +49,10 @@ export interface WebFetchResult {
   redirected: boolean;
   /** True if the body was cut off by the byte or char cap. */
   truncated: boolean;
+  /** Which pipeline produced this result (local fetch vs DeepSeek Fetch). */
+  via?: "local" | "deepseek";
+  /** Page title when the source reports one (DeepSeek Fetch does). */
+  title?: string;
 }
 
 /** Minimal shape we need from a fetch Response (real Response satisfies this). */
@@ -59,10 +64,16 @@ export interface FetchResponseLike {
 }
 
 /** Injectable fetch (defaults to global fetch); lets tests supply a fake. */
-export type FetchImpl = (
-  url: string,
-  init: { redirect: "manual"; signal: AbortSignal; headers: Record<string, string> },
-) => Promise<FetchResponseLike>;
+export type FetchInit = {
+  redirect: "manual";
+  signal: AbortSignal;
+  headers: Record<string, string>;
+  /** Present for JSON POSTs (DeepSeek API); omitted for plain page GETs. */
+  method?: string;
+  body?: string;
+};
+
+export type FetchImpl = (url: string, init: FetchInit) => Promise<FetchResponseLike>;
 
 /**
  * Resolve a DNS hostname to its concrete IP addresses. Injectable so tests can
@@ -128,24 +139,6 @@ export function isBinaryContentType(contentType: string): boolean {
   if (t.endsWith("+json") || t.endsWith("+xml")) return false;
   if (t.startsWith("image/") || t.startsWith("audio/") || t.startsWith("video/") || t.startsWith("font/")) return true;
   return BINARY_APPLICATION_TYPES.has(t);
-}
-
-/** Merge an external abort signal with a fresh timeout into one signal. */
-function mergeSignal(external: AbortSignal | undefined, timeoutMs: number): { signal: AbortSignal; cleanup: () => void } {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error("webfetch: request timed out")), timeoutMs);
-  const onAbort = () => controller.abort(external?.reason);
-  if (external) {
-    if (external.aborted) controller.abort(external.reason);
-    else external.addEventListener("abort", onAbort, { once: true });
-  }
-  return {
-    signal: controller.signal,
-    cleanup() {
-      clearTimeout(timer);
-      external?.removeEventListener("abort", onAbort);
-    },
-  };
 }
 
 /** Concatenate collected chunks into a single Uint8Array of exactly `total` bytes. */
@@ -254,7 +247,7 @@ export async function fetchAndExtract(inputUrl: string, opts: FetchOptions): Pro
   const cached = cache?.get(inputUrl, now(), config.cacheMs);
   if (cached) return cached;
 
-  const { signal, cleanup } = mergeSignal(opts.signal, config.timeoutMs);
+  const { signal, cleanup } = mergeSignal(opts.signal, config.timeoutMs, "webfetch");
   try {
     let current = check.url; // https-upgraded
     let hops = 0;
@@ -295,6 +288,7 @@ export async function fetchAndExtract(inputUrl: string, opts: FetchOptions): Pro
           contentType: "",
           redirected: true,
           truncated: false,
+          via: "local",
         };
       }
 
@@ -325,6 +319,7 @@ export async function fetchAndExtract(inputUrl: string, opts: FetchOptions): Pro
         contentType,
         redirected: hops > 0,
         truncated: sizeTruncated || charTruncated,
+        via: "local",
       };
       cache?.set(inputUrl, out, now());
       return out;
