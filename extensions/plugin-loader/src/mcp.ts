@@ -79,10 +79,21 @@ export function buildMcpRegistrations(
   servers: Record<string, unknown>,
   pluginRoot: string,
   pluginData = "",
+  environment: Record<string, string | undefined> = {},
 ): McpRegistration[] {
   const vars = { CLAUDE_PLUGIN_ROOT: pluginRoot, CLAUDE_PLUGIN_DATA: pluginData };
   return Object.entries(servers).map(([serverName, config]) => {
     const substituted = substituteDeep(config, vars);
+    // Native Pi expands env/headers, but validates URLs before interpolation.
+    // Expand only URL placeholders here; missing values stay invalid and are
+    // isolated by reconciliation. Never execute shell commands from URLs.
+    if (substituted && typeof substituted === "object" && !Array.isArray(substituted)) {
+      const record = substituted as Record<string, unknown>;
+      if (typeof record.url === "string") {
+        record.url = record.url.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g,
+          (placeholder, name: string) => environment[name] ?? placeholder);
+      }
+    }
     // Pi 1.0's native MCP API defaults to codemode, where tools are found with
     // searchTools() from codemode. Make that contract explicit while preserving
     // an author's direct/deferred/hidden exposure override.
@@ -115,8 +126,21 @@ export function reconcileMcpRegistrations(
   const registeredNames = new Set<string>();
   const errors: McpRegistrationError[] = [];
 
+  function unregister(name: string): void {
+    try {
+      registrar.unregisterMcpServer(name);
+    } catch (error) {
+      // Retain ownership so a later refresh can retry cleanup.
+      registeredNames.add(name);
+      errors.push({
+        name,
+        error: `failed to unregister: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+
   for (const name of previousNames) {
-    if (!desiredNames.has(name)) registrar.unregisterMcpServer(name);
+    if (!desiredNames.has(name)) unregister(name);
   }
 
   for (const registration of registrations) {
@@ -124,7 +148,7 @@ export function reconcileMcpRegistrations(
       registrar.registerMcpServer(registration.name, registration.config);
       registeredNames.add(registration.name);
     } catch (error) {
-      if (previousNames.has(registration.name)) registrar.unregisterMcpServer(registration.name);
+      if (previousNames.has(registration.name)) unregister(registration.name);
       errors.push({
         name: registration.name,
         error: error instanceof Error ? error.message : String(error),

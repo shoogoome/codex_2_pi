@@ -92,6 +92,22 @@ describe("buildMcpRegistrations", () => {
     expect(registration?.config).toEqual({ command: "run", exposure: "deferred" });
   });
 
+  it("expands URL environment variables without mutating input or expanding headers", () => {
+    const servers = { remote: { url: "${MCP_URL}/mcp", headers: { Authorization: "${TOKEN}" } } };
+    const [registration] = buildMcpRegistrations("p", servers, "/r", "", {
+      MCP_URL: "https://example.com", TOKEN: "secret",
+    });
+    expect(registration?.config).toEqual({
+      url: "https://example.com/mcp", headers: { Authorization: "${TOKEN}" }, exposure: "codemode",
+    });
+    expect(servers.remote.url).toBe("${MCP_URL}/mcp");
+  });
+
+  it.each([undefined, "", "not-a-url"])("leaves missing or invalid URL values for isolated validation: %s", (value) => {
+    const [registration] = buildMcpRegistrations("p", { remote: { url: "${MCP_URL}" } }, "/r", "", { MCP_URL: value });
+    expect(registration?.config).toMatchObject({ url: value ?? "${MCP_URL}" });
+  });
+
   it("returns [] for no servers", () => {
     expect(buildMcpRegistrations("p", {}, "/r")).toEqual([]);
   });
@@ -106,6 +122,31 @@ describe("sanitizeServerName", () => {
 });
 
 describe("reconcileMcpRegistrations", () => {
+  it("continues registration when both removed-server and stale-server cleanup fail", () => {
+    const calls: string[] = [];
+    const result = reconcileMcpRegistrations({
+      registerMcpServer(name) {
+        calls.push(name);
+        if (name === "broken") throw new Error("invalid URL");
+      },
+      unregisterMcpServer() { throw new Error("cleanup failed"); },
+    }, new Set(["removed", "broken"]), [
+      { name: "before", config: { command: "server" } },
+      { name: "broken", config: { url: "invalid" } },
+      { name: "after", config: { command: "server" } },
+    ]);
+    expect(calls).toEqual(["before", "broken", "after"]);
+    expect(result.registeredNames).toEqual(new Set(["removed", "before", "broken", "after"]));
+    expect(result.errors).toHaveLength(3);
+    const retried: string[] = [];
+    const retry = reconcileMcpRegistrations({
+      registerMcpServer() {},
+      unregisterMcpServer(name) { retried.push(name); },
+    }, result.registeredNames, []);
+    expect(new Set(retried)).toEqual(result.registeredNames);
+    expect(retry.registeredNames.size).toBe(0);
+  });
+
   it("unregisters removed servers and registers the desired set through Pi 1.0", () => {
     const calls: string[] = [];
     const registrar = {

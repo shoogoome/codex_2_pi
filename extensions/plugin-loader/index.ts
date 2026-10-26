@@ -312,7 +312,7 @@ export default function pluginLoaderExtension(pi: ExtensionAPI): void {
     const registrations = enabled().flatMap((plugin) => {
       const record = manager.listInstalled().find((installed) => resolve(installed.path) === resolve(plugin.root));
       const data = record ? manager.pluginEnvironment(record).CLAUDE_PLUGIN_DATA : "";
-      return buildMcpRegistrations(plugin.name, collectServers(plugin), plugin.root, data);
+      return buildMcpRegistrations(plugin.name, collectServers(plugin), plugin.root, data, process.env);
     });
     const result = reconcileMcpRegistrations(
       pi as unknown as McpRegistrar,
@@ -335,11 +335,11 @@ export default function pluginLoaderExtension(pi: ExtensionAPI): void {
     refreshContributions(ctx);
   });
 
-  pi.on("resources_discover", (event) => {
+  pi.on("resources_discover", (event, ctx) => {
     // On reload, re-run discovery so newly added plugins are picked up.
     if (event.reason === "reload") {
       rediscover(event.cwd);
-      refreshContributions(event as unknown as ExtensionContext);
+      refreshContributions(ctx);
     }
     const skillPaths: string[] = [];
     const promptPaths: string[] = [];
