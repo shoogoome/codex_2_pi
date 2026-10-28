@@ -10,17 +10,20 @@ export interface PiRuntimeSdk {
 
 let cached: Promise<PiRuntimeSdk> | undefined;
 
-function activePiSdkEntry(): string | undefined {
+export function activePiSdkEntry(): string | undefined {
   const argvEntry = process.argv[1];
   if (!argvEntry) return undefined;
   try {
     const cliPath = realpathSync(argvEntry);
-    const distDir = dirname(cliPath);
-    const packageJsonPath = resolve(distDir, "..", "package.json");
-    const sdkEntry = resolve(distDir, "index.js");
-    if (!existsSync(packageJsonPath) || !existsSync(sdkEntry)) return undefined;
-    const manifest = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { name?: string };
-    return manifest.name === "@earendil-works/pi-coding-agent" ? sdkEntry : undefined;
+    let dir = dirname(cliPath);
+    for (let i = 0; i < 4; i++, dir = dirname(dir)) {
+      const manifestPath = resolve(dir, "package.json");
+      if (!existsSync(manifestPath)) continue;
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { name?: string };
+      const sdkEntry = resolve(dir, "dist/index.js");
+      if (manifest.name === "@earendil-works/pi-coding-agent" && existsSync(sdkEntry)) return sdkEntry;
+    }
+    return undefined;
   } catch {
     return undefined;
   }

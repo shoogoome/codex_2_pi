@@ -114,7 +114,7 @@ describe("taskPanelViewStateStore", () => {
     expect(store.get()).toBe(before);
   });
 
-  it("exitTaskView returns to leader_with_selection focused=true", () => {
+  it("exitTaskView returns input ownership to the leader editor", () => {
     const store = createTaskPanelViewStateStore();
     store.selectTask("a");
     store.enterTaskView();
@@ -122,7 +122,7 @@ describe("taskPanelViewStateStore", () => {
     expect(store.get()).toEqual({
       kind: "leader_with_selection",
       selectedTaskId: "a",
-      focused: true,
+      focused: false,
     });
   });
 

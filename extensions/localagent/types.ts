@@ -58,6 +58,8 @@ export interface LocalAgentTaskState extends TaskStateBase {
   /** 运行时句柄(不进 jsonl 持久化,但内存中需要持有以供 kill)。 */
   session?: AgentSession;
   cleanup?: () => void;
+  /** Close input admission synchronously before abort/terminal disposal. */
+  closeInput?: (reason: string) => void;
   progress?: AgentProgress;
   result?: LocalAgentTaskResult;
   error?: string;

@@ -133,7 +133,10 @@ export function createTaskPanelViewStateStore(): TaskPanelViewStateStore {
         return {
           kind: "leader_with_selection",
           selectedTaskId: prev.taskId,
-          focused: true,
+          // Returning from a child must return Enter to the leader editor.
+          // Keeping the invisible picker focused would reopen the task when
+          // the user tries to submit a prompt or /reload.
+          focused: false,
         };
       });
     },

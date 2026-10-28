@@ -384,7 +384,7 @@ describe("background-agent panel widget", () => {
     expect(fakeUI.onTerminalInput).not.toHaveBeenCalled();
   });
 
-  it("entering task_output viewState opens ui.custom with nonCapturing:true", async () => {
+  it("entering task_output opens a capturing detail screen", async () => {
     const pi = createFakePi();
     tasksExtension(pi as unknown as Parameters<typeof tasksExtension>[0]);
     const fakeUI = buildFakeUI();
@@ -439,7 +439,7 @@ describe("background-agent panel widget", () => {
       overlayOptions: () => { nonCapturing: boolean };
     };
     expect(opts.overlay).toBe(true);
-    expect(opts.overlayOptions().nonCapturing).toBe(true);
+    expect(opts.overlayOptions().nonCapturing).toBe(false);
   });
 
   it("session_shutdown clears the panel widget", async () => {
@@ -466,4 +466,45 @@ describe("background-agent panel widget", () => {
     expect(last[0]).toBe("tasks-bg-agents");
     expect(last[1]).toBeUndefined();
   });
+});
+
+
+it("routes structured detail input, preserves completion after task eviction and reopens read-only", async () => {
+  const { initTheme } = await import("@earendil-works/pi-coding-agent");
+  const { loadPiUiRuntime } = await import("../shared/pi-ui-runtime.js");
+  const { getTasksHandle } = await import("./handle.js");
+  initTheme("dark", false);
+  const runtime = await loadPiUiRuntime();
+  const pi = createFakePi();
+  tasksExtension(pi as never, { loadUiRuntime: async () => runtime });
+  const ui = buildFakeUI();
+  ui.custom.mockImplementation(() => new Promise<void>(() => {}));
+  fireEvent(pi, "session_start", {}, { sessionManager: { getSessionId: () => "structured-root" }, hasUI: true, ui });
+  const conversations = getTasksHandle(pi as never).conversations;
+  getDefaultTaskStore().set(() => ({ child: { id: "child", type: "local_agent", status: "running", description: "structured", startTime: 0, outputFile: "/none", outputOffset: 0, notified: false } }));
+  const generation = conversations.begin({ id: "child", description: "structured", cwd: "/repo", startTime: 0 }, "clean prompt");
+  const submit = vi.fn(async () => ({ accepted: true }));
+  conversations.registerControl("child", generation, { submit, close: vi.fn() });
+  const handler = ui.onTerminalInput.mock.calls[0]![0];
+  handler("\x19"); handler("\x1b[B"); handler("\r");
+  const factory = ui.custom.mock.calls[0]![0];
+  const done = vi.fn();
+  const view = await factory({ terminal: { rows: 20 }, requestRender: vi.fn() }, { fg: (_color: string, s: string) => s }, { matches: () => false }, done);
+  handler("q"); handler("\r");
+  await Promise.resolve(); await Promise.resolve();
+  expect(submit).toHaveBeenCalledWith("q");
+  expect(done).not.toHaveBeenCalled();
+  conversations.finish("child", generation, "completed");
+  getDefaultTaskStore().set(() => ({}));
+  expect(view.render(80).join("\n")).toContain("只读");
+  handler("\x1b");
+  expect(done).toHaveBeenCalledOnce();
+  handler("\r");
+  expect(ui.custom).toHaveBeenCalledTimes(1); // main editor owns Enter again
+  handler("\x19"); handler("\r");
+  expect(ui.custom).toHaveBeenCalledTimes(2);
+  const second = await ui.custom.mock.calls[1]![0]({ terminal: { rows: 20 }, requestRender: vi.fn() }, { fg: (_color: string, s: string) => s }, { matches: () => false }, vi.fn());
+  expect(second.render(80).join("\n")).toContain("只读");
+  await Promise.all(fireEvent(pi, "session_shutdown", {}, {}) as Promise<unknown>[]);
+  expect(conversations.list()).toEqual([]);
 });

@@ -265,21 +265,18 @@ describe("registerTaskPanelKeybindings", () => {
     expect(h.viewState.get()).toEqual({
       kind: "leader_with_selection",
       selectedTaskId: "a1",
-      focused: true,
+      focused: false,
     });
+    expect(h.trigger("\r")).toBeUndefined();
   });
 
-  it("task_output + 'q' → exitTaskView + consume", () => {
+  it("task_output + q/Enter stays in detail and never leaks to leader", () => {
     const h = makeHarness({ tasks: [{ id: "a1", description: "x" }] });
     h.viewState.selectTask("a1");
     h.viewState.enterTaskView();
-    const result = h.trigger("q");
-    expect(result).toEqual({ consume: true });
-    expect(h.viewState.get()).toEqual({
-      kind: "leader_with_selection",
-      selectedTaskId: "a1",
-      focused: true,
-    });
+    expect(h.trigger("q")).toEqual({ consume: true });
+    expect(h.trigger("\r")).toEqual({ consume: true });
+    expect(h.viewState.get()).toEqual({ kind: "task_output", taskId: "a1" });
   });
 
   it("task_output + Ctrl+Y → still toggles focus (idempotent exit)", () => {
@@ -322,4 +319,13 @@ describe("registerTaskPanelKeybindings", () => {
     h.unsub();
     expect(h.fakeUI.handlers.size).toBe(0);
   });
+});
+
+
+it("does not open a task-missing log page from an evicted stale selection", () => {
+  const h = makeHarness();
+  h.viewState.selectTask("evicted");
+  h.viewState.toggleFocus();
+  expect(h.trigger("\r")).toEqual({ consume: true });
+  expect(h.viewState.get()).toEqual({ kind: "leader", focused: false });
 });

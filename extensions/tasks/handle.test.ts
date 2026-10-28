@@ -16,6 +16,8 @@ it("exposes the same activity hub across isolated event facades and nested sessi
   expect(activity).toBe(getTaskActivityHandle());
   expect(getTasksHandle(nested).activity).toBe(activity);
   expect(lazyTasksHandle(consumer).activity).toBe(activity);
+  expect(getTasksHandle(consumer).conversations).toBe(getTasksHandle(owner).conversations);
+  expect(lazyTasksHandle(consumer).conversations).toBe(getTasksHandle(owner).conversations);
   const listener = vi.fn();
   const unsubscribe = activity.subscribe(listener);
   const window = { originSessionId: "handle-root", taskId: "nested", operationId: "run", cwd: "/repo" };

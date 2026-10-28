@@ -459,3 +459,77 @@ describe("fork speed bridge and worker registration", () => {
     expect(isForkWorker("/tmp/forked.jsonl")).toBe(false);
   });
 });
+
+
+describe("LocalAgent conversation lifecycle", () => {
+  it("preserves projected data after runtime and task record release", async () => {
+    const { createAgentConversations } = await import("../tasks/agentConversations.js");
+    const conversations = createAgentConversations();
+    conversations.subscribe(() => { throw new Error("view broken"); });
+    const fake = makeFakeSession();
+    _setSdkForTest({ createAgentSessionFromServices: vi.fn(async () => ({ session: fake })) });
+    const store = createTaskStore();
+    const { taskId } = await spawnLocalAgent(fakePi, store, forkOptions({ conversations }));
+    fake.emit({ type: "message_start", message: { role: "user", content: "boilerplate" } });
+    fake.emit({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "live progress" }] } });
+    expect(JSON.stringify(conversations.get(taskId))).toContain("live progress");
+    fake.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "final" }] } });
+    fake.emit({ type: "agent_end" });
+    await vi.waitFor(() => expect(fake.dispose).toHaveBeenCalledOnce());
+    expect(conversations.control(taskId)).toBeUndefined();
+    expect(conversations.get(taskId)?.status).toBe("completed");
+    store.set(() => ({}));
+    expect(JSON.stringify(conversations.get(taskId))).toContain("final");
+    expect(JSON.stringify(conversations.get(taskId))).not.toContain("boilerplate");
+  });
+
+  it("waits for an admitted intervention after the initial run settles", async () => {
+    const { createAgentConversations } = await import("../tasks/agentConversations.js");
+    const conversations = createAgentConversations();
+    const fake = makeFakeSession();
+    let finishInitial!: () => void;
+    let finishInput!: () => void;
+    fake.prompt.mockImplementationOnce((_text, options) => { options.preflightResult(true); return new Promise<void>((resolve) => { finishInitial = resolve; }); })
+      .mockImplementationOnce((_text, opts) => {
+        opts.preflightResult("started");
+        return new Promise<void>((resolve) => { finishInput = resolve; });
+      });
+    _setSdkForTest({ createAgentSessionFromServices: vi.fn(async () => ({ session: fake })) });
+    const store = createTaskStore();
+    const { taskId } = await spawnLocalAgent(fakePi, store, forkOptions({ conversations }));
+    fake.emit({ type: "message_start", message: { role: "user", content: "initial delegation" } });
+    await conversations.control(taskId)!.submit("change direction");
+    finishInitial();
+    await Promise.resolve();
+    expect(fake.dispose).not.toHaveBeenCalled();
+    fake.emit({ type: "message_start", message: { role: "user", content: "change direction" } });
+    fake.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "updated result" }] } });
+    finishInput();
+    await vi.waitFor(() => expect(fake.dispose).toHaveBeenCalledOnce());
+    expect(store.getTask(taskId)).toMatchObject({ status: "completed", result: { finalText: "updated result" } });
+    expect(conversations.control(taskId)).toBeUndefined();
+    expect(fakePi.sendMessage.mock.calls.filter(([m]: any[]) => m.customType === "tasks/notification")).toHaveLength(1);
+  });
+});
+
+
+it("kill cancels admitted input and removes control even when an input promise is delayed", async () => {
+  const { createAgentConversations } = await import("../tasks/agentConversations.js");
+  const conversations = createAgentConversations();
+  const fake = makeFakeSession();
+  let release!: () => void;
+  fake.prompt.mockImplementationOnce((_text, options) => { options.preflightResult(true); return new Promise<void>(() => {}); })
+    .mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+  _setSdkForTest({ createAgentSessionFromServices: vi.fn(async () => ({ session: fake })) });
+  const store = createTaskStore();
+  const { taskId } = await spawnLocalAgent(fakePi, store, forkOptions({ conversations }));
+  const receipt = conversations.control(taskId)!.submit("delayed");
+  await Promise.resolve();
+  await killLocalAgentTask(fakePi, store, taskId);
+  expect((await receipt).accepted).toBe(false);
+  expect(conversations.get(taskId)).toMatchObject({ status: "killed", submissions: [{ status: "cancelled" }] });
+  expect(conversations.control(taskId)).toBeUndefined();
+  expect(store.getTask(taskId)).toMatchObject({ session: undefined, cleanup: undefined, closeInput: undefined });
+  expect(fake.dispose).toHaveBeenCalledOnce();
+  release();
+});

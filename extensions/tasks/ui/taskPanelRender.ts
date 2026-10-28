@@ -110,9 +110,14 @@ export function renderTaskPanel(
   }
 
   // Sort tasks by startTime ascending — older tasks bubble to the top.
-  const sorted = [...tasks].sort((a, b) => a.startTime - b.startTime);
-
+  const sorted = options.focused
+    ? [...tasks.filter((t) => t.status === "running"), ...tasks.filter((t) => t.status !== "running")]
+    : [...tasks].sort((a, b) => a.startTime - b.startTime);
+  let section = "";
+  const grouped = options.focused && tasks.some((t) => t.status !== "running");
   for (const task of sorted) {
+    const nextSection = task.status === "running" ? "运行中" : "最近完成（只读）";
+    if (grouped && section !== nextSection) { section = nextSection; lines.push(truncate(theme.fg("dim", section), width)); }
     const { glyph, color: glyphColor } = statusGlyph(task.status);
     const isSelected = options.selectedTaskId === task.id;
     const indent = isSelected ? "▶ " : "  ";

@@ -68,3 +68,44 @@ it("SDK child applies parent routing and leaf gates without bindExtensions", asy
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+
+it("cancels delayed SDK input after close/dispose without starting a provider request", async () => {
+  const { guardWorkerStream } = await import("./workerRuntime.js");
+  const dir = await mkdtemp(join(tmpdir(), "pi-worker-input-"));
+  let release!: () => void;
+  let entered!: () => void;
+  const enteredHook = new Promise<void>((resolve) => { entered = resolve; });
+  const barrier = new Promise<void>((resolve) => { release = resolve; });
+  let open = true;
+  let session: Awaited<ReturnType<typeof createAgentSessionFromServices>>["session"] | undefined;
+  try {
+    const services = await createAgentSessionServices({
+      cwd: dir, agentDir: dir, settingsManager: SettingsManager.inMemory(),
+      resourceLoaderOptions: {
+        noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+        extensionFactories: [
+          (pi) => { pi.on("input", async () => { entered(); await barrier; }); },
+          buildWorkerRuntime(() => ({ enabled: false }), () => open),
+        ],
+      },
+    });
+    ({ session } = await createAgentSessionFromServices({ services, sessionManager: SessionManager.inMemory(dir), tools: [] }));
+    const request = vi.fn(() => { throw new Error("must not execute"); });
+    session.agent.streamFunction = request;
+    guardWorkerStream(session, () => open);
+    const pending = session.prompt("delayed input", { expandPromptTemplates: false });
+    await enteredHook;
+    open = false;
+    await session.abort();
+    session.dispose();
+    release();
+    await pending;
+    expect(request).not.toHaveBeenCalled();
+    expect(() => session!.agent.streamFunction({} as never, {} as never)).toThrow(/closed/);
+    expect(request).not.toHaveBeenCalled();
+  } finally {
+    open = false; release?.(); session?.dispose();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

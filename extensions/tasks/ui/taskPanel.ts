@@ -21,10 +21,12 @@ import {
 } from "./taskPanelRender.js";
 import type { LocalAgentTaskState } from "../../localagent/types.js";
 import type { TaskStateBase } from "../Task.js";
+import type { AgentConversations } from "../agentConversations.js";
 
 export interface TaskPanelDeps {
   taskStore: TaskStore;
   viewState: TaskPanelViewStateStore;
+  conversations?: AgentConversations;
 }
 
 function isLocalAgentTask(t: TaskStateBase): t is LocalAgentTaskState {
@@ -49,6 +51,13 @@ function toEntry(t: LocalAgentTaskState): TaskPanelEntry {
     toolCallCount,
     lastTool,
   };
+}
+
+export function getTaskPanelEntries(deps: Pick<TaskPanelDeps, "taskStore" | "conversations">, includeCompleted: boolean): TaskPanelEntry[] {
+  const running = Object.values(deps.taskStore.get()).filter(isLocalAgentTask).filter((t) => t.status === "running").map(toEntry).sort((a, b) => a.startTime - b.startTime);
+  if (!includeCompleted) return running;
+  const completed = deps.conversations?.list().filter((r) => r.status !== "running").sort((a, b) => (b.endTime ?? 0) - (a.endTime ?? 0)).map((r) => ({ id: r.id, type: "local_agent", description: r.description, status: r.status, startTime: r.startTime })) ?? [];
+  return [...running, ...completed];
 }
 
 export function buildTaskPanel(deps: TaskPanelDeps) {
@@ -79,11 +88,8 @@ export function buildTaskPanel(deps: TaskPanelDeps) {
         // the exact moment the main-stream head appears, producing the
         // claudecode-style "panel row slides up into the main stream"
         // effect.
-        const tasks = Object.values(deps.taskStore.get())
-          .filter(isLocalAgentTask)
-          .filter((t) => t.status === "running")
-          .map(toEntry);
         const vs = deps.viewState.get();
+        const tasks = getTaskPanelEntries(deps, vs.kind !== "task_output" && vs.focused);
         const selectedTaskId =
           vs.kind === "leader_with_selection"
             ? vs.selectedTaskId

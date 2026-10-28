@@ -35,6 +35,8 @@ export async function killLocalAgentTask(
     endTime: Date.now(),
   }));
 
+  try { t.closeInput?.("Task killed"); }
+  catch (e) { logError(e, "killLocalAgent close input"); }
   if (t.session) {
     try {
       await t.session.abort();
@@ -56,6 +58,7 @@ export async function killLocalAgentTask(
     ...cur,
     session: undefined,
     cleanup: undefined,
+    closeInput: undefined,
   }));
   try {
     await flushTaskOutput(taskId);

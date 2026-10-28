@@ -32,10 +32,9 @@ const REPO_ROOT = join(__dirname, "..");
 const EXT_ROOT = join(REPO_ROOT, "extensions");
 
 /**
- * Extensions to NOT bundle. They read own-directory resources through
- * import.meta.url and would break as a single-file bundle. They keep their
- * package.json pointing at index.ts and continue to load via jiti (correct,
- * just not sped up).
+ * Extensions kept as source entries for resource paths, host aliases or
+ * reliable hot reload. Their package.json points at index.ts so jiti can
+ * load fresh source and apply the running host's module mapping.
  *   - pets:     resolves ../catalog (spritesheet.png, pet.json) from import.meta.url
  *   - codebuddy-reasoning: must use jiti host aliases; native JS imports can
  *     resolve an older workspace pi-ai instead of the running Pi version.
@@ -43,7 +42,10 @@ const EXT_ROOT = join(REPO_ROOT, "extensions");
  * (imagegen was historically skipped for a SKILL.md resource; the codex-port
  * rewrite has no resource deps and bundles normally.)
  */
-const SKIP = new Set(["pets", "shared", "honeypot", "codebuddy-reasoning"]);
+// These two coordinate live child UI state. Native ESM caches compiled .js
+// factories across /reload, even with a fresh jiti + moduleCache:false. Keep
+// source entries so /reload can actually replace the producer and consumer.
+const SKIP = new Set(["pets", "shared", "honeypot", "codebuddy-reasoning", "tasks", "localagent"]);
 
 /** Discover extension directories that have an index.ts entry point. */
 function discoverExtensions() {

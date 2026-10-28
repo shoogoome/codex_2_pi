@@ -33,7 +33,7 @@
 | `extensions/goal` | Codex 风格 thread goal:持久目标 + 预算消耗 + 续跑提示，随 session 保存。 | `get_goal` / `create_goal` / `update_goal` · `/goal <objective>` · `/goal resume` |
 | `extensions/localagent` | 注册 `task_agent` + `local_agent` 任务类型：默认从当前活动分支的有效上下文精简 fork 后台子 agent（精确继承 provider/model/thinking），传 `team_name`+`name` 可改为创建长生命周期 teammate。 | `task_agent` |
 | `extensions/localshell` | 注册 `task_bash` 工具 + LocalShellTask：前台完成只保留一条 Bash 工具结果，超时转后台；Esc 可中断前台命令及启动前的审阅基线等待，审阅收尾不阻塞命令返回；后台终态默认在空闲时即时、忙时于 agent_end 安全边界更新 TUI，不打断/注入 LLM，调用头、输出 gutter、颜色和折叠与 Claude UI 的 `Bash` 一致。 | `task_bash` · `task_status` / `task_kill` · `PI_TASK_BASH_TIMEOUT_MS` 调默认超时 · `PI_TASKS_WAKE_ON_BACKGROUND=1` 可恢复 Claude 式主动唤醒 |
-| `extensions/tasks` | 任务框架底座:default TaskStore + 背景 agents panel（Ctrl+Y 焦点 / Enter overlay）+ 任务查询管理工具。 | `task_status` / `task_kill` / `task_list` |
+| `extensions/tasks` | 任务框架底座：TaskStore + Ctrl+Y 子会话面板，原生实时详情、运行中聊天干预及完成后只读回看。 | `task_status` / `task_kill` / `task_list` |
 | `extensions/teammate` | 长生命周期多 agent 团队协作：完整 `name@team` 隔离、自动结果回传、持久消息重放、硬写审批、共享任务看板与安全 resume。 | `team_create` / `task_agent(team_name+name)` / `send_message` / `request_plan_approval` / `team_delete` / `team_plan_approve` |
 
 ### 新增扩展（Codex + Claude Code 能力移植）
@@ -173,7 +173,11 @@ Review 只读取当前工作树，不直接连接 GitHub，也不会自动读取
 - **fork（默认）**：省略 `team_name`/`name`，从当前持久 Pi session 的活动分支精简 fork，并固定在后台运行。只继承最新压缩摘要、`firstKeptEntryId` 起的保留消息与后续消息；尚未压缩时继承活动分支。不复制其他分支、已被摘要替代的旧历史、统计快照或任务进度日志，父会话保持原样。参数只有 `description`、`prompt` 和可选 `cwd`。
 - **长生命周期 teammate**：同时传 `team_name` 和 `name`，把成员加入已有 team（需先 `team_create`）。此时可用 `subagent_type` 选择 role（默认 `general-purpose`）。两个参数必须成对出现，只传其一会明确报错而非静默 fork。
 
-fork 子会话精确继承启动时主会话的 provider、model 对象和 thinking level，不做别名查找，也不允许显式覆盖。Fast/UltraFast（包含关闭）通过主会话的有效状态读取器在每次请求时动态跟随，不依赖历史条目是否被压缩，也不受子 cwd 的默认值影响；仍遵守 Codex OAuth/模型适用条件。LocalAgent 是叶子 worker：继承当前活动工具，但始终剔除 `task_agent` 和 `team_create`，并在工具调用层阻止创建 fork、teammate 或 team；该边界不依赖容易被压缩掉的提示词。它只额外初始化 worker 专属请求/工具钩子，不触发主会话团队协调器等完整启动流程，也不承诺任意第三方扩展配置完全一致。任务会等待 SDK 的自动重试、压缩恢复及续跑全部结束，再根据最终结果发送一次终态通知；中途可恢复的错误不会把最终成功误报为失败。有界最终回答自动送回主会话，完整轨迹保存在 `output_file`。子会话结束或被 kill 后会释放 SDK 运行时引用；通知或输出清理失败会记录日志，不阻断运行时回收，避免终态任务持续持有历史。此优化不自动裁剪父 JSONL，也不保证任意大小的活动上下文都不会耗尽内存。
+fork 子会话精确继承启动时主会话的 provider、model 对象和 thinking level，不做别名查找，也不允许显式覆盖。Fast/UltraFast（包含关闭）通过主会话的有效状态读取器在每次请求时动态跟随，不依赖历史条目是否被压缩，也不受子 cwd 的默认值影响；仍遵守 Codex OAuth/模型适用条件。LocalAgent 是叶子 worker：继承当前活动工具，但始终剔除 `task_agent` 和 `team_create`，并在工具调用层阻止创建 fork、teammate 或 team；该边界不依赖容易被压缩掉的提示词。它只额外初始化 worker 专属请求/工具钩子，不触发主会话团队协调器等完整启动流程，也不承诺任意第三方扩展配置完全一致。任务会等待 SDK 的自动重试、压缩恢复及续跑全部结束，再根据最终结果发送一次终态通知；中途可恢复的错误不会把最终成功误报为失败。有界最终回答自动送回主会话，摘要式执行日志保存在 `output_file`；交互详情另有有界结构化展示记录。子会话结束或被 kill 后会释放 SDK 运行时引用；通知或输出清理失败会记录日志，不阻断运行时回收，避免终态任务持续持有历史。此优化不自动裁剪父 JSONL，也不保证任意大小的活动上下文都不会耗尽内存。
+
+`tasks` 和 `localagent` 使用 `index.ts` 源码入口，以便 `/reload` 真正更新子会话 UI/执行接线，并复用当前 Pi 宿主的原生皮肤；不要改回缓存的 `dist/index.js`。
+
+**查看与干预 LocalAgent**：按 `Ctrl+Y` 聚焦任务面板，方向键选择、`Enter` 进入。详情实时显示自然语言、上游返回的可见思考与工具过程；沿用主界面配置的工具展开/思考显隐键（默认 `Ctrl+O` / `Ctrl+T`），`PgUp` / `PgDn` / `Home` / `End` 滚动，离开底部时新输出不抢阅读位置。运行中可直接输入自然语言，`Enter` 发送给当前子 agent，`q` 是普通文字，空提交无副作用；`Esc` 返回主会话但不停止任务，主/子草稿彼此隔离。干预在当前回合及工具处理后的安全边界进入，不会立即中断正在执行的工具。完成后仍立即释放运行时，详情只读，聚焦列表可回看最近完成记录；不支持完成后续聊或跨重启恢复。展示记录只在当前根会话中保留，默认单任务 8 MiB、总计 64 MiB、最多 20 条完成记录，超限明确提示截断。停止执行仍用 `task_kill`。
 
 teammate 成员拥有独立持久 session，可在多轮消息间 idle，并在根 session 恢复时重建。成员用完整 `name@team` 路由：裸名称只有在 team 内（leader 侧则要求跨 team 唯一）才解析，广播也不会越 team。每轮最终回答和错误会自动注入 leader；成员间消息以 `message_sent → message_ack` 持久化，未 ACK 消息在 resume 后按序重放。写文件、变更 shell 和 MCP 调用由运行时硬门禁拦截，只有 `request_plan_approval` 获批后才在当前 turn 开放；恢复时若原 role 被删除或定义指纹变化则 fail-closed。`session_shutdown` 会挂起成员供下一会话重建；显式 `team_delete` 才执行 shutdown handshake 和超时强制清理。详见 [多 Agent 说明](docs/extensions/multi-agent.md)。
 

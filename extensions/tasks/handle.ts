@@ -16,11 +16,13 @@ import type { Task, TaskType } from "./Task.js";
 import { setDefaultTaskStore, type TaskStore } from "./taskStore.js";
 
 import { getTaskActivityHandle, type TaskActivityHandle } from "./activity.js";
+import { createAgentConversations, type AgentConversations } from "./agentConversations.js";
 
 const HANDLE_KEY = "__pi_tasks_handle__";
 
 export interface TasksHandle {
   activity: TaskActivityHandle;
+  conversations: AgentConversations;
   store: TaskStore;
   registerTaskType(type: TaskType, task: Task): void;
   getTaskType(type: TaskType): Task | undefined;
@@ -28,8 +30,8 @@ export interface TasksHandle {
 }
 
 /** Publish the handle so cross-extension consumers can find it. */
-export function attachTasksHandle(pi: ExtensionAPI, handle: Omit<TasksHandle, "activity"> & Partial<Pick<TasksHandle, "activity">>): void {
-  attachSessionHandle(pi, HANDLE_KEY, { ...handle, activity: handle.activity ?? getTaskActivityHandle() });
+export function attachTasksHandle(pi: ExtensionAPI, handle: Omit<TasksHandle, "activity" | "conversations"> & Partial<Pick<TasksHandle, "activity" | "conversations">>): void {
+  attachSessionHandle(pi, HANDLE_KEY, { ...handle, activity: handle.activity ?? getTaskActivityHandle(), conversations: handle.conversations ?? createAgentConversations() });
 }
 
 /** Read the handle; throws if tasks extension hasn't attached yet. */
@@ -97,6 +99,9 @@ export function lazyTasksHandle(pi: ExtensionAPI): TasksHandle {
     },
     get store() {
       return resolve().store;
+    },
+    get conversations() {
+      return resolve().conversations;
     },
     registerTaskType: (type, task) => resolve().registerTaskType(type, task),
     getTaskType: (type) => resolve().getTaskType(type),

@@ -47,10 +47,13 @@ import { getTaskActivityHandle } from "./activity.js";
 import { createAgentCapacity } from "./agentCapacity.js";
 import { attachAgentCapacity } from "./agentCapacityHandle.js";
 import { logError } from "./logging.js";
+import { createAgentConversations } from "./agentConversations.js";
 import { buildTaskPanel } from "./ui/taskPanel.js";
 import { createTaskPanelViewStateStore } from "./ui/viewState.js";
 import { registerTaskPanelKeybindings } from "./ui/taskPanelKeybindings.js";
 import { buildTaskOutputOverlayComponent } from "./ui/taskOutputOverlayComponent.js";
+import { buildTaskConversationView } from "./ui/taskConversationView.js";
+import { loadPiUiRuntime, type PiUiRuntime } from "../shared/pi-ui-runtime.js";
 import type { TaskPanelEntry } from "./ui/taskPanelRender.js";
 import type { TaskOutputOverlayTheme } from "./ui/taskOutputOverlayRender.js";
 import type { LocalAgentTaskState } from "../localagent/types.js";
@@ -67,6 +70,7 @@ export interface TasksExtensionDeps {
   storeFactory?: () => TaskStore;
   /** 框架 polling 间隔。默认 1000ms,与 Claude POLL_INTERVAL_MS 对齐。 */
   pollIntervalMs?: number;
+  loadUiRuntime?: () => Promise<PiUiRuntime>;
 }
 
 export default function tasksExtension(
@@ -80,6 +84,7 @@ export default function tasksExtension(
   // (localshell, localagent, teammate) can find this store + registry even
   // though each extension gets its own pi.events facade and jiti realm.
   const handle: TasksHandle = {
+    conversations: createAgentConversations(),
     activity: getTaskActivityHandle(),
     store,
     registerTaskType,
@@ -116,6 +121,7 @@ export default function tasksExtension(
     // A replacement/resumed root session gets a fresh capacity accounting
     // generation before localagent/teammate session_start handlers can spawn.
     agentCapacity.reset("Root session replaced");
+    handle.conversations.reset();
     // sessionManager 是 ReadonlySessionManager —— 取 sessionId 即可,不要 mutate。
     store._setSessionId(ctx.sessionManager.getSessionId());
     _resetTaskOutputDirForTest();
@@ -128,14 +134,14 @@ export default function tasksExtension(
     pi.registerTool(buildTaskStatusTool(store));
     pi.registerTool(buildTaskListTool(store));
 
-    if (!ctx.hasUI) return;
+    if (!ctx.hasUI || (ctx.mode && ctx.mode !== "tui")) return;
 
     // Defensive: clean up any subs leaked from a previous cycle.
     unsubPanel?.();
 
     const viewState = createTaskPanelViewStateStore();
     let tuiHandle: TUI | undefined;
-    const innerFactory = buildTaskPanel({ taskStore: store, viewState });
+    const innerFactory = buildTaskPanel({ taskStore: store, viewState, conversations: handle.conversations });
     const componentFactory = (
       t: TUI,
       theme: Theme,
@@ -162,19 +168,32 @@ export default function tasksExtension(
 
     const u1 = store.subscribe(requestRender);
 
+    let activeView: (Component & { dispose?(): void }) | undefined;
     const unsubKeybindings = registerTaskPanelKeybindings({
       ui: ctx.ui,
       taskStore: store,
       viewState,
+      conversations: handle.conversations,
+      detailInput: (data) => activeView?.handleInput?.(data),
+    });
+    let catalog = "";
+    const unsubConversations = handle.conversations.subscribe(() => {
+      const next = handle.conversations.list().map((r) => r.id + ":" + r.status).join("|");
+      if (next !== catalog) { catalog = next; requestRender(); }
     });
 
     // task_output overlay reactor — open a full-screen ctx.ui.custom overlay
-    // when the user enters task_output mode, dismiss when leaving. Mirrors
-    // the teammate overlay pattern (commit 725e268). nonCapturing:true so
-    // the editor keeps focus and Esc still routes through onTerminalInput.
+    // when entering task_output. It captures focus; raw input is forwarded by
+    // the task keybindings so none of it can mutate the leader editor.
     let overlayHandle: OverlayHandle | undefined;
     let overlayDone: ((value: void) => void) | undefined;
+    let opening = false;
+    let viewEpoch = 0;
     function dismissOverlay(): void {
+      viewEpoch++;
+      activeView?.dispose?.();
+      activeView = undefined;
+      opening = false;
       if (overlayDone) {
         try {
           overlayDone();
@@ -183,28 +202,42 @@ export default function tasksExtension(
         }
         overlayDone = undefined;
       }
-      if (overlayHandle) {
-        try {
-          overlayHandle.hide();
-        } catch (e) {
-          logError(e, "task panel overlay hide");
-        }
-        overlayHandle = undefined;
-      }
+      overlayHandle = undefined;
     }
 
     const unsubViewState = viewState.subscribe((state) => {
       // Flip the poll's output-read gate: reads happen only while the
       // task_output overlay is up. Closing it (any other kind) reverts to
       // zero output reads for running tasks.
-      panelVisible = state.kind === "task_output";
+      panelVisible = state.kind === "task_output" && !handle.conversations.get(state.taskId);
       requestRender();
       if (state.kind === "task_output") {
-        if (overlayHandle || overlayDone) return;
+        if (opening || overlayHandle || overlayDone) return;
+        opening = true;
+        const epoch = ++viewEpoch;
         const taskId = state.taskId;
+        const structured = !!handle.conversations.get(taskId);
         const overlayPromise = ctx.ui.custom<void>(
-          (_tui, theme, _kb, done) => {
+          async (_tui, theme, _kb, done) => {
             overlayDone = done;
+            if (structured) {
+              try {
+                const runtime = await (deps.loadUiRuntime ?? loadPiUiRuntime)();
+                if (epoch !== viewEpoch) { done(); return { render: () => [], invalidate() {} }; }
+                const view = buildTaskConversationView({
+                  taskId, conversations: handle.conversations, runtime,
+                  tui: _tui, theme, keybindings: _kb,
+                  initialExpanded: ctx.ui.getToolsExpanded?.(),
+                  done: () => viewState.exitTaskView(),
+                });
+                activeView = view;
+                return view;
+              } catch (error) {
+                logError(error, "task conversation UI");
+                const text = "子会话 UI 不可用（只读）: " + String(error);
+                return { render: (width: number) => [text.slice(0, Math.max(1, Math.floor(width / 2))), "Esc 返回"], invalidate() {} };
+              }
+            }
             const themeFg = (
               theme as unknown as {
                 fg?: (color: string, text: string) => string;
@@ -220,7 +253,8 @@ export default function tasksExtension(
             return buildTaskOutputOverlayComponent({
               taskId,
               getTask: () => snapshotEntry(store, taskId),
-              getOutputContent: () => readTaskOutputTail(store, taskId),
+              getOutputContent: () => "[旧日志视图 / legacy log, read-only]\n" + readTaskOutputTail(store, taskId),
+              getHeight: () => _tui.terminal.rows,
               theme: overlayTheme,
             });
           },
@@ -231,10 +265,8 @@ export default function tasksExtension(
               maxHeight: "100%",
               anchor: "top-left",
               margin: 0,
-              // nonCapturing:true so the editor keeps focus and Esc routes
-              // through onTerminalInput → exitTaskView (mirrors commit
-              // 725e268's teammate-overlay fix).
-              nonCapturing: true,
+              // Child details own input, including Enter/q and editing keys.
+              nonCapturing: false,
             }),
             onHandle: (h) => {
               overlayHandle = h;
@@ -244,12 +276,16 @@ export default function tasksExtension(
         if (overlayPromise && typeof overlayPromise.then === "function") {
           overlayPromise.then(
             () => {
-              overlayHandle = undefined;
-              overlayDone = undefined;
+              if (epoch !== viewEpoch) return;
+              activeView?.dispose?.(); activeView = undefined;
+              overlayHandle = undefined; overlayDone = undefined; opening = false;
+              viewState.exitTaskView();
             },
             (e: unknown) => {
-              overlayHandle = undefined;
-              overlayDone = undefined;
+              if (epoch !== viewEpoch) return;
+              activeView?.dispose?.(); activeView = undefined;
+              overlayHandle = undefined; overlayDone = undefined; opening = false;
+              viewState.exitTaskView();
               logError(e, "task panel overlay promise");
             },
           );
@@ -261,6 +297,7 @@ export default function tasksExtension(
 
     unsubPanel = (): void => {
       u1();
+      unsubConversations();
       unsubKeybindings();
       unsubViewState();
       dismissOverlay();
@@ -270,6 +307,7 @@ export default function tasksExtension(
   });
 
   pi.on("session_shutdown", async () => {
+    handle.conversations.reset();
     unsubPanel?.();
     unsubPanel = undefined;
     panelVisible = false;

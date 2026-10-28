@@ -4,9 +4,8 @@
 //   - focused=false : Ctrl+Y toggles focus; everything else passes through.
 //                     Ctrl+G is left untouched so the teammate panel sees it.
 //   - focused=true  : ↑↓ Tab Enter Esc are intercepted.
-//   - task_output   : Esc / Enter / 'q' exit; Ctrl+Y is consumed (no-op);
-//                     other keys pass through (best-effort harmless until we
-//                     add scroll keys).
+//   - task_output   : Esc exits; all other keys go to the child screen.
+//                     No detail keystroke can reach the leader editor.
 
 import type {
   ExtensionUIContext,
@@ -14,8 +13,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { TaskStore } from "../taskStore.js";
 import type { TaskPanelViewStateStore } from "./viewState.js";
-import type { LocalAgentTaskState } from "../../localagent/types.js";
-import type { TaskStateBase } from "../Task.js";
+import type { AgentConversations } from "../agentConversations.js";
+import { getTaskPanelEntries } from "./taskPanel.js";
 
 export type TaskPanelKeyAction =
   | { kind: "toggle-task-focus" }
@@ -48,10 +47,8 @@ export interface TaskPanelKeybindingsDeps {
   ui: TaskPanelKeybindingsUI;
   taskStore: TaskStore;
   viewState: TaskPanelViewStateStore;
-}
-
-function isLocalAgentTask(t: TaskStateBase): t is LocalAgentTaskState {
-  return t.type === "local_agent";
+  conversations?: AgentConversations;
+  detailInput?: (data: string) => void;
 }
 
 export function registerTaskPanelKeybindings(
@@ -61,27 +58,17 @@ export function registerTaskPanelKeybindings(
     const action = classifyTaskPanelKey(data);
     const state = deps.viewState.get();
 
-    // Ctrl+Y is the universal toggle for the task panel. In task_output
-    // it's a no-op for viewState.toggleFocus but we still consume it so
-    // it doesn't accidentally reach the editor.
-    if (action.kind === "toggle-task-focus") {
-      deps.viewState.toggleFocus();
+    // Details own every key; never let child input reach the leader editor.
+    if (state.kind === "task_output") {
+      if (action.kind === "esc") deps.viewState.exitTaskView();
+      else deps.detailInput?.(data);
       return { consume: true };
     }
 
-    // task_output overlay: Esc / Enter / 'q' exit; everything else falls
-    // through. We do NOT swallow other keys because the user might want
-    // them to reach an inner editor / scroll handler later.
-    if (state.kind === "task_output") {
-      if (
-        action.kind === "esc" ||
-        action.kind === "enter" ||
-        action.kind === "exit-output"
-      ) {
-        deps.viewState.exitTaskView();
-        return { consume: true };
-      }
-      return undefined;
+    // Outside details, Ctrl+Y toggles task-panel focus.
+    if (action.kind === "toggle-task-focus") {
+      deps.viewState.toggleFocus();
+      return { consume: true };
     }
 
     // Blurred panel: keys (other than Ctrl+Y handled above) pass through
@@ -92,11 +79,7 @@ export function registerTaskPanelKeybindings(
     }
 
     // Focused leader / leader_with_selection from here on.
-    const runningIds = Object.values(deps.taskStore.get())
-      .filter(isLocalAgentTask)
-      .filter((t) => t.status === "running")
-      .sort((a, b) => a.startTime - b.startTime)
-      .map((t) => t.id);
+    const runningIds = getTaskPanelEntries(deps, true).map((t) => t.id);
 
     if (state.kind === "leader") {
       if (action.kind === "cycle" && runningIds.length > 0) {
@@ -117,6 +100,10 @@ export function registerTaskPanelKeybindings(
       return { consume: true };
     }
     if (action.kind === "enter") {
+      if (!runningIds.includes(state.selectedTaskId)) {
+        if (!runningIds.length) { deps.viewState.reset(); return { consume: true }; }
+        deps.viewState.selectTask(runningIds[0]!);
+      }
       deps.viewState.enterTaskView();
       return { consume: true };
     }

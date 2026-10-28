@@ -15,7 +15,11 @@ import type {
 import { loadPiRuntimeSdk } from "../shared/pi-runtime-sdk.js";
 import { createContextFork } from "./contextFork.js";
 import { getFastModeReader, type FastModeReader } from "../fast-mode/handle.js";
-import { buildWorkerRuntime } from "./workerRuntime.js";
+import { buildWorkerRuntime, guardWorkerStream } from "./workerRuntime.js";
+import { createConversationProjection } from "./conversationProjection.js";
+import { createInteractionController } from "./interactionController.js";
+import { getTasksHandle } from "../tasks/handle.js";
+import type { AgentConversations } from "../tasks/agentConversations.js";
 import { isForkWorker, registerForkWorker } from "./workerIdentity.js";
 
 import type { TaskStore } from "../tasks/taskStore.js";
@@ -97,6 +101,8 @@ export interface SpawnLocalAgentOptions extends TaskOrigin {
    * tool result renderer can build a multi-line view of the sub-agent's work.
    */
   onProgress?: (snapshot: SpawnLocalAgentProgressSnapshot) => void;
+  /** Injectable presentation store for embedded hosts/tests. */
+  conversations?: AgentConversations;
 }
 
 export interface SpawnLocalAgentProgressSnapshot {
@@ -146,6 +152,7 @@ interface SdkBindings {
     cwd: string;
     appendSystemPrompt?: string[];
     readFastMode: FastModeReader;
+    isOpen?: () => boolean;
   }) => Promise<unknown>;
   createContextFork: (parent: string, cwd: string, branch: readonly SessionEntry[]) => unknown | Promise<unknown>;
   createAgentSessionFromServices: (opts: {
@@ -164,7 +171,7 @@ let _sdk: SdkBindings = {
       cwd: opts.cwd,
       resourceLoaderOptions: {
         appendSystemPrompt: opts.appendSystemPrompt,
-        extensionFactories: [buildWorkerRuntime(opts.readFastMode)],
+        extensionFactories: [buildWorkerRuntime(opts.readFastMode, opts.isOpen)],
       },
     }) as unknown as Promise<unknown>;
   },
@@ -195,6 +202,11 @@ export async function spawnLocalAgent(
   opts: SpawnLocalAgentOptions,
 ): Promise<SpawnLocalAgentResult> {
   const origin = copyTaskOrigin(opts);
+  let conversations = opts.conversations;
+  if (!conversations) {
+    try { conversations = getTasksHandle(pi).conversations; } catch { /* embedded host without tasks UI */ }
+  }
+  const rootGeneration = conversations?.generation;
   let unregisterOrigin: (() => void) | undefined;
   let unregisterWorker: (() => void) | undefined;
   const readFastMode = opts.readFastMode ?? getFastModeReader(pi);
@@ -235,8 +247,9 @@ export async function spawnLocalAgent(
   // 3. SDK calls. Release both reservations if setup fails before ownership is
   // transferred to the task cleanup path.
   let session: AgentSession;
+  const worker = { open: true };
   try {
-    const services = await _sdk.createAgentSessionServices({ cwd: opts.cwd, readFastMode });
+    const services = await _sdk.createAgentSessionServices({ cwd: opts.cwd, readFastMode, isOpen: () => worker.open });
     const sm = await _sdk.createContextFork(opts.parentSessionFile, opts.cwd, opts.parentBranch);
     const childFile = (sm as { getSessionFile?: () => string | undefined }).getSessionFile?.();
     if (childFile) {
@@ -261,6 +274,7 @@ export async function spawnLocalAgent(
       thinkingLevel: opts.thinkingLevel,
     });
     session = sessionUnknown as AgentSession;
+    guardWorkerStream(session, () => worker.open);
   } catch (error) {
     unregisterOrigin?.();
     unregisterWorker?.();
@@ -296,6 +310,7 @@ export async function spawnLocalAgent(
   try {
     if (origin.originSessionId) await hub.begin(activity);
     opts.abortSignal?.throwIfAborted();
+    if (conversations && conversations.generation !== rootGeneration) throw new Error("Root session replaced while starting LocalAgent");
   } catch (error) {
     await hub.end(activity).catch((e) => logError(e, "localagent activity end"));
     removeProgress(taskId);
@@ -306,12 +321,34 @@ export async function spawnLocalAgent(
     throw error;
   }
   registerTask(initial, store);
+  const conversationGeneration = conversations?.begin({ id: taskId, description: initial.description, cwd: opts.cwd, startTime: initial.startTime }, opts.prompt) ?? 0;
+  const project = conversations ? createConversationProjection(conversations, taskId, conversationGeneration) : undefined;
 
   // 4. Counters track the latest request; only prompt settlement is terminal.
   let turnCount = 0;
   let toolCount = 0;
   let lastFinalText = "";
   let runError: string | undefined;
+  const interaction = createInteractionController({
+    session,
+    conversations,
+    taskId,
+    generation: conversationGeneration,
+    isCurrent: () => store.getTask(taskId)?.status === "running" && (!conversations || conversations.generation === conversationGeneration),
+    closeWorker: () => { worker.open = false; },
+    onRunError: (error) => {
+      runError = error instanceof Error ? error.message : String(error);
+      logError(error, "session.prompt");
+      appendTaskOutput(taskId, `[error] ${runError}\n`);
+    },
+    getToolRenderers: (name) => {
+      const runner = session.extensionRunner as unknown as { resolveToolRenderers?: (name: string, next: () => unknown) => unknown };
+      const definition = session.getToolDefinition(name);
+      return runner?.resolveToolRenderers ? runner.resolveToolRenderers(name, () => definition) : definition;
+    },
+  });
+  const unregisterControl = conversations?.registerControl(taskId, conversationGeneration, interaction.control);
+  updateTaskState<LocalAgentTaskState>(taskId, store, (cur) => ({ ...cur, closeInput: interaction.control.close }));
 
   // Build progress timeline + emit helper. Each emit: (a) sendMessage(jsonl persistence),
   // (b) onProgress callback (live stream to TUI/RPC via tool_execution_update).
@@ -394,7 +431,14 @@ export async function spawnLocalAgent(
   // 5. Subscribe to request progress. agent_end is not terminal: the SDK may
   // still retry, recover from overflow, or drain queued continuations afterward.
 
+  let initialInputSeen = false;
   const unsub = session.subscribe((event) => {
+    try { project?.(event as never); } catch (error) { logError(error, "conversation projection"); }
+    if (event.type === "message_start" && event.message.role === "user") {
+      if (!initialInputSeen) initialInputSeen = true;
+      else interaction.entered();
+    }
+    if (event.type === "queue_update" && event.steering.length > 0) interaction.queued();
     const e = event as {
       type: string;
       toolName?: string;
@@ -471,6 +515,12 @@ export async function spawnLocalAgent(
   const cleanup = (): void => {
     if (cleanedUp) return;
     cleanedUp = true;
+    worker.open = false;
+    interaction.control.close("Task finished");
+    unregisterControl?.();
+    const terminal = store.getTask(taskId)?.status;
+    try { if (terminal) conversations?.finish(taskId, conversationGeneration, terminal); }
+    catch (error) { logError(error, "conversation finish"); }
     unregisterOrigin?.();
     unregisterWorker?.();
     void hub.end(activity).catch((e) => logError(e, "localagent activity end"));
@@ -491,7 +541,7 @@ export async function spawnLocalAgent(
   // event promise, which would leave such tasks running forever.
   const runBackgroundFinalizer = async (): Promise<void> => {
     try {
-      await session.prompt(buildChildDirective(opts.prompt));
+      await interaction.run(buildChildDirective(opts.prompt));
     } catch (error) {
       runError = (error as Error)?.message ?? String(error);
       logError(error, "session.prompt");
@@ -558,6 +608,7 @@ export async function spawnLocalAgent(
         ...cur,
         session: undefined,
         cleanup: undefined,
+        closeInput: undefined,
       }));
       removeProgress(taskId);
       await evictTaskOutput(taskId).catch((error) => logError(error, "localagent output eviction"));
