@@ -45,7 +45,7 @@ const EXT_ROOT = join(REPO_ROOT, "extensions");
 // These two coordinate live child UI state. Native ESM caches compiled .js
 // factories across /reload, even with a fresh jiti + moduleCache:false. Keep
 // source entries so /reload can actually replace the producer and consumer.
-const SKIP = new Set(["pets", "shared", "honeypot", "codebuddy-reasoning", "tasks", "localagent"]);
+const SKIP = new Set(["pets", "shared", "honeypot", "codebuddy-reasoning", "tasks", "localagent", "coordinator"]);
 
 /** Discover extension directories that have an index.ts entry point. */
 function discoverExtensions() {

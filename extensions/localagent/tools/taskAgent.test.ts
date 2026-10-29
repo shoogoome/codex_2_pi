@@ -1,4 +1,6 @@
 import { registerForkWorker } from "../workerIdentity.js";
+import { attachCoordinator } from "../../coordinator/handle.js";
+import { TaskLedger } from "../../coordinator/taskLedger.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTaskAgentTool,
@@ -72,11 +74,44 @@ async function callTool(
   );
 }
 
+describe("task_agent coordination binding", () => {
+  it("requires a complete managed contract in active coordinator mode without reducing tools", async () => {
+    const pi = freshPi();
+    const reserve = vi.fn();
+    attachCoordinator(pi, { enabled: () => true, active: () => true, ledger: new TaskLedger(() => {}), reserve });
+    const spawner = vi.fn();
+    _setSpawnerForTest(spawner);
+    const response = await callTool(buildTaskAgentTool(pi, createTaskStore()), { description: "test", prompt: "do work" });
+    expect(response).toMatchObject({ isError: true });
+    expect(response.content).toEqual(expect.arrayContaining([expect.objectContaining({ text: expect.stringContaining("coordinator_task_id") })]));
+    expect(spawner).not.toHaveBeenCalled();
+    expect(pi.getActiveTools()).toEqual(["read", "bash", "task_agent"]);
+  });
+  it("passes a root-bound bridge and fresh contract, and rolls back failed starts", async () => {
+    const pi = freshPi();
+    const bridge = { logicalTaskId: "logical", prompt: "latest contract and handoff", start: vi.fn(), report: vi.fn(), finish: vi.fn(), rollback: vi.fn(), activity: vi.fn() };
+    const reserve = vi.fn(() => bridge);
+    attachCoordinator(pi, { enabled: () => true, active: () => true, ledger: new TaskLedger(() => {}), reserve });
+    const spawner = vi.fn().mockRejectedValue(new Error("setup failed"));
+    _setSpawnerForTest(spawner);
+    const tool = buildTaskAgentTool(pi, createTaskStore());
+    const response = await callTool(tool, { description: "test", prompt: "specific", coordinator_task_id: "logical" });
+    expect(response).toMatchObject({ isError: true });
+    expect(reserve).toHaveBeenCalledWith("logical", "/tmp");
+    expect(spawner.mock.calls[0][2]).toMatchObject({ coordination: bridge, prompt: expect.stringContaining("latest contract and handoff") });
+    expect(bridge.rollback).toHaveBeenCalledTimes(1);
+    const team = await callTool(tool, { description: "test", prompt: "specific", coordinator_task_id: "logical", team_name: "a", name: "b" });
+    expect(team).toMatchObject({ isError: true });
+    expect(reserve).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("task_agent fork contract", () => {
   it("schema 公开 description、prompt、cwd，以及 teammate 模式的 team_name/name/subagent_type", () => {
     const tool = buildTaskAgentTool(fakePi, createTaskStore());
     expect(tool.name).toBe("task_agent");
     expect(Object.keys((tool.parameters as any).properties).sort()).toEqual([
+      "coordinator_task_id",
       "cwd",
       "description",
       "name",

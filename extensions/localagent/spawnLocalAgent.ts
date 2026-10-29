@@ -6,6 +6,7 @@
 // Recursive forks are rejected by the boilerplate guard.
 
 import { copyTaskOrigin, registerTaskOrigin, type TaskOrigin } from "../tasks/origin.js";
+import type { WorkerBridge } from "../coordinator/handle.js";
 import { getTaskActivityHandle } from "../tasks/activity.js";
 import type {
   AgentSession,
@@ -101,6 +102,8 @@ export interface SpawnLocalAgentOptions extends TaskOrigin {
    * tool result renderer can build a multi-line view of the sub-agent's work.
    */
   onProgress?: (snapshot: SpawnLocalAgentProgressSnapshot) => void;
+  /** Root-bound logical task lifecycle; absent on legacy forks. */
+  coordination?: WorkerBridge;
   /** Injectable presentation store for embedded hosts/tests. */
   conversations?: AgentConversations;
 }
@@ -153,6 +156,7 @@ interface SdkBindings {
     appendSystemPrompt?: string[];
     readFastMode: FastModeReader;
     isOpen?: () => boolean;
+    coordination?: WorkerBridge;
   }) => Promise<unknown>;
   createContextFork: (parent: string, cwd: string, branch: readonly SessionEntry[]) => unknown | Promise<unknown>;
   createAgentSessionFromServices: (opts: {
@@ -171,7 +175,7 @@ let _sdk: SdkBindings = {
       cwd: opts.cwd,
       resourceLoaderOptions: {
         appendSystemPrompt: opts.appendSystemPrompt,
-        extensionFactories: [buildWorkerRuntime(opts.readFastMode, opts.isOpen)],
+        extensionFactories: [buildWorkerRuntime(opts.readFastMode, opts.isOpen, opts.coordination)],
       },
     }) as unknown as Promise<unknown>;
   },
@@ -249,7 +253,7 @@ export async function spawnLocalAgent(
   let session: AgentSession;
   const worker = { open: true };
   try {
-    const services = await _sdk.createAgentSessionServices({ cwd: opts.cwd, readFastMode, isOpen: () => worker.open });
+    const services = await _sdk.createAgentSessionServices({ cwd: opts.cwd, readFastMode, isOpen: () => worker.open, coordination: opts.coordination });
     const sm = await _sdk.createContextFork(opts.parentSessionFile, opts.cwd, opts.parentBranch);
     const childFile = (sm as { getSessionFile?: () => string | undefined }).getSessionFile?.();
     if (childFile) {
@@ -304,6 +308,7 @@ export async function spawnLocalAgent(
     isFork: true,
     forkParentSessionFile: opts.parentSessionFile,
     session,
+    coordination: opts.coordination,
   };
   const activity = { ...origin, taskId, operationId: taskId, cwd: opts.cwd };
   const hub = getTaskActivityHandle();
@@ -311,6 +316,7 @@ export async function spawnLocalAgent(
     if (origin.originSessionId) await hub.begin(activity);
     opts.abortSignal?.throwIfAborted();
     if (conversations && conversations.generation !== rootGeneration) throw new Error("Root session replaced while starting LocalAgent");
+    opts.coordination?.start(taskId);
   } catch (error) {
     await hub.end(activity).catch((e) => logError(e, "localagent activity end"));
     removeProgress(taskId);
@@ -433,6 +439,8 @@ export async function spawnLocalAgent(
 
   let initialInputSeen = false;
   const unsub = session.subscribe((event) => {
+    try { opts.coordination?.activity(event.type, (event as { toolName?: string }).toolName); }
+    catch (error) { logError(error, "coordination activity"); }
     try { project?.(event as never); } catch (error) { logError(error, "conversation projection"); }
     if (event.type === "message_start" && event.message.role === "user") {
       if (!initialInputSeen) initialInputSeen = true;
@@ -578,6 +586,9 @@ export async function spawnLocalAgent(
       } catch (error) {
         logError(error, "localagent output flush");
       }
+      let coordinationExtra: Record<string, unknown> = {};
+      try { coordinationExtra = opts.coordination?.finish(status) ?? {}; }
+      catch (error) { logError(error, "coordination settlement"); coordinationExtra = { coordinationError: String(error) }; }
       notifyTaskTerminal(pi, store, {
         taskId,
         taskType: "local_agent",
@@ -589,7 +600,7 @@ export async function spawnLocalAgent(
           runError ? `Agent failed: ${runError}` : lastFinalText,
         ),
         triggerTurn: true,
-        extra: { agentType: FORK_AGENT_TYPE, ...getProgress(taskId) },
+        extra: { agentType: FORK_AGENT_TYPE, ...getProgress(taskId), ...coordinationExtra },
       });
     } finally {
       // Notification/storage failures must never retain the SDK runtime or its

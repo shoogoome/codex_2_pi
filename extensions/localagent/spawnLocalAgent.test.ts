@@ -100,6 +100,35 @@ afterEach(async () => {
   await _clearOutputsForTest();
 });
 
+describe("coordinated lifecycle bridge", () => {
+  function bridge() { return { logicalTaskId: "logical", prompt: "contract", start: vi.fn(), activity: vi.fn(), rollback: vi.fn(), report: vi.fn(), finish: vi.fn(() => ({ logicalTaskId: "logical", logicalStatus: "awaiting_review" })) }; }
+  it("attaches delivery to the existing single terminal notification and releases capacity", async () => {
+    const fake = makeFakeSession();
+    _setSdkForTest({ createAgentSessionFromServices: vi.fn(async () => ({ session: fake })) });
+    const coordination = bridge();
+    const store = createTaskStore();
+    const result = await spawnLocalAgent(fakePi, store, forkOptions({ coordination }));
+    expect(coordination.start).toHaveBeenCalledWith(result.taskId);
+    fake.emit({ type: "agent_end" });
+    await vi.waitFor(() => expect(fake.dispose).toHaveBeenCalled());
+    expect(coordination.finish).toHaveBeenCalledExactlyOnceWith("completed");
+    expect(fakePi.sendMessage.mock.calls.filter(([message]: any[]) => message.customType === "tasks/notification")).toHaveLength(1);
+    expect(getAgentCapacity(fakePi).snapshot()).toMatchObject({ activeChildren: 0, residentChildren: 0 });
+  });
+  it("settles a killed bridge only after abort and disposes despite settlement persistence errors", async () => {
+    const fake = makeFakeSession();
+    _setSdkForTest({ createAgentSessionFromServices: vi.fn(async () => ({ session: fake })) });
+    const coordination = bridge();
+    coordination.finish.mockImplementation(() => { expect(fake.abort).toHaveBeenCalled(); expect(fake.dispose).toHaveBeenCalled(); throw new Error("ledger disk failure"); });
+    const store = createTaskStore();
+    const result = await spawnLocalAgent(fakePi, store, forkOptions({ coordination }));
+    await killLocalAgentTask(fakePi, store, result.taskId);
+    expect(coordination.finish).toHaveBeenCalledExactlyOnceWith("killed");
+    expect(getAgentCapacity(fakePi).snapshot()).toMatchObject({ activeChildren: 0, residentChildren: 0 });
+    expect(store.getTask(result.taskId)?.status).toBe("killed");
+  });
+});
+
 describe("spawnLocalAgent — fork-only runtime", () => {
   it("缺少持久父 session 时拒绝启动", async () => {
     await expect(

@@ -305,6 +305,24 @@ describe("registers cross-type tools at session_start", () => {
     expect(pi.registerTool).toHaveBeenCalledTimes(3);
   });
 
+  it("reaps a live leaf before resetting TaskStore even when localagent shutdown would run later", async () => {
+    const pi = createFakePi();
+    tasksExtension(pi as unknown as Parameters<typeof tasksExtension>[0]);
+    fireEvent(pi, "session_start", {}, { sessionManager: { getSessionId: () => "leaf-shutdown" } });
+    const store = getDefaultTaskStore();
+    const order: string[] = [];
+    const abort = vi.fn(async () => { expect(store.getTask("managed")).toBeDefined(); order.push("abort"); });
+    const dispose = vi.fn(() => { order.push("dispose"); });
+    const finish = vi.fn(() => { expect(abort).toHaveBeenCalled(); expect(dispose).toHaveBeenCalled(); order.push("settle"); return { logicalTaskId: "logical", logicalStatus: "cancelled" }; });
+    const task = { id: "managed", type: "local_agent", status: "running", description: "managed", startTime: 0, outputFile: join(tmpRoot, "managed.output"), outputOffset: 0, notified: false,
+      agentType: "__fork__", session: { abort, dispose }, closeInput: vi.fn(), cleanup: vi.fn(), coordination: { finish } } as unknown as TaskStateBase;
+    store.set(() => ({ managed: task }));
+    await Promise.all(fireEvent(pi, "session_shutdown", {}, {}) as Promise<unknown>[]);
+    expect(order).toEqual(["abort", "dispose", "settle"]);
+    expect(finish).toHaveBeenCalledExactlyOnceWith("killed");
+    expect(store.get()).toEqual({});
+  });
+
   it("session_shutdown also resets the taskTypeRegistry", async () => {
     const { _resetTaskTypeRegistryForTest, registerTaskType, getTaskType } = await import(
       "./taskTypeRegistry.js"

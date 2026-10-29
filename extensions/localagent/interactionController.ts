@@ -37,6 +37,8 @@ export function createInteractionController(options: {
   let dispatchTail = new Promise<void>((resolve) => { initialReady = resolve; });
   const runs = new Set<Promise<unknown>>();
   const pending = new Map<string, Pending>();
+  const usedSubmissionIds = new Set<string>();
+  const observers = new Map<string, (submission: ConversationSubmission) => void>();
   // Queue notifications do not contain submission ids. Attribute only events
   // emitted by this exact SDK input dispatch, not unrelated queue drains.
   const dispatchContext = new AsyncLocalStorage<Pending>();
@@ -44,6 +46,8 @@ export function createInteractionController(options: {
   const wake = (): void => { for (const fn of [...changed]) fn(); changed.clear(); };
   const save = (submission: ConversationSubmission): void => {
     options.conversations?.submission(options.taskId, options.generation, submission);
+    try { observers.get(submission.id)?.({ ...submission }); }
+    catch (error) { logError(error, "submission observer"); }
   };
   const alive = (): boolean => open && options.isCurrent();
   const control: ConversationControl = {
@@ -57,20 +61,28 @@ export function createInteractionController(options: {
         save(p.submission); p.reject(reason);
       }
       pending.clear();
+      observers.clear();
       session = undefined;
       wake();
     },
-    submit(text) {
+    submit(text, metadata) {
       const body = text.trim();
       if (!body) return Promise.resolve({ accepted: false, error: "请输入消息" });
       if (body.startsWith("/")) return Promise.resolve({ accepted: false, error: "子会话只接收自然语言，不执行斜杠控制命令" });
       if (!alive()) return Promise.resolve({ accepted: false, error: "任务已结束或正在结束，消息未发送" });
-      const submission: ConversationSubmission = { id: options.taskId + ":" + (++serial), text: body, status: "submitting" };
+      let submissionId = metadata?.messageId;
+      if (submissionId && usedSubmissionIds.has(submissionId)) return Promise.resolve({ accepted: false, error: "消息 ID 已被本次执行使用，未覆盖已有提交" });
+      if (!submissionId) {
+        do { submissionId = options.taskId + ":" + (++serial); } while (usedSubmissionIds.has(submissionId));
+      }
+      usedSubmissionIds.add(submissionId);
+      const submission: ConversationSubmission = { id: submissionId, text: body, status: "submitting" };
+      if (metadata?.onStatus) observers.set(submission.id, metadata.onStatus);
       save(submission);
       let release!: () => void;
       const preflight = new Promise<void>((resolve) => { release = resolve; });
-      let receipt!: (value: { accepted: boolean; error?: string }) => void;
-      const received = new Promise<{ accepted: boolean; error?: string }>((resolve) => { receipt = resolve; });
+      let receipt!: (value: { accepted: boolean; error?: string; submissionId?: string }) => void;
+      const received = new Promise<{ accepted: boolean; error?: string; submissionId?: string }>((resolve) => { receipt = resolve; });
       let acknowledged = false;
       let started = false;
       const item: Pending = {
@@ -82,7 +94,7 @@ export function createInteractionController(options: {
           if (submission.status !== "entered") submission.status = state === "handled" ? "handled" : "queued";
           save(submission);
           if (state === "handled") pending.delete(submission.id);
-          receipt({ accepted: true }); release(); wake();
+          receipt({ accepted: true, ...(metadata ? { submissionId: submission.id } : {}) }); release(); wake();
         },
         reject(error) {
           if (submission.status !== "cancelled") submission.status = "failed";
@@ -99,7 +111,8 @@ export function createInteractionController(options: {
         let operation: Promise<unknown>;
         try {
           const target = session;
-          operation = Promise.resolve(dispatchContext.run(item, () => target.prompt(body, {
+          const input = metadata ? `[coordinator_message messageId=${submission.id} targetVersion=${metadata.targetVersion ?? "unmanaged"}]\n${body}` : body;
+          operation = Promise.resolve(dispatchContext.run(item, () => target.prompt(input, {
             streamingBehavior: "steer", expandPromptTemplates: false,
             preflightResult: (state) => { if (typeof state !== "boolean") item.acknowledge(state); },
           })));

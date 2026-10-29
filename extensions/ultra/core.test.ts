@@ -71,7 +71,7 @@ describe("Ultra task_agent activation planning", () => {
     const active = ["read", "exit_plan_mode"];
     const available = ["read", "exit_plan_mode", "task_agent"];
 
-    expect(getUltraWorkflowState(active, available)).toBe("paused-plan-mode");
-    expect(toolsForUltraTaskAgentActivation(active, available)).toBeUndefined();
+    expect(getUltraWorkflowState(active, available, true)).toBe("paused-plan-mode");
+    expect(toolsForUltraTaskAgentActivation(active, available, true)).toBeUndefined();
   });
 });

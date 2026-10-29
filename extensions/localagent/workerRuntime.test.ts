@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { buildWorkerRuntime } from "./workerRuntime.js";
 import type { FastModeState } from "../fast-mode/core.js";
 import { isForkWorker, registerForkWorker } from "./workerIdentity.js";
+import { setAgentMutationPaused, _resetAgentMutationPauseForTest } from "../shared/agentMutationPause.js";
+afterEach(() => _resetAgentMutationPauseForTest());
 
 function harness(read: () => FastModeState, oauth = true) {
   const handlers = new Map<string, (...args: any[]) => any>();
@@ -44,6 +46,20 @@ describe("leaf worker runtime", () => {
     expect(call({ toolName, input: { team_name: "x", name: "y" } })).toMatchObject({ block: true });
     expect(call({ toolName: "read", input: {} })).toBeUndefined();
     expect(h.handlers.has("session_start")).toBe(false);
+  });
+
+  it("honors a root Plan transition in already running workers without changing tool declarations", () => {
+    const h = harness(() => ({ enabled: false }));
+    const call = h.handlers.get("tool_call")!;
+    expect(call({ toolName: "write", input: {} })).toBeUndefined();
+    setAgentMutationPaused(true);
+    expect(call({ toolName: "write", input: {} })).toMatchObject({ block: true });
+    expect(call({ toolName: "bash", input: { command: "echo x > a.txt" } })).toMatchObject({ block: true });
+    expect(call({ toolName: "mcp__server__mutate", input: {} })).toMatchObject({ block: true });
+    expect(call({ toolName: "read", input: {} })).toBeUndefined();
+    expect(call({ toolName: "bash", input: { command: "git status --short" } })).toBeUndefined();
+    setAgentMutationPaused(false);
+    expect(call({ toolName: "write", input: {} })).toBeUndefined();
   });
 
   it("worker identity is session-scoped, survives empty history, and releases idempotently", () => {

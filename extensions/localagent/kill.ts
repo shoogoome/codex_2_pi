@@ -66,6 +66,9 @@ export async function killLocalAgentTask(
     logError(e, "killLocalAgent flush");
   }
 
+  let coordinationExtra: Record<string, unknown> = {};
+  try { coordinationExtra = t.coordination?.finish("killed") ?? {}; }
+  catch (e) { logError(e, "killLocalAgent coordination"); coordinationExtra = { coordinationError: String(e) }; }
   try {
     notifyTaskTerminal(pi, store, {
       taskId,
@@ -75,7 +78,7 @@ export async function killLocalAgentTask(
       outputFile: t.outputFile,
       toolUseId: t.toolUseId,
       triggerTurn: true,
-      extra: { agentType: t.agentType, ...getProgress(taskId) },
+      extra: { agentType: t.agentType, ...getProgress(taskId), ...coordinationExtra },
     });
   } catch (e) {
     logError(e, "killLocalAgent notify");

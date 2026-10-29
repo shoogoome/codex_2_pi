@@ -1,12 +1,12 @@
 // Shared multi-agent capacity controller.
 //
 // The root leader is not represented as a Task, so configured limits include
-// one implicit leader slot. Defaults mirror Codex: at most 6 resident threads
-// and 4 concurrently executing threads per root session, which leaves 5
-// resident / 3 executing child-agent slots for localagent + teammate combined.
+// one implicit leader slot. Defaults allow 9 resident and 9 concurrently
+// executing threads per root session: 8 child-agent slots shared by
+// localagent + teammate. Environment overrides also include the leader.
 
-export const DEFAULT_AGENT_MAX_THREADS = 6;
-export const DEFAULT_AGENT_MAX_CONCURRENT = 4;
+export const DEFAULT_AGENT_MAX_THREADS = 9;
+export const DEFAULT_AGENT_MAX_CONCURRENT = 9;
 export const AGENT_MAX_THREADS_ENV = "PI_AGENT_MAX_THREADS";
 export const AGENT_MAX_CONCURRENT_ENV = "PI_AGENT_MAX_CONCURRENT";
 

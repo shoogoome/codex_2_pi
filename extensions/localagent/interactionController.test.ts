@@ -70,6 +70,17 @@ it("keeps FIFO identities for repeated text, queuing the next without waiting fo
   processing.resolve(); h.initial.resolve(); await h.done;
 });
 
+it("does not let caller message IDs collide with UI submissions or replace their FIFO records", async () => {
+  const h = harness();
+  h.prompt.mockImplementation((_text, opts) => { opts.preflightResult("handled"); return Promise.resolve(); });
+  expect(await h.controller.control.submit("model", { messageId: "a:1", targetVersion: 1 })).toMatchObject({ accepted: true, submissionId: "a:1" });
+  expect((await h.controller.control.submit("collision", { messageId: "a:1" })).accepted).toBe(false);
+  expect((await h.controller.control.submit("UI")).accepted).toBe(true);
+  expect(h.store.get("a")!.submissions.map(s => s.id)).toEqual(["a:1", "a:2"]);
+  expect(h.store.get("a")!.submissions.map(s => s.text)).toEqual(["model", "UI"]);
+  h.initial.resolve(); await h.done;
+});
+
 it("records handled extensions distinctly from entered messages, including legacy boolean preflight", async () => {
   const h = harness();
   h.prompt.mockImplementationOnce((_text, opts) => { opts.preflightResult(true); return Promise.resolve(); });

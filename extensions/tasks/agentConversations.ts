@@ -49,8 +49,13 @@ export interface ConversationReadingState {
   top: number;
   initialized?: boolean;
 }
+export interface SubmissionMetadata {
+  messageId: string;
+  targetVersion?: number;
+  onStatus?(submission: ConversationSubmission): void;
+}
 export interface ConversationControl {
-  submit(text: string): Promise<{ accepted: boolean; error?: string }>;
+  submit(text: string, metadata?: SubmissionMetadata): Promise<{ accepted: boolean; error?: string; submissionId?: string }>;
   close(reason: string): void;
   getToolRenderers?(name: string): unknown;
 }

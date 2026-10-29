@@ -19,6 +19,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 | `/plan [on\|off]`（`Alt+P`） | plan-mode | 进入/退出只读规划闸门 |
 | `/profile [save\|apply\|delete\|<name>]` | profiles | 保存/切换模型+工具+thinking+审批的命名预设 |
 | `/resume-picker [--all] [过滤词]`, `/search <关键词>` | resume-picker | 恢复历史会话、跨项目全文检索会话（改名避让 pi 内置 `/resume`) |
+| `/coordinator [on\|off\|status]` | coordinator | 手动开启主会话沟通/派发/验收模式，具体执行交给一次性 LocalAgent；不隐藏既有工具，另支持 `--coordinator` / `PI_COORDINATOR_MODE` |
 | `/autopilot [on [目标]\|off\|status]` | autopilot | 自主续跑控制器 |
 | `/loop [interval] <prompt>`、`/loop list`、`/loop cancel <id\|all>` | loop | 定时重复运行提示词或斜杠命令；创建后立即执行一次 |
 | `/effort [status\|off\|minimal\|low\|medium\|high\|xhigh\|max\|ultra]`、`/model`、`Alt+,` / `Alt+.` | effort + ultra | 两级选择 thinking；Ultra 为 Sol/Terra 开启 wire max、自动激活 `task_agent` 与主动并行 workflow（Plan 模式暂停） |
@@ -58,6 +59,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 ## 模型可调用的工具（非命令）
 
 - **task_agent**（localagent）：默认从当前活动上下文精简 fork 后台子 agent，继承启动时主会话 provider/model/thinking，Fast/UltraFast 按请求动态跟随主会话，终态自动回传最终回答。fork 是叶子 worker，不能创建其他 agent、teammate 或 team；主会话传 `team_name`+`name` 可改为创建长生命周期 teammate。
+- **coordinator_task / localagent_message / localagent_report**（coordinator）：可交接逻辑任务账本、主模型定向纠偏及运行时绑定的 worker 报告；交付仍需主会话验收，阻塞后交接释放，详见 `docs/extensions/coordinator.md`。
 - **task_bash**（localshell）：后台执行 shell 命令（超时自动转后台）。
 - **task_status / task_kill / task_list**（tasks）：任务框架的查询与管理。
 - **team_create / send_message / request_plan_approval / team_delete / team_plan_approve** + team task 工具（teammate）：`name@team` 隔离、自动结果、消息 ACK/replay、硬写审批、共享任务与 fail-closed resume。
@@ -77,6 +79,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **控制“能不能执行某工具/命令”**：`/approvals`（规则 + default/acceptEdits/bypass 模式，保护 .git/.pi/~/.ssh，拦 rm -rf/sudo 等）。
 - **人工检查本会话代码修改**：对话界面 `Ctrl+R` 或 `/changes`，逐文件看相对 HEAD 的完整差异，`d` 确认完成仅隐藏当前版本、不是提交；下次修改重新出现。按 `o` 可切换当前目录和跨目录仓库模式；想让模型评审则用 `/review`，整个工作树文本差异用 `/diff`。
 - **想先看方案再动手**：`/plan`（只读探查→提交计划→批准后恢复写工具）。
+- **主会话只管沟通、派发和验收，具体工作交给 worker**：`/coordinator on`（也支持 CLI/env，默认关闭）；保留既有工具，按逻辑任务和文件责任协作，详见 `docs/extensions/coordinator.md`。与 `/autopilot` 自动续跑不同，也不等于长期 teammate。
 - **想让 agent 不停手连续推进长任务**：`/autopilot on [目标]`（有预算/轮数/收益递减停止）。
 - **想定时轮询状态或重复执行命令**：`/loop [interval] <prompt>`（会立即执行一次，后续仅在空闲时触发）。
 - **切回过去的会话 / 找以前聊过的内容**：`/resume-picker`、`/search`(pi 内置 `/resume` 也能朴素切换会话)。

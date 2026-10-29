@@ -6,20 +6,24 @@ import {
 } from "./agentCapacity.js";
 
 describe("AgentCapacity", () => {
-  it("uses Codex-style limits including one implicit leader", () => {
+  it("allows eight resident and executing children plus one implicit leader", async () => {
     const capacity = createAgentCapacity();
     expect(capacity.snapshot()).toEqual({
-      maxThreads: 6,
-      maxConcurrent: 4,
+      maxThreads: 9,
+      maxConcurrent: 9,
       residentChildren: 0,
       activeChildren: 0,
       queuedExecutions: 0,
     });
 
-    const leases = Array.from({ length: 5 }, () => capacity.reserveResident());
-    expect(() => capacity.reserveResident()).toThrow(/6 total threads including the leader/);
+    const leases = Array.from({ length: 8 }, () => capacity.reserveResident());
+    const executing = await Promise.all(Array.from({ length: 8 }, () => capacity.acquireExecution()));
+    expect(capacity.snapshot()).toMatchObject({ residentChildren: 8, activeChildren: 8 });
+    expect(() => capacity.reserveResident()).toThrow(/9 total threads including the leader/);
     leases[0]!.release();
-    expect(() => capacity.reserveResident()).not.toThrow();
+    const replacement = capacity.reserveResident();
+    for (const lease of [...leases, ...executing, replacement]) lease.release();
+    expect(capacity.snapshot()).toMatchObject({ residentChildren: 0, activeChildren: 0 });
   });
 
   it("queues execution above three children and grants in FIFO order", async () => {
@@ -49,6 +53,36 @@ describe("AgentCapacity", () => {
     third.release();
     fifth.release();
     expect(capacity.snapshot().activeChildren).toBe(0);
+  });
+
+  it("keeps twelve residents while sharing eight execution slots", async () => {
+    const capacity = createAgentCapacity(resolveAgentCapacityOptions({
+      [AGENT_MAX_THREADS_ENV]: "13",
+      [AGENT_MAX_CONCURRENT_ENV]: "9",
+    }));
+    const residents = Array.from({ length: 12 }, () => capacity.reserveResident());
+    const active = await Promise.all(Array.from({ length: 8 }, () => capacity.acquireExecution()));
+    expect(() => capacity.reserveResident()).toThrow(/13 total/);
+    const waiting = capacity.acquireExecution();
+    expect(capacity.snapshot()).toMatchObject({ residentChildren: 12, activeChildren: 8, queuedExecutions: 1 });
+    active[0]!.release();
+    const next = await waiting;
+    expect(capacity.snapshot()).toMatchObject({ residentChildren: 12, activeChildren: 8, queuedExecutions: 0 });
+    for (const lease of [...residents, ...active, next]) lease.release();
+  });
+
+  it("does not let late leases subtract from a new generation", async () => {
+    const capacity = createAgentCapacity();
+    const oldResident = capacity.reserveResident();
+    const oldActive = await capacity.acquireExecution();
+    capacity.reset();
+    const resident = capacity.reserveResident();
+    const active = await capacity.acquireExecution();
+    oldResident.release();
+    oldActive.release();
+    expect(capacity.snapshot()).toMatchObject({ residentChildren: 1, activeChildren: 1 });
+    resident.release();
+    active.release();
   });
 
   it("removes an aborted execution waiter without consuming capacity", async () => {
@@ -88,6 +122,6 @@ describe("AgentCapacity", () => {
     expect(resolveAgentCapacityOptions({
       [AGENT_MAX_THREADS_ENV]: "bad",
       [AGENT_MAX_CONCURRENT_ENV]: "0",
-    })).toEqual({ maxThreads: 6, maxConcurrent: 4 });
+    })).toEqual({ maxThreads: 9, maxConcurrent: 9 });
   });
 });

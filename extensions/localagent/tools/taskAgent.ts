@@ -1,6 +1,7 @@
 import { taskOriginFromContext } from "../../tasks/origin.js";
 import { getFastModeReader } from "../../fast-mode/handle.js";
 import { isForkWorker } from "../workerIdentity.js";
+import { getCoordinator, type WorkerBridge } from "../../coordinator/handle.js";
 import { isInForkChild } from "../recursionGuard.js";
 import type {
   AgentToolResult,
@@ -69,6 +70,7 @@ const TaskAgentParams = Type.Object(
     description: Type.String({ description: "Short (3-5 word) task description for status displays." }),
     prompt: Type.String({ description: "The task for the forked agent to perform." }),
     cwd: Type.Optional(Type.String({ description: "Override working directory for the forked agent." })),
+    coordinator_task_id: Type.Optional(Type.String({ description: "Logical outcome contract created by coordinator_task. Required for forks while coordinator mode is active." })),
     subagent_type: Type.Optional(
       Type.String({
         description:
@@ -185,6 +187,7 @@ export function buildTaskAgentTool(
         prompt: string;
         cwd?: string;
         subagent_type?: string;
+        coordinator_task_id?: string;
         team_name?: string;
         name?: string;
       } & Record<string, unknown>;
@@ -217,6 +220,7 @@ export function buildTaskAgentTool(
       const teamName = params.team_name?.trim();
       const agentName = params.name?.trim();
       if (params.team_name !== undefined || params.name !== undefined) {
+        if (params.coordinator_task_id) return errResult("coordinator_task_id is only supported for one-shot LocalAgent forks");
         if (!teamName || !agentName) {
           return errResult("team_name and name must both be provided to spawn a teammate");
         }
@@ -346,11 +350,19 @@ export function buildTaskAgentTool(
         signal.addEventListener("abort", onAbort, { once: true });
       }
 
+      let coordination: WorkerBridge | undefined;
       try {
+        const coordinator = getCoordinator(pi);
+        if (coordinator?.active() && !params.coordinator_task_id) throw new Error("Coordinator mode requires coordinator_task_id; create a complete contract with coordinator_task first");
+        if (params.coordinator_task_id) {
+          if (!coordinator) throw new Error("coordinator extension is not loaded");
+          coordination = coordinator.reserve(params.coordinator_task_id, cwd);
+        }
         const runtime = inheritParentRuntime(pi, ctx);
         const result = await _spawner(pi, store, {
           ...origin,
-          prompt: params.prompt,
+          prompt: coordination ? coordination.prompt + "\n\nSpecific assignment:\n" + params.prompt : params.prompt,
+          coordination,
           ctxMessages: (ctx as { messages?: readonly unknown[] }).messages ?? [],
           cwd,
           description: params.description,
@@ -382,6 +394,7 @@ export function buildTaskAgentTool(
           },
         };
       } catch (e) {
+        coordination?.rollback();
         return errResult(`task_agent failed: ${(e as Error).message ?? String(e)}`);
       } finally {
         // Detach the abort listener regardless of whether the agent finished

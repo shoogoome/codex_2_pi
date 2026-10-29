@@ -58,6 +58,12 @@ cwd          可选，覆盖工作目录
 - `request_plan_approval` / `team_plan_approve`
 - `team_task_create` / `team_task_update` / `team_task_list` / `team_task_get`
 
+## 主会话协调模式
+
+可用 `/coordinator on|off|status`、CLI `--coordinator` / `--coordinator=false`、环境变量 `PI_COORDINATOR_MODE` 手动选择，默认关闭，与模型/effort 无关。主会话负责沟通、逻辑任务、派发、纠偏和验收，具体执行优先交给一次性 LocalAgent；保留所有既有工具，不自动激活被停用的 task_agent。协调模式与 Ultra 同开时使用统一职责策略，Plan/审批/叶子边界不变。
+
+`coordinator_task` 创建/查询/更新任务；`task_agent(coordinator_task_id=...)` 绑定执行；`localagent_message` 定向 steering；`localagent_report` 由真实 worker 绑定身份报告。逻辑任务跨执行实例保存交接，交付不是验收，真正阻塞时结束释放，不变成长驻 teammate。共享目录只做派发责任协调，不提供写入沙箱；有在途受管理执行/预留时暂缓会话树导航，不自动 kill。完整开关优先级、消息状态、预算和恢复限制见 [coordinator.md](coordinator.md)。
+
 ## Ultra workflow
 
 对支持的 Codex Sol/Terra 模型启用 `/effort ultra` 后：
@@ -118,10 +124,10 @@ spawn 时会把 role 定义的安全摘要写入 teammate identity。resume 时�
 
 localagent 与 teammate 共用根 session controller：
 
-- `PI_AGENT_MAX_THREADS`：总驻留线程，默认 `6`，包含 leader；
-- `PI_AGENT_MAX_CONCURRENT`：同时执行线程，默认 `4`，包含 leader。
+- `PI_AGENT_MAX_THREADS`：总驻留线程，默认 `9`，包含 leader；
+- `PI_AGENT_MAX_CONCURRENT`：同时执行线程，默认 `9`，包含 leader。
 
-因此默认最多 5 个驻留 child、3 个正在执行的 child。teammate idle 时释放 execution lease，但保留 resident lease；下一轮按 FIFO 重新获取 execution lease。完成、失败、取消、kill、shutdown 和根 session 切换都会释放或重置配额。
+因此默认最多 8 个驻留 child、8 个正在执行的 child。驻留名额满时新建报错，执行名额满时按 FIFO 排队；并发总数自动限制为不超过驻留总数。例如设置 `PI_AGENT_MAX_THREADS=13 PI_AGENT_MAX_CONCURRENT=9` 可驻留 12 个 child、同时执行 8 个。环境变量在启动时读取，无效或非正数按原解析规则回退到默认值，不支持运行中热更新。容量是上限，不是必须派发的数量。teammate idle 时释放 execution lease，但保留 resident lease；下一轮按 FIFO 重新获取 execution lease。完成、失败、取消、kill、shutdown 和根 session 切换都会释放或重置配额。
 
 ## 当前边界
 

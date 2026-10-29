@@ -120,8 +120,9 @@ export type UltraWorkflowState =
 export function getUltraWorkflowState(
   activeTools: readonly string[],
   availableTools: readonly string[],
+  planPaused = false,
 ): UltraWorkflowState {
-  if (activeTools.includes(EXIT_PLAN_MODE_TOOL_NAME)) return "paused-plan-mode";
+  if (planPaused) return "paused-plan-mode";
   if (!availableTools.includes(TASK_AGENT_TOOL_NAME)) return "paused-task-agent-unavailable";
   if (!activeTools.includes(TASK_AGENT_TOOL_NAME)) return "paused-task-agent-inactive";
   return "active";
@@ -131,8 +132,9 @@ export function getUltraWorkflowState(
 export function toolsForUltraTaskAgentActivation(
   activeTools: readonly string[],
   availableTools: readonly string[],
+  planPaused = false,
 ): string[] | undefined {
-  if (getUltraWorkflowState(activeTools, availableTools) !== "paused-task-agent-inactive") {
+  if (getUltraWorkflowState(activeTools, availableTools, planPaused) !== "paused-task-agent-inactive") {
     return undefined;
   }
   return [...activeTools, TASK_AGENT_TOOL_NAME];

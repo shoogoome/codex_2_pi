@@ -98,6 +98,7 @@
 | `pets` | Codex 风格终端宠物 widget，依 agent 状态切换动画，Kitty graphics/tmux passthrough 可选，其余回退 block-art。 | （无命令，自动 widget） |
 | `goal` | Codex 风格 thread goal：持久目标 + 预算消耗 + 续跑提示，随 session 保存。 | 工具 `get_goal`/`create_goal`/`update_goal` · `/goal <objective>` · `/goal resume` |
 | `side` | `/side` 在 Pi overlay 中用当前 leaf 的 compaction-aware 上下文启动临时 side 对话，关闭窗口即丢弃。 | `/side [message]` |
+| `coordinator` | 主会话协调沟通/派发/验收，一次性 worker 执行；保留既有工具，任务可交接、定向纠偏、显式确认与独立验收。详见 [coordinator.md](extensions/coordinator.md)。 | `/coordinator [on\|off\|status]` · `--coordinator` · `PI_COORDINATOR_MODE` · `coordinator_task`/`localagent_message`/`localagent_report` |
 | `localagent` | 默认从当前持久会话完整 fork 后台子 agent；精确继承主会话 provider/model/thinking，终态自动回传最终回答。传 `team_name`+`name` 改为创建长生命周期 teammate。 | 工具 `task_agent` |
 | `localshell` | 注册 `task_bash` 工具 + LocalShellTask；前台命令零额外通知，超时自动转后台，后台终态默认只在安全边界更新 TUI，Bash 调用/输出样式对齐 Claude UI。 | 工具 `task_bash` / `task_status` / `task_kill`；`PI_TASKS_WAKE_ON_BACKGROUND=1` 可主动唤醒 LLM |
 | `tasks` | 任务框架底座：TaskStore、背景 agents panel、查询管理工具，以及根 session 共享 resident/execution 容量控制。 | 工具 `task_status`/`task_kill`/`task_list` |

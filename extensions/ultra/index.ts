@@ -1,6 +1,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getCoordinator } from "../coordinator/handle.js";
+import { isForkWorker } from "../localagent/workerIdentity.js";
+import { applyCoordinatorPolicy } from "../shared/agentWorkflowPolicy.js";
+import { getAgentMutationPause } from "../shared/agentMutationPause.js";
 import {
-  EXIT_PLAN_MODE_TOOL_NAME,
   type NativeThinkingLevel,
   TASK_AGENT_TOOL_NAME,
   ULTRA_IGNITION_WIDGET_KEY,
@@ -61,15 +64,16 @@ export default function ultraExtension(pi: ExtensionAPI): void {
   }
 
   function workflowState(): UltraWorkflowState {
-    return getUltraWorkflowState(pi.getActiveTools(), availableToolNames());
+    return getUltraWorkflowState(pi.getActiveTools(), availableToolNames(), getAgentMutationPause().paused);
   }
 
   function ensureTaskAgentForUltra(): WorkflowActivationResult {
+    if (getCoordinator(pi)?.enabled()) return { state: workflowState(), autoEnabled: false };
     const activeTools = pi.getActiveTools();
     const availableTools = availableToolNames();
-    const nextTools = toolsForUltraTaskAgentActivation(activeTools, availableTools);
+    const nextTools = toolsForUltraTaskAgentActivation(activeTools, availableTools, getAgentMutationPause().paused);
     if (!nextTools) {
-      const state = getUltraWorkflowState(activeTools, availableTools);
+      const state = getUltraWorkflowState(activeTools, availableTools, getAgentMutationPause().paused);
       if (state === "paused-plan-mode") releaseTaskAgentAddedByUltra();
       return { state, autoEnabled: false };
     }
@@ -84,19 +88,20 @@ export default function ultraExtension(pi: ExtensionAPI): void {
   }
 
   function releaseTaskAgentAddedByUltra(): void {
+    if (getCoordinator(pi)?.enabled()) return;
     if (!taskAgentAddedByUltra) return;
     const activeTools = pi.getActiveTools();
     if (!activeTools.includes(TASK_AGENT_TOOL_NAME)) {
       // Plan mode temporarily hides the tool but later restores its pre-plan set.
       // Retain ownership so the first non-plan turn can finish the cleanup.
-      if (!activeTools.includes(EXIT_PLAN_MODE_TOOL_NAME)) taskAgentAddedByUltra = false;
+      if (!getAgentMutationPause().paused) taskAgentAddedByUltra = false;
       return;
     }
     try {
       pi.setActiveTools(activeTools.filter((name) => name !== TASK_AGENT_TOOL_NAME));
       // Plan mode can later restore its captured pre-plan set, including this tool.
       // Retain ownership until a non-plan turn confirms that cleanup is complete.
-      taskAgentAddedByUltra = activeTools.includes(EXIT_PLAN_MODE_TOOL_NAME);
+      taskAgentAddedByUltra = getAgentMutationPause().paused;
     } catch {
       // Keep ownership so a later lifecycle hook can retry without touching other tools.
     }
@@ -332,7 +337,12 @@ export default function ultraExtension(pi: ExtensionAPI): void {
       ? upsertMultiAgentModePrompt(event.systemPrompt, ultraActive ? "proactive" : "explicit")
       : event.systemPrompt;
     return {
-      systemPrompt: upsertUltraWorkflowPrompt(modePrompt, workflowActive),
+      systemPrompt: applyCoordinatorPolicy(upsertUltraWorkflowPrompt(modePrompt, workflowActive), {
+        worker: isForkWorker(ctx.sessionManager.getSessionFile?.()),
+        enabled: getCoordinator(pi)?.enabled() ?? false,
+        effective: getCoordinator(pi)?.active() ? "active" : "paused",
+        summary: getCoordinator(pi)?.ledger.summary(),
+      }),
     };
   });
 

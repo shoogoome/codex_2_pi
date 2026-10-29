@@ -1,4 +1,5 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type { WorkerBridge } from "../coordinator/handle.js";
 import type { TaskStateBase } from "../tasks/Task.js";
 
 export type AgentSource = "built-in" | "user" | "project";
@@ -57,6 +58,7 @@ export interface LocalAgentTaskState extends TaskStateBase {
   forkParentSessionFile?: string;
   /** 运行时句柄(不进 jsonl 持久化,但内存中需要持有以供 kill)。 */
   session?: AgentSession;
+  coordination?: WorkerBridge;
   cleanup?: () => void;
   /** Close input admission synchronously before abort/terminal disposal. */
   closeInput?: (reason: string) => void;

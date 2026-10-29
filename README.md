@@ -181,7 +181,13 @@ fork 子会话精确继承启动时主会话的 provider、model 对象和 think
 
 teammate 成员拥有独立持久 session，可在多轮消息间 idle，并在根 session 恢复时重建。成员用完整 `name@team` 路由：裸名称只有在 team 内（leader 侧则要求跨 team 唯一）才解析，广播也不会越 team。每轮最终回答和错误会自动注入 leader；成员间消息以 `message_sent → message_ack` 持久化，未 ACK 消息在 resume 后按序重放。写文件、变更 shell 和 MCP 调用由运行时硬门禁拦截，只有 `request_plan_approval` 获批后才在当前 turn 开放；恢复时若原 role 被删除或定义指纹变化则 fail-closed。`session_shutdown` 会挂起成员供下一会话重建；显式 `team_delete` 才执行 shutdown handshake 和超时强制清理。详见 [多 Agent 说明](docs/extensions/multi-agent.md)。
 
-根会话容量由 localagent 与 teammate 共用：默认最多 6 个驻留线程、4 个同时执行线程（都包含 leader，即最多 5 个驻留/3 个执行中的子 Agent）；可通过 `PI_AGENT_MAX_THREADS` 和 `PI_AGENT_MAX_CONCURRENT` 调整。teammate 仅在实际 turn 占执行槽，idle 时只占驻留槽；超过执行上限的工作按 FIFO 等待，完成、失败、kill 和 session 切换都会释放或重置配额。
+根会话容量由 localagent 与 teammate 共用：默认最多 9 个驻留线程、9 个同时执行线程（都包含 leader，即最多 8 个驻留/8 个执行中的子 Agent）；可通过 `PI_AGENT_MAX_THREADS` 和 `PI_AGENT_MAX_CONCURRENT` 调整。teammate 仅在实际 turn 占执行槽，idle 时只占驻留槽；驻留名额满时新建会报错，超过执行上限的工作按 FIFO 等待，完成、失败、kill 和 session 切换都会释放或重置配额。
+
+## `/coordinator` 主会话协调模式
+
+`/coordinator on|off|status`（无参数查看状态）手动选择协调模式；也支持 `pi --coordinator` / `--coordinator=false` 和启动环境变量 `PI_COORDINATOR_MODE=on|off`，默认关闭。主会话负责沟通、任务派发、纠偏和验收，一次性 LocalAgent 负责具体执行；不隐藏主会话或 worker 的既有工具，不改变模型/effort。
+
+通过 `coordinator_task` 管理可交接的逻辑任务，`task_agent` 用 `coordinator_task_id` 绑定；`localagent_message` 定向纠偏，worker 用 `localagent_report` 上报。共享目录按具体路径单写者调度，不是文件沙箱；blocked 交接后释放，delivered 仍需主会话验收。在途受管理任务存在时暂缓会话树切分支，等待结束或显式停止后再切换。模式与 Ultra 独立，Plan/审批/叶子边界继续有效。详见 [协调模式](docs/extensions/coordinator.md)。
 
 ## `/effort` 与 Codex Ultra
 

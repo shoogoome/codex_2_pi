@@ -8,6 +8,8 @@ import {
 } from "./core.js";
 import { getUltraHandle } from "./handle.js";
 import ultraExtension from "./index.js";
+import { setAgentMutationPaused, _resetAgentMutationPauseForTest } from "../shared/agentMutationPause.js";
+afterEach(() => _resetAgentMutationPauseForTest());
 
 type Model = { provider: string; api: string; id: string };
 
@@ -21,6 +23,7 @@ interface HarnessOptions {
 }
 
 function createHarness(options: HarnessOptions = {}) {
+  setAgentMutationPaused(options.activeTools?.includes("exit_plan_mode") ?? false);
   let current = options.current ?? "medium";
   let model = options.model ?? { provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.6-sol" };
   let activeTools = [...(options.activeTools ?? ["read", "task_agent"])];
@@ -80,6 +83,7 @@ function createHarness(options: HarnessOptions = {}) {
     getCurrent: () => current,
     getActiveTools: () => [...activeTools],
     setActiveTools: (tools: string[]) => {
+      setAgentMutationPaused(tools.includes("exit_plan_mode"));
       activeTools = [...tools];
     },
     setModel: (next: Model) => {

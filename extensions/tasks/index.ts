@@ -57,6 +57,7 @@ import { loadPiUiRuntime, type PiUiRuntime } from "../shared/pi-ui-runtime.js";
 import type { TaskPanelEntry } from "./ui/taskPanelRender.js";
 import type { TaskOutputOverlayTheme } from "./ui/taskOutputOverlayRender.js";
 import type { LocalAgentTaskState } from "../localagent/types.js";
+import { killLocalAgentTask } from "../localagent/kill.js";
 import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 
 const WIDGET_KEY = "tasks-bg-agents";
@@ -308,6 +309,12 @@ export default function tasksExtension(
 
   pi.on("session_shutdown", async () => {
     handle.conversations.reset();
+    // Shutdown handlers run in extension order. Reap leaves before forgetting
+    // their runtime handles, even if localagent was loaded after tasks.
+    const reaped = await Promise.allSettled(Object.values(store.get())
+      .filter((task) => task.type === "local_agent" && task.status === "running")
+      .map((task) => killLocalAgentTask(pi, store, task.id)));
+    for (const result of reaped) if (result.status === "rejected") logError(result.reason, "tasks shutdown leaf cleanup");
     unsubPanel?.();
     unsubPanel = undefined;
     panelVisible = false;
