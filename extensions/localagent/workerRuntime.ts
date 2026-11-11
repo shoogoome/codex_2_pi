@@ -4,6 +4,7 @@ import type { FastModeReader } from "../fast-mode/handle.js";
 import { attachWorkerBridge, type WorkerBridge } from "../coordinator/handle.js";
 import { applyCoordinatorPolicy } from "../shared/agentWorkflowPolicy.js";
 import { getAgentMutationPause } from "../shared/agentMutationPause.js";
+import { getSessionLifetime } from "../shared/sessionLifetime.js";
 import { isWriteTool, isWriteBashCommand } from "../plan-mode/src/guard.js";
 
 export const FORK_FORBIDDEN_TOOLS = new Set(["task_agent", "team_create"]);
@@ -11,6 +12,9 @@ export const FORK_FORBIDDEN_TOOLS = new Set(["task_agent", "team_create"]);
 /** Worker-only hooks; deliberately does not initialize leader lifecycle handlers. */
 export function buildWorkerRuntime(readFast: FastModeReader, isOpen: () => boolean = () => true, coordination?: WorkerBridge): (pi: ExtensionAPI) => void {
   return (pi) => {
+    // Configured extensions (including async) load first. Update their shared
+    // handle in place so already captured tokens see closeWorker before dispose.
+    getSessionLifetime(pi).setOwnerGuard(isOpen);
     if (coordination) attachWorkerBridge(pi, coordination);
     pi.on("before_agent_start", event => ({ systemPrompt: applyCoordinatorPolicy(event.systemPrompt, { worker: true, enabled: false, effective: "off" }) }));
     // Inline factories load after configured extensions. This final input gate

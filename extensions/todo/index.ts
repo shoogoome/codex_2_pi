@@ -9,7 +9,7 @@ import {
   type PlanSnapshot,
   type UpdatePlanDetails,
 } from "./schema.js";
-import { getPlan, restorePlanFromBranch, setPlan, shouldShowRestoredOverlay, hasUnfinishedPlan } from "./state.js";
+import { createPlanState, restorePlanFromBranch, shouldShowRestoredOverlay, hasUnfinishedPlan } from "./state.js";
 
 const PROMPT_GUIDELINE = [
   "Use update_plan for non-trivial, multi-step, ambiguous, or long-running work, or when the user asks for more than one thing in a single prompt; do not use it for simple one-step tasks.",
@@ -20,11 +20,12 @@ const PROMPT_GUIDELINE = [
 ];
 
 export default function todoExtension(pi: ExtensionAPI) {
-  const overlay = new CodexPlanOverlay(getPlan);
+  const state = createPlanState();
+  const overlay = new CodexPlanOverlay(state.getPlan);
 
   function restore(ctx: ExtensionContext): PlanSnapshot | null {
     const snapshot = restorePlanFromBranch(ctx.sessionManager.getBranch());
-    setPlan(snapshot);
+    state.setPlan(snapshot);
     return snapshot;
   }
 
@@ -55,7 +56,7 @@ export default function todoExtension(pi: ExtensionAPI) {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const snapshot = normalizeUpdatePlanParams(params);
       pi.appendEntry<PlanSnapshot>(PLAN_CUSTOM_ENTRY, snapshot);
-      setPlan(snapshot);
+      state.setPlan(snapshot);
       if (ctx.hasUI) {
         overlay.setUICtx(ctx.ui);
         overlay.update({ holdCompleted: !hasUnfinishedPlan(snapshot) && snapshot.plan.length > 0 });
@@ -68,5 +69,8 @@ export default function todoExtension(pi: ExtensionAPI) {
   pi.on("session_tree", async (_event, ctx) => updateOverlayForRestored(ctx, restore(ctx)));
   pi.on("session_compact", async (_event, ctx) => updateOverlayForRestored(ctx, restore(ctx)));
   pi.on("agent_start", async () => overlay.hideCompletedHold());
-  pi.on("session_shutdown", async () => overlay.dispose());
+  pi.on("session_shutdown", async () => {
+    overlay.dispose();
+    state.clearPlan();
+  });
 }

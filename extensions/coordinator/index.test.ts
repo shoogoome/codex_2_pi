@@ -8,6 +8,7 @@ import { applyCoordinatorPolicy } from "../shared/agentWorkflowPolicy.js";
 import ultraExtension from "../ultra/index.js";
 import { getUltraHandle } from "../ultra/handle.js";
 import { setAgentMutationPaused, _resetAgentMutationPauseForTest } from "../shared/agentMutationPause.js";
+import { getSessionLifetime } from "../shared/sessionLifetime.js";
 
 type Handler = (event: any, ctx: any) => any;
 const instances: Array<{ fire(name: string): Promise<unknown> }> = [];
@@ -29,7 +30,7 @@ function harness(options: { cli?: boolean; file?: string; entries?: any[]; ultra
     getActiveTools: () => [...active], getAllTools: () => [...new Set([...active, "task_agent"])].map(name => ({ name })),
     setActiveTools: vi.fn((value: string[]) => { active = value; }),
     appendEntry: vi.fn((customType: string, data: any) => entries.push({ type: "custom", customType, data: structuredClone(data) })),
-    sendMessage: vi.fn(), setThinkingLevel: vi.fn((value: string) => { thinking = value; }), getThinkingLevel: () => thinking,
+    sendMessage: vi.fn(), sendUserMessage: vi.fn(), getCommands: vi.fn(() => [{ name: "skill:agent", source: "skill" }]), setThinkingLevel: vi.fn((value: string) => { thinking = value; }), getThinkingLevel: () => thinking,
   };
   const ctx: any = { cwd: "/tmp", hasUI: false, model: { provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.6-sol" }, ui: { notify: vi.fn(), setStatus: vi.fn() },
     sessionManager: { getSessionFile: () => file, getSessionId: () => file, getBranch: () => entries } };
@@ -44,7 +45,8 @@ function harness(options: { cli?: boolean; file?: string; entries?: any[]; ultra
   };
   const call = (name: string, params: any) => tools.get(name).execute("call", params, undefined, undefined, ctx);
   const command = (arg: string) => commands.get("coordinator").handler(arg, ctx);
-  const h = { pi, ctx, entries, file, fire, call, command, tools, handlers };
+  const agentCommand = (arg: string) => commands.get("agent").handler(arg, ctx);
+  const h = { pi, ctx, entries, file, fire, call, command, agentCommand, tools, handlers };
   instances.push(h);
   return h;
 }
@@ -55,6 +57,36 @@ afterEach(async () => {
 });
 const contract = { objective: "fix auth", acceptance: ["test passes"], nonGoals: [], writePaths: ["auth/a.ts"] };
 describe("coordinator extension", () => {
+  it.each(["修复 auth 超时", '调查 "含空格路径"\n保持只读', ""])(
+    "forwards /agent %j to native skill expansion without pasting instructions", async (args) => {
+      const h = harness({ cli: false });
+      await h.fire("session_start");
+      await h.agentCommand(args);
+      expect(h.pi.sendUserMessage).toHaveBeenCalledExactlyOnceWith(args ? `/skill:agent ${args}` : "/skill:agent", {
+        expandPromptTemplates: true, deliverAs: "followUp",
+      });
+      expect(h.pi.sendMessage).not.toHaveBeenCalled();
+      expect(h.pi.setActiveTools).not.toHaveBeenCalled();
+      expect(getCoordinator(h.pi)!.enabled()).toBe(false);
+    },
+  );
+  it("does not dispatch when the agent skill is filtered out", async () => {
+    const h = harness();
+    await h.fire("session_start");
+    h.pi.getCommands.mockReturnValue([]);
+    await h.agentCommand("inspect auth");
+    expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+    expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("未加载 agent Skill"), "error");
+  });
+  it("does not allow a worker to invoke the delegation shortcut", async () => {
+    const h = harness();
+    const unregister = registerForkWorker(h.file);
+    try {
+      await h.agentCommand("delegate again");
+      expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
+      expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("leaf worker"), "error");
+    } finally { unregister(); }
+  });
   it("registers source extension surfaces and never reduces tools or changes inference", async () => {
     const h = harness();
     await h.fire("session_start");
@@ -140,6 +172,31 @@ describe("coordinator extension", () => {
     expect((await h.call("coordinator_task", { action: "update", task_id: created.id, expected_revision: 0, patch: { objective: "new" } })).isError).toBe(true);
     expect((await h.call("localagent_report", { event: "delivered", event_id: "fake", payload: {} })).isError).toBe(true);
   });
+  it("binds one-off reports and acceptance while persistent mode stays off", async () => {
+    const h = harness({ cli: false });
+    await h.fire("session_start");
+    const handle = getCoordinator(h.pi)!;
+    const created = await h.call("coordinator_task", { action: "create", contract });
+    expect(created.isError).not.toBe(true);
+    const bridge = handle.reserve(created.details.id, "/tmp");
+    bridge.start("one-off-worker");
+    const child = harness();
+    attachWorkerBridge(child.pi, bridge);
+    const report = (event: string, event_id: string, payload: object) => child.tools.get("localagent_report").execute("r", { event, event_id, payload });
+    expect((await report("interface_change", "interface", { problem: "API decision", evidence: "caller mismatch", impact: "shared API", recommendation: "keep interface" })).isError).not.toBe(true);
+    expect(h.pi.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "coordinator/event" }), { triggerTurn: true });
+    expect((await report("delivered", "done", { modifiedFiles: ["auth/a.ts"], acceptance: ["test passes"], verification: "vitest: passed", risks: [], specialHandling: [], deviations: [], remaining: [] })).isError).not.toBe(true);
+    bridge.finish("completed");
+    const delivered = (await h.call("coordinator_task", { action: "get", task_id: created.details.id })).details;
+    expect(delivered.status).toBe("awaiting_review");
+    const accepted = await h.call("coordinator_task", { action: "update", task_id: created.details.id, expected_revision: delivered.revision, patch: { status: "accepted", reviewEvidence: "reviewed diff and test evidence" } });
+    expect(accepted.details.status).toBe("accepted");
+    expect(handle.enabled()).toBe(false);
+    expect(handle.active()).toBe(false);
+    expect(h.pi.setActiveTools).not.toHaveBeenCalled();
+    expect(h.pi.setThinkingLevel).not.toHaveBeenCalled();
+    expect(h.entries.some(e => e.customType === "coordinator/state" && e.data.enabled)).toBe(false);
+  });
   it("does not initialize or accept coordinator management inside a worker", async () => {
     const h = harness({ cli: true });
     const unregister = registerForkWorker(h.file);
@@ -212,6 +269,68 @@ describe("coordinator extension", () => {
       expect(diagnosticCount()).toBe(1);
       await h.fire("session_shutdown");
       expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+  it("does not create or poll a diagnostic timer while off, and restarts exactly once on enable", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({ cli: false });
+      await h.fire("session_start");
+      const getActive = vi.spyOn(h.pi, "getActiveTools");
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(30000);
+      expect(getActive).not.toHaveBeenCalled();
+      await h.command("on");
+      await h.command("on");
+      expect(vi.getTimerCount()).toBe(1);
+      await h.fire("session_compact");
+      expect(vi.getTimerCount()).toBe(1);
+      await h.command("off");
+      expect(vi.getTimerCount()).toBe(0);
+      await h.fire("session_compact");
+      expect(vi.getTimerCount()).toBe(0);
+      await h.command("on");
+      expect(vi.getTimerCount()).toBe(1);
+      await h.fire("session_shutdown");
+    } finally { vi.useRealTimers(); }
+  });
+  it("contains direct SDK invalidation without shutdown and never reports through stale UI", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({ cli: true });
+      await h.fire("session_start");
+      h.pi.getActiveTools = vi.fn(() => { throw new Error("This extension ctx is stale after session replacement or reload."); });
+      h.ctx.ui.notify.mockImplementation(() => { throw new Error("stale UI must not be called"); });
+      await expect(vi.advanceTimersByTimeAsync(10000)).resolves.toBeDefined();
+      expect(h.pi.getActiveTools).toHaveBeenCalledTimes(1);
+      expect(h.ctx.ui.notify).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+      // A late shutdown must clear local state without a worker EventBus query.
+      h.pi.events.emit = () => { throw new Error("stale EventBus"); };
+      await expect(h.fire("session_shutdown")).resolves.toBeDefined();
+    } finally { vi.useRealTimers(); }
+  });
+  it("reads a late worker guard without Pi calls and tolerates shared generation restart order", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({ cli: true });
+      const lifetime = getSessionLifetime(h.pi);
+      lifetime.restart(); // async session_start before coordinator.
+      await h.fire("session_start");
+      lifetime.restart(); // async session_start after coordinator.
+      const getActive = vi.spyOn(h.pi, "getActiveTools");
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(vi.getTimerCount()).toBe(1);
+      expect(getActive).toHaveBeenCalledTimes(1);
+      let open = true;
+      lifetime.setOwnerGuard(() => open);
+      open = false; // Worker dispose need not emit session_shutdown.
+      getActive.mockClear();
+      h.pi.events.emit = () => { throw new Error("stale EventBus"); };
+      await expect(vi.advanceTimersByTimeAsync(10000)).resolves.toBeDefined();
+      expect(getActive).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+      await h.fire("session_shutdown");
     } finally { vi.useRealTimers(); }
   });
   it.each(["before", "after"] as const)("composes with Ultra in %s hook order without activating disabled tools", async order => {

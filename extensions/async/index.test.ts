@@ -15,7 +15,10 @@ import asyncExtension from "./index.js";
 import { createTaskStore } from "../tasks/taskStore.js";
 import { _setDefaultTaskStoreForTest } from "../tasks/taskStore.js";
 import { _resetTaskOutputDirForTest } from "../tasks/outputPath.js";
-import { _clearOutputsForTest } from "../tasks/diskOutput.js";
+import { _clearOutputsForTest, flushTaskOutput } from "../tasks/diskOutput.js";
+import { readFile } from "node:fs/promises";
+import { getSessionLifetime } from "../shared/sessionLifetime.js";
+import { buildWorkerRuntime } from "../localagent/workerRuntime.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 /**
@@ -696,6 +699,65 @@ describe("abort epoch — 系统续跑不算恢复（最易写错处）", () => 
       | { message?: unknown }
       | undefined;
     expect(second?.message).toBeUndefined();
+  });
+});
+
+describe("async owner lifetime", () => {
+  it("retains output but never calls stale Pi after a late-installed worker guard closes", async () => {
+    const { pi, sent, entries } = fakePi();
+    const scope = getSessionLifetime(pi);
+    const token = scope.capture();
+    const task = await spawnAsyncShell(pi, store, {
+      command: "echo disposed-worker-output", cwd: "/tmp", notify: true, lifetime: token,
+    });
+    let open = true;
+    buildWorkerRuntime(() => ({ enabled: false }), () => open)(pi);
+    open = false; // closeWorker before SDK dispose; no session_shutdown event.
+    pi.sendMessage = () => { throw new Error("stale Pi must never be invoked"); };
+    pi.appendEntry = () => { throw new Error("stale Pi must never be invoked"); };
+    await until(() => task.endedAt !== undefined);
+    await flushTaskOutput(task.id);
+    expect(task.notification).toBe("owner_closed");
+    expect(sent).toHaveLength(0);
+    expect(entries).toHaveLength(0);
+    expect(store.getTask(task.id)?.notified).toBe(false);
+    expect(await readFile(task.outputFile, "utf8")).toContain("disposed-worker-output");
+  });
+
+  it("does not revive old-generation notifications or redirect them to a new generation", async () => {
+    const { pi, sent } = fakePi();
+    const scope = getSessionLifetime(pi);
+    const task = await spawnAsyncShell(pi, store, { command: "echo old", cwd: "/tmp", notify: true });
+    scope.close();
+    scope.restart();
+    await until(() => task.endedAt !== undefined);
+    expect(task.notification).toBe("owner_closed");
+    expect(sent).toHaveLength(0);
+    const current = await spawnAsyncShell(pi, store, { command: "echo current", cwd: "/tmp", notify: true });
+    await until(() => current.endedAt !== undefined);
+    expect(current.notification).toBe("accepted");
+    expect(sent).toHaveLength(1);
+  });
+
+  it("shutdown only kills and removes this runtime's registry entries", async () => {
+    const first = fakePi();
+    const other = fakePi();
+    asyncExtension(first.pi);
+    asyncExtension(other.pi);
+    const mine = await spawnAsyncShell(first.pi, store, { command: "sleep 30", cwd: "/tmp", notify: true });
+    const theirs = await spawnAsyncShell(other.pi, store, { command: "sleep 30", cwd: "/tmp", notify: false });
+    try {
+      for (const handler of first.events.session_shutdown ?? []) await handler();
+      expect(mine.killed).toBe(true);
+      expect(_internals.registry().has(mine.id)).toBe(false);
+      expect(theirs.killed).toBe(false);
+      expect(_internals.registry().has(theirs.id)).toBe(true);
+      await until(() => mine.endedAt !== undefined);
+      expect(mine.notification).toBe("owner_closed");
+      expect(first.sent).toHaveLength(0);
+    } finally {
+      await Promise.all([killAsyncTask(mine.id), killAsyncTask(theirs.id)]);
+    }
   });
 });
 

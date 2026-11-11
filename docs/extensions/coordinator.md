@@ -2,6 +2,31 @@
 
 手动开启后，主会话负责需求沟通、任务划分、派发、纠偏和验收；具体实现、调查和验证优先交给一次性 LocalAgent。角色约定不隐藏主会话或 worker 的任何既有工具，也不更改模型、thinking 或 Fast。主会话仍可读取、评审及必要直接操作；直接修改前应先解决文件责任冲突。
 
+## `/agent` 单次委派
+
+使用 `/agent <任务>` 只派发本次工作，默认一个一次性 LocalAgent；若想整场会话持续以主会话沟通/派发/验收为主，才用 `/coordinator on`。`/agent` 不自动改变已有模式选择，后续无关请求不会因此自动委派。
+
+```text
+/agent 修复 auth 超时，补测试，保持公开接口不变
+/agent 只读调查 auth 的调用链，返回证据和文件位置
+```
+
+`/agent` 由 coordinator 扩展注册，仅转发到原生 `/skill:agent <任务>`；完整指令随包存放在 `skills/agent/SKILL.md`。默认界面显示折叠的 `[skill] agent`，任务文本单独展示，可用原生 Ctrl+O 展开；全文仍进入模型上下文。Skill 只接受显式调用，不自动影响其他请求；也可直接使用 `/skill:agent`。
+
+更新后执行 `/reload`。它要求已加载的 agent Skill、可用的 coordinator/localagent/tasks 能力、主会话通信工具和持久父会话；不擅自启用被关闭的工具，不突破探索/规划/只读或审批边界。入口不出现时检查 coordinator 扩展；Skill 被资源过滤掉时入口报错并停止，不回退粘贴全文。命令或 Skill 同名冲突应检查配置，不覆盖用户外部资源。主会话忙时通过原生 follow-up 队列等待安全执行，不 steering 打断，也不等待空闲来阻塞命令处理。
+
+流程如下：
+
+1. 主会话最小定位后，明确目标、上下文、具体文件责任、非目标、验收及决策边界；关键条件不清楚先问，不猜测派发。只读任务的 `writePaths` 为 `[]`。
+2. 创建 `coordinator_task` 契约，再以 `coordinator_task_id` 调用一次 `task_agent`。模式关闭也允许显式绑定，worker 的报告身份来自该绑定，而非文字中自称。
+3. 派发成功返回逻辑任务 ID、执行 task ID 和范围后，主会话立即结束当前回合，不轮询、不 sleep 等待。用户可以继续提问；主会话不能抢改活跃 worker 负责的文件。
+4. worker 使用下节的报告工具上报异常和交付，主会话通过执行 ID 定向沟通；关键事件及终态自动回传，普通进度不逐条唤醒。关闭持续模式时并不启动常驻诊断定时器。
+5. 主会话查看差异和验证证据后验收，不能把 worker 正常结束当作 accepted；不足则补证或有界返工。阻塞后交接释放，新决定沿原逻辑任务启动新执行，不复活终态 worker。
+
+单次命令要求 delivered 除现有 `modifiedFiles`、`acceptance`、`verification`、`risks` 外，再说明 `specialHandling`（特殊/兼容处理）、`deviations`（计划偏差）、`remaining`（剩余工作），无则空数组；逐文件说明关键变化，验证记录实际命令和结果，没跑的说原因，不能伪造通过。这是 Skill 使用的 payload 约定，不新增底层强制字段。
+
+`/agent` 是模型提示词约定，不是硬执行保证或文件沙箱。启动条件不足/责任冲突须明确失败，不降级无绑定 fork 或在主会话代做；创建了契约不代表 worker 已启动。消息入队不等于已理解或已取消，立即停止使用 `task_kill`，已有副作用不自动撤销。
+
 ## 开关与优先级
 
 ```text
@@ -86,7 +111,9 @@ pending --> running --> awaiting_review --> accepted
 
 worker 正常结束只进入待验收；缺少实际验证证据会明确标记。主会话需查看差异与证据，再通过 `coordinator_task update` 的 `status=accepted` 和 `reviewEvidence` 验收；返工先记录决策并设回 pending。旧方向未确认的结算标为 blocked，不伪造新目标通过。
 
-每个任务默认预算：最多 3 次已成功启动的尝试；5 分钟无活动告警；单次执行超过 30 分钟告警。contract/patch 的 `budgets` 可覆盖 `maxAttempts/stallAfterMs/attemptWarnAfterMs`（正整数，时间单位毫秒）；修改预算需要 `decisionReason`。启动前失败不消耗尝试。告警包含当前工具、耗时和最后活动，去重且不会自动 kill、判死锁或无限重派。关闭模式或 Plan 时暂停新告警。
+每个任务默认预算：最多 3 次已成功启动的尝试；5 分钟无活动告警；单次执行超过 30 分钟告警。contract/patch 的 `budgets` 可覆盖 `maxAttempts/stallAfterMs/attemptWarnAfterMs`（正整数，时间单位毫秒）；修改预算需要 `decisionReason`。启动前失败不消耗尝试。告警包含当前工具、耗时和最后活动，去重且不会自动 kill、判死锁或无限重派。关闭模式或 Plan 时暂停新告警。诊断定时器仅在会话已就绪且模式开启时存在；关闭模式或 shutdown 会立即清理，重复开启、分支恢复和压缩不会累积定时器。回调通过纯闭包检查 owner 存活，worker 关闭或 SDK 上下文失效时安全停表，不再通过旧 Pi/UI 报告错误；共享生命周期代际的启动顺序不会让有效定时器误失效。真实诊断异常会记录到 stderr 并停表，可重新 `/coordinator on` 或恢复会话后重建；不会自动 kill 或重派任务。
+
+`coordinator_task` 在交互式会话中默认仅预览前 **8 个实际显示行**（按当前终端宽度换行后计数），超出时另显示一行省略数量和展开快捷键提示；调用标题只显示 action、task ID 和 section，不铺开 contract/patch 参数。使用 Pi 原生工具展开快捷键 **Ctrl+O** 查看完整已有结果，再次按下收起；若自定义了 `app.tools.expand` 键位，提示会显示实际绑定。此折叠仅影响 UI，不裁剪模型收到的 content/details，也不改变原有 32k 输出预算或任务语义。无 UI 的执行方式不变。
 
 任务事实保存到当前根会话分支的版本化条目，不依赖可裁剪的 UI transcript。进程重启后不会恢复一次性 worker；找不到真实执行的 running 任务显示 interrupted/blocked，保留现场供决策。不提供跨所有 child 的 token/费用硬预算、物理目录隔离或 exactly-once 外部副作用保证。
 

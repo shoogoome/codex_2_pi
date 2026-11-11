@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  clearPlan,
-  getPlan,
+  createPlanState,
   hasInProgress,
   hasUnfinishedPlan,
   planCounts,
   restorePlanFromBranch,
-  setPlan,
   shouldShowRestoredOverlay,
 } from "./state.js";
 import type { PlanSnapshot } from "./schema.js";
@@ -22,10 +20,30 @@ function snapshot(plan: PlanSnapshot["plan"]): PlanSnapshot {
 describe("todo state", () => {
   it("stores and clears the current plan", () => {
     const plan = snapshot([{ step: "A", status: "pending" }]);
-    setPlan(plan);
-    expect(getPlan()).toEqual(plan);
-    clearPlan();
-    expect(getPlan()).toBeNull();
+    const state = createPlanState();
+    state.setPlan(plan);
+    expect(state.getPlan()).toEqual(plan);
+    state.clearPlan();
+    expect(state.getPlan()).toBeNull();
+  });
+
+  it("isolates stores created by the same cached module before any lifecycle events", () => {
+    const root = createPlanState();
+    const firstWorker = createPlanState();
+    const secondWorker = createPlanState();
+    const rootPlan = snapshot([{ step: "Root", status: "in_progress" }]);
+    const firstPlan = snapshot([{ step: "Worker one", status: "pending" }]);
+    const secondPlan = snapshot([{ step: "Worker two", status: "completed" }]);
+    root.setPlan(rootPlan);
+    firstWorker.setPlan(firstPlan);
+    secondWorker.setPlan(secondPlan);
+    expect(root.getPlan()).toBe(rootPlan);
+    expect(firstWorker.getPlan()).toBe(firstPlan);
+    expect(secondWorker.getPlan()).toBe(secondPlan);
+    firstWorker.clearPlan();
+    expect(firstWorker.getPlan()).toBeNull();
+    expect(root.getPlan()).toBe(rootPlan);
+    expect(secondWorker.getPlan()).toBe(secondPlan);
   });
 
   it("restores the last valid codex-plan entry from a branch", () => {

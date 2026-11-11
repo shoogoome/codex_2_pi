@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { CodexPlanOverlay, formatPlanOverlayLines } from "./overlay.js";
-import { setPlan } from "./state.js";
 import type { PlanSnapshot } from "./schema.js";
 
 const plainTheme: any = {
@@ -90,7 +89,6 @@ describe("CodexPlanOverlay", () => {
     overlay.update();
     expect(requestRender).toHaveBeenCalledTimes(1);
 
-    setPlan(null);
     overlay.hide();
     expect(setWidget).toHaveBeenLastCalledWith("codex-plan-overlay", undefined, { placement: "aboveEditor" });
   });

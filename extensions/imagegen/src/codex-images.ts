@@ -32,7 +32,16 @@ export const MAX_INPUT_IMAGE_BYTES = 50 * 1024 * 1024;
 /** Image generation can take minutes; codex advises 120s+ waits. */
 export const DEFAULT_TIMEOUT_MS = 300_000;
 
+/** Codex GIF controls; omitted fields use backend defaults (9 frames, 200ms). */
+export interface GifOptions {
+  frame_count?: number;
+  frame_duration_ms?: number;
+}
+
 export interface ImageGenerationRequest {
+  output_format?: "gif";
+  frame_count?: number;
+  frame_duration_ms?: number;
   prompt: string;
   background: string;
   model: string;
@@ -45,7 +54,7 @@ export interface ImageEditRequest extends ImageGenerationRequest {
 }
 
 export interface CodexImageResult {
-  /** Raw base64 image bytes (PNG). */
+  /** Raw base64 image bytes (PNG or GIF). */
   b64: string;
   size?: string;
   quality?: string;
@@ -132,15 +141,35 @@ export function buildCodexImageHeaders(
 }
 
 /** Build the generate request body (codex built-in tool semantics: all auto). */
-export function buildGenerateRequest(prompt: string): ImageGenerationRequest {
-  return { prompt, model: IMAGE_MODEL, ...IMAGE_DEFAULTS };
+export function buildGenerateRequest(prompt: string, gif?: GifOptions): ImageGenerationRequest {
+  return {
+    prompt,
+    model: IMAGE_MODEL,
+    ...IMAGE_DEFAULTS,
+    ...(gif === undefined ? {} : {
+      output_format: "gif" as const,
+      ...(gif.frame_count === undefined ? {} : { frame_count: gif.frame_count }),
+      ...(gif.frame_duration_ms === undefined ? {} : { frame_duration_ms: gif.frame_duration_ms }),
+    }),
+  };
+}
+
+/** Detect the actual response format, not the requested one (Codex artifact.rs). */
+export function generatedImageFormat(b64: string): {
+  extension: "png" | "gif";
+  mimeType: "image/png" | "image/gif";
+} {
+  const header = Buffer.from(b64.trim(), "base64").subarray(0, 6).toString("ascii");
+  return header === "GIF87a" || header === "GIF89a"
+    ? { extension: "gif", mimeType: "image/gif" }
+    : { extension: "png", mimeType: "image/png" };
 }
 
 /** Build the edit request body from data-URL images. */
-export function buildEditRequest(prompt: string, imageUrls: string[]): ImageEditRequest {
+export function buildEditRequest(prompt: string, imageUrls: string[], gif?: GifOptions): ImageEditRequest {
   return {
     images: imageUrls.map((image_url) => ({ image_url })),
-    ...buildGenerateRequest(prompt),
+    ...buildGenerateRequest(prompt, gif),
   };
 }
 
@@ -201,6 +230,19 @@ export function extractApiErrorMessage(raw: unknown): string | undefined {
     return error.message;
   }
   if (typeof raw.message === "string" && raw.message) return raw.message;
+  if (typeof raw.detail === "string" && raw.detail) return raw.detail;
+  // FastAPI/Pydantic validation errors: expose only location and message, not
+  // "input"/"ctx", which may echo request data or credentials.
+  if (Array.isArray(raw.detail)) {
+    const messages = raw.detail.filter(isRecord).slice(0, 5).flatMap((issue) => {
+      if (typeof issue.msg !== "string") return [];
+      const location = Array.isArray(issue.loc)
+        ? issue.loc.filter((part) => typeof part === "string" || typeof part === "number").join(".")
+        : "";
+      return [location ? `${location}: ${issue.msg}` : issue.msg];
+    });
+    if (messages.length > 0) return messages.join("; ");
+  }
   return undefined;
 }
 
@@ -261,7 +303,14 @@ export async function postCodexImagesRequest(
       } catch {
         detail = undefined;
       }
-      const suffix = detail ? `: ${detail}` : "";
+      // Error bodies are untrusted: never echo our credential, even if the
+      // upstream accidentally includes it in an error message.
+      const safeDetail = detail
+        ?.replaceAll(opts.accessToken, "[REDACTED]")
+        .replace(/Bearer\s+[^\s"'<>]+/gi, "Bearer [REDACTED]")
+        .replace(/[\r\n\t]+/g, " ")
+        .slice(0, 1000);
+      const suffix = safeDetail ? `: ${safeDetail}` : "";
       throw new Error(`image generation failed (HTTP ${response.status})${suffix}`);
     }
     let parsed: unknown;

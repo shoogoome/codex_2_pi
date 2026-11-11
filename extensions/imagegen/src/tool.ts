@@ -6,7 +6,7 @@
 //   - with image inputs → POST images/edits (max 5, data URLs)
 //   - model gpt-image-2, background/quality/size all "auto" (codex built-in
 //     exposes no knobs; the backend picks)
-//   - result saved to <agentDir>/generated_images/<sessionId>/<callId>.png
+//   - result saved to <agentDir>/generated_images/<sessionId>/<callId>.png or .gif
 //     (mirrors codex's $CODEX_HOME/generated_images/<thread>/<call>.png)
 //   - the image itself is returned to the model as an image content block so
 //     it can inspect and iterate, exactly like codex's tool output.
@@ -29,6 +29,8 @@ import { truncateOneLine } from "../../shared/text.js";
 import {
   buildEditRequest,
   buildGenerateRequest,
+  generatedImageFormat,
+  type GifOptions,
   imageFileToDataUrl,
   MAX_EDIT_IMAGES,
   postCodexImagesRequest,
@@ -38,6 +40,21 @@ import {
 import { collectRecentImages, type SessionEntryLike } from "./session-images.js";
 
 const GenerateImageParams = Type.Object({
+  gif: Type.Optional(Type.Object({
+    frame_count: Type.Optional(Type.Integer({
+      minimum: 2,
+      maximum: 16,
+      description: "Number of GIF frames (2-16); defaults to 9.",
+    })),
+    frame_duration_ms: Type.Optional(Type.Integer({
+      minimum: 20,
+      maximum: 2000,
+      description: "Duration of each frame in milliseconds (20-2000); defaults to 200.",
+    })),
+  }, {
+    additionalProperties: false,
+    description: "Create a simple looping animated GIF. Use {} for defaults; omit for a static image. Works for generation and editing.",
+  })),
   prompt: Type.String({
     description:
       "A detailed description of the image to generate, or of the edit to apply to the referenced image(s).",
@@ -61,6 +78,7 @@ const GenerateImageParams = Type.Object({
 
 type GenerateImageParamsType = {
   prompt: string;
+  gif?: GifOptions;
   referenced_image_paths?: string[];
   num_last_images_to_include?: number;
 };
@@ -69,6 +87,7 @@ export interface ImageGenDetails {
   mode?: "generate" | "edit";
   prompt?: string;
   savedPath?: string;
+  format?: "png" | "gif";
   bytes?: number;
   size?: string;
   quality?: string;
@@ -83,7 +102,9 @@ const DESCRIPTION = `The generate_image tool enables image generation from descr
 - The user wants to modify an attached or previously generated image with specific changes, including adding or removing elements, altering colors, improving quality/resolution, or transforming the style (e.g., cartoon, oil painting).
 
 Guidelines:
+- For animated GIFs, set \`gif\` to {} for defaults (9 frames, 200ms each), or specify \`frame_count\` (2-16) and \`frame_duration_ms\` (20-2000). This works with text prompts and reference images. Omit \`gif\` for static images. GIFs are short looping animations, not videos; image previews may show only one frame, so use the saved .gif file for playback.
 - generate_image can take a few minutes to finish. Wait for the result instead of retrying early.
+- To edit an existing GIF, inspect its frames first and prepare a spritesheet with equal-sized cells in a regular grid; pass that spritesheet via \`referenced_image_paths\` with \`gif\` set. Do not pass the GIF itself as an edit input.
 - Omit both \`referenced_image_paths\` and \`num_last_images_to_include\` when generating a brand new image.
 - For edits, use \`referenced_image_paths\` when every target image has a local file path.
 - If you have not seen a local image yet, read it with the read tool to inspect it before editing.
@@ -155,7 +176,10 @@ export async function resolveCodexAuth(ctx: AuthLookup): Promise<ResolvedCodexAu
   if (!auth.ok || !auth.apiKey) {
     throw new Error(auth.ok ? "Codex OAuth token unavailable — try /login again" : auth.error);
   }
-  return { accessToken: auth.apiKey, baseUrl: model.baseUrl, extraHeaders: auth.headers };
+  const extraHeaders = auth.headers
+    ? Object.fromEntries(Object.entries(auth.headers).filter((entry): entry is [string, string] => entry[1] !== null))
+    : undefined;
+  return { accessToken: auth.apiKey, baseUrl: model.baseUrl, extraHeaders };
 }
 
 function extractText(result: AgentToolResult<ImageGenDetails>): string {
@@ -207,9 +231,10 @@ export function createImageGenTool(
     label: "Generate image",
     description: DESCRIPTION,
     promptSnippet:
-      "Generate or edit images with the Codex subscription image API (generate_image); edits take referenced_image_paths or recent conversation images.",
+      "Generate or edit images and animated GIFs with the Codex subscription image API (generate_image); set gif: {} for animation; edits take referenced_image_paths or recent conversation images.",
     promptGuidelines: [
       "Use generate_image when the user asks for a new image or to modify an existing image; it runs on the Codex subscription (gpt-image-2).",
+      "For animated GIF requests, pass gif: {} (defaults: 9 frames, 200ms each), optionally setting frame_count (2-16) and frame_duration_ms (20-2000).",
       "For edits of local files, pass absolute paths via referenced_image_paths (max 5); read the image first if you have not seen it.",
       "Generated images are saved under ~/.pi/agent/generated_images/<session>/ and returned for inspection; copy project-bound assets into the workspace.",
     ],
@@ -226,6 +251,19 @@ export function createImageGenTool(
       const raw = params as GenerateImageParamsType;
       const prompt = typeof raw.prompt === "string" ? raw.prompt.trim() : "";
       if (!prompt) return fail("generate_image requires a non-empty prompt");
+
+      if (raw.gif !== undefined) {
+        if (typeof raw.gif !== "object" || raw.gif === null || Array.isArray(raw.gif)) {
+          return fail("`gif` must be an object (use {} for defaults)");
+        }
+        const { frame_count, frame_duration_ms } = raw.gif;
+        if (frame_count !== undefined && (!Number.isInteger(frame_count) || frame_count < 2 || frame_count > 16)) {
+          return fail("`gif.frame_count` must be an integer between 2 and 16");
+        }
+        if (frame_duration_ms !== undefined && (!Number.isInteger(frame_duration_ms) || frame_duration_ms < 20 || frame_duration_ms > 2000)) {
+          return fail("`gif.frame_duration_ms` must be an integer between 20 and 2000");
+        }
+      }
 
       const referencedPaths = (raw.referenced_image_paths ?? []).filter(
         (p): p is string => typeof p === "string" && p.trim().length > 0,
@@ -279,7 +317,7 @@ export function createImageGenTool(
         resolveCodexImagesUrl(auth.baseUrl, mode === "edit" ? "edits" : "generations");
         image = await postCodexImagesRequest(
           mode === "edit" ? "edits" : "generations",
-          mode === "edit" ? buildEditRequest(prompt, imageUrls) : buildGenerateRequest(prompt),
+          mode === "edit" ? buildEditRequest(prompt, imageUrls, raw.gif) : buildGenerateRequest(prompt, raw.gif),
           {
             accessToken: auth.accessToken,
             baseUrl: auth.baseUrl,
@@ -295,7 +333,8 @@ export function createImageGenTool(
         clearInterval(ticker);
       }
 
-      // Persist under generated_images/<sessionId>/<callId>.png (codex layout).
+      // Preserve the actual format, including all GIF frames, without re-encoding.
+      const format = generatedImageFormat(image.b64);
       const bytes = Buffer.from(image.b64, "base64");
       let savedPath: string | undefined;
       let saveWarning: string | undefined;
@@ -303,7 +342,7 @@ export function createImageGenTool(
         const sessionId = sanitizePathComponent(ctx.sessionManager.getSessionId());
         const dir = join(options.saveRoot ?? generatedImagesRoot(), sessionId);
         await mkdir(dir, { recursive: true });
-        savedPath = join(dir, `${sanitizePathComponent(toolCallId)}.png`);
+        savedPath = join(dir, `${sanitizePathComponent(toolCallId)}.${format.extension}`);
         await writeFile(savedPath, bytes);
       } catch (error) {
         saveWarning = error instanceof Error ? error.message : "unknown error";
@@ -315,17 +354,20 @@ export function createImageGenTool(
         prompt,
         savedPath,
         bytes: bytes.byteLength,
+        format: format.extension,
         size: image.size,
         quality: image.quality,
         imageCount: imageUrls.length,
         elapsedSec: Math.round((Date.now() - startedAt) / 1000),
       };
 
-      const hint = outputHint(savedPath, returnImage);
+      const hint = outputHint(savedPath, returnImage) + (format.extension === "gif"
+        ? "\nAnimated GIF: use the saved .gif file for playback; an inline image preview may show only one frame."
+        : "");
       const text = saveWarning ? `${hint}\n(save warning: ${saveWarning})` : hint;
       const content: AgentToolResult<ImageGenDetails>["content"] = [];
       if (returnImage) {
-        content.push({ type: "image", data: image.b64, mimeType: "image/png" });
+        content.push({ type: "image", data: image.b64, mimeType: format.mimeType });
       }
       content.push({ type: "text", text });
       return { content, details };

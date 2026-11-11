@@ -10,6 +10,10 @@ import { TaskLedger, boundedText, type TaskInput, type TaskPatch } from "./taskL
 import { MessageRegistry } from "./messageRegistry.js";
 import { createWorkerBridge, type Activity } from "./workerBridge.js";
 import { diagnoseTasks } from "./diagnostics.js";
+import { renderCoordinatorCall, renderCoordinatorResult } from "./render.js";
+import { createDiagnosticTimer } from "./timer.js";
+import { getSessionLifetime } from "../shared/sessionLifetime.js";
+import { logError } from "../tasks/logging.js";
 
 const StringList = Type.Array(Type.String());
 const BudgetSchema = Type.Object({
@@ -46,7 +50,7 @@ export default function coordinatorExtension(pi: ExtensionAPI): void {
   let context: ExtensionContext | undefined;
   let ready = false;
   let restoreError: string | undefined;
-  let timer: ReturnType<typeof setInterval> | undefined;
+  const lifetime = getSessionLifetime(pi);
   const activities = new Map<string, Activity>();
   const messages = new MessageRegistry();
   const ledger = new TaskLedger(task => pi.appendEntry("coordinator/task", task));
@@ -63,15 +67,17 @@ export default function coordinatorExtension(pi: ExtensionAPI): void {
     if (ctx.hasUI) ctx.ui.setStatus("coordinator", mode.enabled ? "Coordinator · " + effective() : undefined);
   };
   const status = () => ({ desired: mode.enabled, effective: effective(), source: mode.source, error: restoreError });
-  const startTimer = () => {
-    if (timer) return;
-    timer = setInterval(() => {
-      if (!ready || effective() !== "active") return;
-      try { diagnoseTasks(ledger, activities, notify); }
-      catch (error) { context?.ui.notify("Coordinator diagnostic: " + String(error), "warning"); }
-    }, 10000);
-    timer.unref?.();
-  };
+  const diagnosticTimer = createDiagnosticTimer({
+    enabled: () => ready && mode.enabled,
+    // Read the owner guard through plain closures, not Pi's EventBus. Capture
+    // at the point of use: async may restart the shared generation before or
+    // after our session_start; queued callbacks use the timer's own generation.
+    ownerActive: () => lifetime.capture().isActive(),
+    run: () => {
+      if (effective() === "active") diagnoseTasks(ledger, activities, notify);
+    },
+    reportError: error => logError(error, "coordinator diagnostic"),
+  });
 
   attachCoordinator(pi, {
     enabled: () => ready && mode.enabled,
@@ -85,6 +91,22 @@ export default function coordinatorExtension(pi: ExtensionAPI): void {
     },
   });
   pi.registerFlag("coordinator", { type: "boolean", description: "Use the main session as coordinator; --coordinator=false disables (tools unchanged)" });
+  pi.registerCommand("agent", {
+    description: "将本次任务委派给后台 LocalAgent（原生 Skill 折叠展示）",
+    async handler(args, ctx) {
+      if (isWorker(ctx)) { ctx.ui.notify("LocalAgent is a leaf worker: cannot delegate tasks", "error"); return; }
+      if (!pi.getCommands().some(command => command.source === "skill" && command.name === "skill:agent")) {
+        ctx.ui.notify("未加载 agent Skill，请检查 skills 配置并执行 /reload；未派发任务。", "error");
+        return;
+      }
+      // Expansion is opt-in for extension messages; let Pi load/render the skill.
+      // followUp keeps a busy root turn intact instead of steering/interruption.
+      pi.sendUserMessage(args ? `/skill:agent ${args}` : "/skill:agent", {
+        expandPromptTemplates: true,
+        deliverAs: "followUp",
+      });
+    },
+  });
   pi.registerCommand("coordinator", {
     description: "Coordinator mode: on | off | status (default status; tools unchanged)",
     async handler(args, ctx) {
@@ -94,6 +116,7 @@ export default function coordinatorExtension(pi: ExtensionAPI): void {
       if (action !== "status") {
         root(ctx);
         mode = { schemaVersion: 1, enabled: action === "on", source: "command" };
+        diagnosticTimer.sync();
         pi.appendEntry("coordinator/state", mode);
         updateUI(ctx);
       }
@@ -112,6 +135,12 @@ export default function coordinatorExtension(pi: ExtensionAPI): void {
       offset: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
     }, { additionalProperties: false }),
     executionMode: "sequential",
+    renderCall(args, theme) {
+      return renderCoordinatorCall(args, theme);
+    },
+    renderResult(result, options, theme, context) {
+      return renderCoordinatorResult(result, options, theme, context.isError);
+    },
     async execute(_id, params, _signal, _update, ctx) {
       try {
         root(ctx);
@@ -180,9 +209,10 @@ export default function coordinatorExtension(pi: ExtensionAPI): void {
   });
 
   const restore = (ctx: ExtensionContext, initial: boolean) => {
+    diagnosticTimer.stop();
+    ready = false;
     if (isWorker(ctx)) return;
     context = ctx;
-    ready = false;
     try {
       let saved: ModeState | undefined;
       const branch = ctx.sessionManager.getBranch();
@@ -207,9 +237,11 @@ export default function coordinatorExtension(pi: ExtensionAPI): void {
       }
       restoreError = undefined;
       ready = true;
-      startTimer();
+      diagnosticTimer.sync();
       updateUI(ctx);
     } catch (error) {
+      diagnosticTimer.stop();
+      ready = false;
       restoreError = String(error);
       ctx.ui.notify("Coordinator restore failed: " + restoreError, "error");
     }
@@ -231,10 +263,12 @@ export default function coordinatorExtension(pi: ExtensionAPI): void {
     return { systemPrompt: applyCoordinatorPolicy(event.systemPrompt, { enabled: ready && mode.enabled, effective: effective(), summary: ledger.summary() }) };
   });
   pi.on("session_shutdown", (_event, ctx) => {
-    if (isWorker(ctx)) return;
-    if (timer) clearInterval(timer);
-    timer = undefined; ready = false;
+    // Cleanup must precede any Pi/UI or dynamic worker-identity lookup: those
+    // APIs can already be invalid, and workers own no root timer to preserve.
+    diagnosticTimer.stop();
+    ready = false;
+    context = undefined;
     ledger.invalidate(); activities.clear(); messages.reset();
-    if (ctx.hasUI) ctx.ui.setStatus("coordinator", undefined);
+    if (ctx.hasUI && lifetime.capture().isActive()) ctx.ui.setStatus("coordinator", undefined);
   });
 }

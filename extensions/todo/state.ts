@@ -1,17 +1,13 @@
 import { PLAN_CUSTOM_ENTRY, normalizePlanSnapshot, type PlanSnapshot } from "./schema.js";
 
-let currentPlan: PlanSnapshot | null = null;
-
-export function setPlan(snapshot: PlanSnapshot | null): void {
-  currentPlan = snapshot;
-}
-
-export function getPlan(): PlanSnapshot | null {
-  return currentPlan;
-}
-
-export function clearPlan(): void {
-  currentPlan = null;
+/** Each extension factory owns its state, even when SDK sessions share cached ESM. */
+export function createPlanState() {
+  let currentPlan: PlanSnapshot | null = null;
+  return {
+    setPlan(snapshot: PlanSnapshot | null): void { currentPlan = snapshot; },
+    getPlan(): PlanSnapshot | null { return currentPlan; },
+    clearPlan(): void { currentPlan = null; },
+  };
 }
 
 export function restorePlanFromBranch(branch: Iterable<unknown>): PlanSnapshot | null {

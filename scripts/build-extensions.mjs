@@ -35,6 +35,7 @@ const EXT_ROOT = join(REPO_ROOT, "extensions");
  * Extensions kept as source entries for resource paths, host aliases or
  * reliable hot reload. Their package.json points at index.ts so jiti can
  * load fresh source and apply the running host's module mapping.
+ *   - tmux-title: resolves its colocated MCP script from import.meta.url
  *   - pets:     resolves ../catalog (spritesheet.png, pet.json) from import.meta.url
  *   - codebuddy-reasoning: must use jiti host aliases; native JS imports can
  *     resolve an older workspace pi-ai instead of the running Pi version.
@@ -45,7 +46,7 @@ const EXT_ROOT = join(REPO_ROOT, "extensions");
 // These two coordinate live child UI state. Native ESM caches compiled .js
 // factories across /reload, even with a fresh jiti + moduleCache:false. Keep
 // source entries so /reload can actually replace the producer and consumer.
-const SKIP = new Set(["pets", "shared", "honeypot", "codebuddy-reasoning", "tasks", "localagent", "coordinator"]);
+const SKIP = new Set(["pets", "shared", "honeypot", "codebuddy-reasoning", "tasks", "localagent", "coordinator", "tmux-title"]);
 
 /** Discover extension directories that have an index.ts entry point. */
 function discoverExtensions() {

@@ -280,6 +280,7 @@ export async function spawnLocalAgent(
     session = sessionUnknown as AgentSession;
     guardWorkerStream(session, () => worker.open);
   } catch (error) {
+    worker.open = false;
     unregisterOrigin?.();
     unregisterWorker?.();
     releaseCapacity();
@@ -318,6 +319,7 @@ export async function spawnLocalAgent(
     if (conversations && conversations.generation !== rootGeneration) throw new Error("Root session replaced while starting LocalAgent");
     opts.coordination?.start(taskId);
   } catch (error) {
+    worker.open = false;
     await hub.end(activity).catch((e) => logError(e, "localagent activity end"));
     removeProgress(taskId);
     unregisterOrigin?.();

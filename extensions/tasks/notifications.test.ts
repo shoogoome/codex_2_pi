@@ -92,6 +92,42 @@ describe("markTaskNotified", () => {
   });
 });
 
+describe("notification send claims", () => {
+  it("releases a failed send for retry and commits only after API acceptance", () => {
+    const store = createTaskStore();
+    registerTask(sample("babcdefgh"), store);
+    const sendMessage = vi.fn<() => void>(() => { throw new Error("send failed"); });
+    const pi = { sendMessage } as unknown as Parameters<typeof notifyTaskTerminal>[0];
+    store.subscribe(() => notifyTaskTerminal(pi, store, baseOpts()));
+    expect(() => notifyTaskTerminal(pi, store, baseOpts())).toThrow("send failed");
+    expect(store.getTask("babcdefgh")?.notified).toBe(false);
+    expect(store.getTask("babcdefgh")).not.toHaveProperty("evictAfter");
+    expect(Object.getOwnPropertySymbols(store.getTask("babcdefgh")!)).toHaveLength(0);
+    sendMessage.mockImplementation(() => {
+      expect(store.getTask("babcdefgh")?.notified).toBe(false);
+    });
+    notifyTaskTerminal(pi, store, baseOpts());
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(store.getTask("babcdefgh")?.notified).toBe(true);
+  });
+
+  it("blocks reentrant senders and direct marking while a claim is held", () => {
+    const store = createTaskStore();
+    registerTask(sample("babcdefgh"), store);
+    const sendMessage = vi.fn();
+    const pi = { sendMessage } as unknown as Parameters<typeof notifyTaskTerminal>[0];
+    store.subscribe(() => notifyTaskTerminal(pi, store, baseOpts()));
+    sendMessage.mockImplementation(() => {
+      expect(markTaskNotified("babcdefgh", store)).toBe(false);
+      notifyTaskTerminal(pi, store, baseOpts());
+    });
+    notifyTaskTerminal(pi, store, baseOpts());
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(store.getTask("babcdefgh")?.notified).toBe(true);
+    expect(Object.getOwnPropertySymbols(store.getTask("babcdefgh")!)).toHaveLength(0);
+  });
+});
+
 describe("buildTaskNotificationXml", () => {
   it("includes mandatory tags", () => {
     const xml = buildTaskNotificationXml(baseOpts());

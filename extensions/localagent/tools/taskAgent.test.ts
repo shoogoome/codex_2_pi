@@ -1,6 +1,8 @@
 import { registerForkWorker } from "../workerIdentity.js";
 import { attachCoordinator } from "../../coordinator/handle.js";
 import { TaskLedger } from "../../coordinator/taskLedger.js";
+import { createWorkerBridge } from "../../coordinator/workerBridge.js";
+import { MessageRegistry } from "../../coordinator/messageRegistry.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTaskAgentTool,
@@ -86,6 +88,35 @@ describe("task_agent coordination binding", () => {
     expect(response.content).toEqual(expect.arrayContaining([expect.objectContaining({ text: expect.stringContaining("coordinator_task_id") })]));
     expect(spawner).not.toHaveBeenCalled();
     expect(pi.getActiveTools()).toEqual(["read", "bash", "task_agent"]);
+  });
+  it("returns a single background execution with a real bridge while persistent mode is off", async () => {
+    const pi = freshPi();
+    const ledger = new TaskLedger(() => {});
+    const logical = ledger.create("/tmp", { objective: "inspect auth", acceptance: ["report evidence"], nonGoals: ["no changes"], writePaths: [] });
+    const notify = vi.fn();
+    const enabled = vi.fn(() => false);
+    const reserve = vi.fn((taskId: string, cwd: string) => createWorkerBridge({ ledger, taskId, cwd, messages: new MessageRegistry(), activities: new Map(), notify }));
+    attachCoordinator(pi, { enabled, active: () => false, ledger, reserve });
+    const spawner = vi.fn(async (_pi, _store, options) => {
+      options.coordination.start("one-off");
+      return { taskId: "one-off", status: "running" as const, backgrounded: true as const, agentType: "__fork__", toolCallCount: 0, tokenCount: 0, outputFile: "/tmp/one-off.out" };
+    });
+    _setSpawnerForTest(spawner);
+    const response = await callTool(buildTaskAgentTool(pi, createTaskStore()), { description: "inspect auth", prompt: "Read only; report evidence", coordinator_task_id: logical.id });
+    expect(response).not.toHaveProperty("isError", true);
+    expect(response.details).toMatchObject({ taskId: "one-off", status: "running", isBackgrounded: true });
+    expect(spawner).toHaveBeenCalledTimes(1);
+    expect(reserve).toHaveBeenCalledWith(logical.id, "/tmp");
+    const options = spawner.mock.calls[0][2];
+    expect(options.prompt).toContain("inspect auth");
+    expect(options.prompt).toContain("localagent_report");
+    expect(options.prompt).toContain("Read only; report evidence");
+    expect(ledger.get(logical.id).status).toBe("running");
+    options.coordination.report("scope", "scope_change", { problem: "need context" });
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ logicalTaskId: logical.id, executionTaskId: "one-off", event: "scope_change" }));
+    options.coordination.finish("completed");
+    expect(ledger.get(logical.id).status).toBe("awaiting_review");
+    expect(enabled()).toBe(false);
   });
   it("passes a root-bound bridge and fresh contract, and rolls back failed starts", async () => {
     const pi = freshPi();

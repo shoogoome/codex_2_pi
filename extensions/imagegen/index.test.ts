@@ -7,6 +7,7 @@ import {
   buildEditRequest,
   buildGenerateRequest,
   extractCodexAccountId,
+  generatedImageFormat,
   postCodexImagesRequest,
   resolveCodexImagesUrl,
 } from "./src/codex-images.js";
@@ -113,6 +114,28 @@ describe("extractCodexAccountId + buildCodexImageHeaders", () => {
   });
 });
 
+describe("GIF protocol", () => {
+  it("omits output controls for static images and flattens GIF controls", () => {
+    expect(buildGenerateRequest("x")).not.toHaveProperty("output_format");
+    expect(buildGenerateRequest("x", {})).toEqual({
+      ...buildGenerateRequest("x"), output_format: "gif",
+    });
+    expect(buildGenerateRequest("x", { frame_count: 2, frame_duration_ms: 20 })).toEqual({
+      ...buildGenerateRequest("x"), output_format: "gif", frame_count: 2, frame_duration_ms: 20,
+    });
+    const edit = buildEditRequest("animate", ["data:image/png;base64,x"], { frame_count: 16, frame_duration_ms: 2000 });
+    expect(edit).toMatchObject({ output_format: "gif", frame_count: 16, frame_duration_ms: 2000 });
+    expect(edit).not.toHaveProperty("gif");
+    expect(edit.images).toEqual([{ image_url: "data:image/png;base64,x" }]);
+  });
+
+  it.each(["GIF87a", "GIF89a"])("detects %s from bytes, including whitespace", (header) => {
+    expect(generatedImageFormat("  " + Buffer.from(header).toString("base64") + "\n"))
+      .toEqual({ extension: "gif", mimeType: "image/gif" });
+    expect(generatedImageFormat(PNG_B64)).toEqual({ extension: "png", mimeType: "image/png" });
+  });
+});
+
 describe("postCodexImagesRequest", () => {
   it("posts a generate request and parses the image", async () => {
     const fetcher = vi.fn(async () => okImageResponse());
@@ -150,6 +173,36 @@ describe("postCodexImagesRequest", () => {
         fetcher: fetcher as unknown as typeof fetch,
       }),
     ).rejects.toThrow("image generation failed (HTTP 400): content policy violation");
+  });
+
+  it.each([
+    [{ detail: "GIF output is not enabled for this request." }, "GIF output is not enabled for this request."],
+    [{ detail: [{ loc: ["body", "frame_count"], msg: "must be at most 16", input: "private-data" }] }, "body.frame_count: must be at most 16"],
+  ])("surfaces detail errors from the live API: %j", async (body, message) => {
+    await expect(postCodexImagesRequest("generations", buildGenerateRequest("x", {}), {
+      accessToken: token(),
+      fetcher: vi.fn(async () => new Response(JSON.stringify(body), { status: 400 })) as unknown as typeof fetch,
+    })).rejects.toThrow(`image generation failed (HTTP 400): ${message}`);
+  });
+
+  it("redacts credentials and bounds untrusted API error messages", async () => {
+    const accessToken = token();
+    try {
+      await postCodexImagesRequest("generations", buildGenerateRequest("x", {}), {
+        accessToken,
+        fetcher: vi.fn(async () => new Response(JSON.stringify({
+          detail: `denied ${accessToken}\nBearer another-secret ${"x".repeat(2000)}`,
+        }), { status: 400 })) as unknown as typeof fetch,
+      });
+      expect.unreachable("expected HTTP error");
+    } catch (error) {
+      const message = (error as Error).message;
+      expect(message).toContain("[REDACTED]");
+      expect(message).not.toContain(accessToken);
+      expect(message).not.toContain("another-secret");
+      expect(message).not.toContain("\n");
+      expect(message.length).toBeLessThan(1100);
+    }
   });
 
   it("requires data-URL inputs for edits", async () => {
@@ -234,6 +287,20 @@ describe("resolveCodexAuth", () => {
     await expect(resolveCodexAuth(ctx)).resolves.toBeDefined();
   });
 
+  it("omits null provider headers from image requests", async () => {
+    const model = { provider: "openai-codex", id: "test" };
+    const auth = await resolveCodexAuth(makeCtx({
+      model,
+      modelRegistry: {
+        isUsingOAuth: () => true,
+        getApiKeyAndHeaders: async () => ({
+          ok: true, apiKey: token(), headers: { "x-keep": "yes", "x-remove": null },
+        }),
+      },
+    }));
+    expect(auth.extraHeaders).toEqual({ "x-keep": "yes" });
+  });
+
   it("rejects API-key auth with a clear message", async () => {
     const codexModel = { provider: "openai-codex", id: "gpt-5.6-sol" };
     const ctx = makeCtx({
@@ -255,9 +322,9 @@ describe("generate_image tool", () => {
     if (saveRoot) await rm(saveRoot, { recursive: true, force: true });
   });
 
-  async function setup(opts: { returnImage?: boolean; authToken?: string } = {}) {
+  async function setup(opts: { returnImage?: boolean; authToken?: string; b64?: string } = {}) {
     saveRoot = await mkdtemp(join(tmpdir(), "imagegen-test-"));
-    const fetcher = vi.fn(async () => okImageResponse());
+    const fetcher = vi.fn(async () => okImageResponse(opts.b64));
     const tool = createImageGenTool({
       saveRoot,
       fetcher: fetcher as unknown as typeof fetch,
@@ -291,6 +358,37 @@ describe("generate_image tool", () => {
     expect(JSON.parse(init.body as string).prompt).toBe("a red fox");
   });
 
+  it.each([true, false])("preserves GIF bytes and MIME (returnImage=%s)", async (returnImage) => {
+    const b64 = Buffer.from("GIF89a-test-response").toString("base64");
+    const { tool, fetcher } = await setup({ b64, returnImage });
+    const result = await tool.execute("gif-call", { prompt: "a waving cat", gif: {} }, undefined, undefined, makeCtx());
+    expect(result.details?.savedPath).toBe(join(saveRoot, "session-abc", "gif-call.gif"));
+    expect(result.details?.format).toBe("gif");
+    expect((await readFile(result.details!.savedPath!)).toString("base64")).toBe(b64);
+    expect(result.content.filter((b) => b.type === "image")).toEqual(
+      returnImage ? [{ type: "image", data: b64, mimeType: "image/gif" }] : [],
+    );
+    const [, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toMatchObject({ output_format: "gif" });
+  });
+
+  it("uses the actual PNG response format even when GIF was requested", async () => {
+    const { tool } = await setup();
+    const result = await tool.execute("fallback", { prompt: "x", gif: {} }, undefined, undefined, makeCtx());
+    expect(result.details?.savedPath).toMatch(/\.png$/);
+    expect(result.content.find((b) => b.type === "image")).toMatchObject({ mimeType: "image/png" });
+  });
+
+  it.each([
+    { frame_count: 1 }, { frame_count: 17 }, { frame_count: 2.5 },
+    { frame_duration_ms: 19 }, { frame_duration_ms: 2001 }, { frame_duration_ms: 20.5 },
+  ])("rejects invalid GIF controls before network calls: %j", async (gif) => {
+    const { tool, fetcher } = await setup();
+    const result = await tool.execute("invalid", { prompt: "x", gif }, undefined, undefined, makeCtx());
+    expect(result.details?.error).toContain("must be an integer");
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it("omits the image block when returnImage is disabled", async () => {
     const { tool } = await setup({ returnImage: false });
     const result = await tool.execute("c1", { prompt: "x" }, undefined, undefined, makeCtx());
@@ -304,7 +402,7 @@ describe("generate_image tool", () => {
     await writeFile(inputPath, Buffer.from(PNG_B64, "base64"));
     const result = await tool.execute(
       "c2",
-      { prompt: "make it blue", referenced_image_paths: [inputPath] },
+      { prompt: "make it blue", referenced_image_paths: [inputPath], gif: { frame_count: 16, frame_duration_ms: 2000 } },
       undefined,
       undefined,
       makeCtx(),
@@ -313,6 +411,8 @@ describe("generate_image tool", () => {
     const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("https://chatgpt.com/backend-api/codex/images/edits");
     const body = JSON.parse(init.body as string);
+    expect(body).toMatchObject({ output_format: "gif", frame_count: 16, frame_duration_ms: 2000 });
+    expect(body).not.toHaveProperty("gif");
     expect(body.images).toHaveLength(1);
     expect(body.images[0].image_url.startsWith("data:image/png;base64,")).toBe(true);
   });

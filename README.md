@@ -22,7 +22,7 @@
 | `extensions/user-input` | 向用户提问 1-3 个带选项的问题（UI 自动加 `Other` 自由文本项）。 | `request_user_input` / `ask_user_question` / `askUserQuestion` |
 | `extensions/side` | 在 Pi overlay 中继承当前 leaf 上下文进行独立、无工具的临时对话，关闭窗口即丢弃 side 历史。 | `/side [message]` |
 | `extensions/init` | 通过主 agent 检查项目并创建项目 `AGENTS.md` 指南（已存在则跳过）。 | `/init` |
-| `extensions/imagegen` | Codex 订阅生图：复刻 codex 内置 `image_gen.imagegen`，走 openai-codex OAuth 直连 ChatGPT 图片 API（gpt-image-2），生成/编辑结果保存到 `~/.pi/agent/generated_images/<session>/` 并回传给模型检查迭代。 | `generate_image` |
+| `extensions/imagegen` | Codex 订阅生图/动图：复刻 codex 内置 `image_gen.imagegen`，走 openai-codex OAuth 直连 ChatGPT 图片 API（gpt-image-2），生成/编辑结果保存到 `~/.pi/agent/generated_images/<session>/` 并回传给模型检查迭代。 | `generate_image` |
 | `extensions/todo` | Codex 风格 `update_plan`（整份计划快照）+ 计划渲染 + 常驻 plan overlay。 | `update_plan` |
 | `extensions/openspec-progress` | 从当前 session branch 最后一次 `/opsx-apply <change>` 读取 `tasks.md`，在输入框上方显示 OpenSpec 完成进度，支持详情 overlay。 | `Alt+O` · `/opsx-progress on\|off\|toggle\|<change>` |
 | `extensions/effort` | 通用 thinking 档位、Codex 风格两级高级选择器、`/model` 模型+档位原子选择，以及 `Alt+,` / `Alt+.` 升降快捷键。 | `/effort [status\|off\|minimal\|low\|medium\|high\|xhigh\|max\|ultra]` · `/model` |
@@ -52,6 +52,7 @@
 | `extensions/memory` | Claude Code 风格自动长期记忆：按当前模型窗口动态限额，全局 `memory.contextRatio` 设置占比（默认 2%），限制累计注入；按需提炼，支持备份去重目录并收拢会话已注入记忆。 | `/memory [list\|show\|init\|compact]` · `/memory-compact` · `/remember <text>` |
 | `extensions/approvals` | 唯一审批闸门:权限模式 × 规则库 × 命令安全 × 受保护路径 × MCP 逐工具，统一 allow/ask/deny。 | `/approvals [mode\|rules\|allow\|ask\|deny\|remove]` |
 | `extensions/plan-mode` | 只读规划闸门:仅可探查，模型提交计划经批准后才恢复写工具。 | `/plan [on\|off]` · `Alt+P` · `exit_plan_mode` |
+| `extensions/tmux-title` | 直接暴露本地 stdio MCP，通过工具描述引导模型工作前更新 tmux 窗口标题。 | `mcp__tmux_title__set_title` |
 | `extensions/behavior` | 向系统提示词追加「工作准则」：Codex 式自主性 + Claude Code 式工程规则（默认开）。 | `--behavior=false` · `PI_BEHAVIOR=0` |
 | `extensions/profiles` | 命名配置预设（模型+工具+thinking+审批）一键保存/切换/删除。 | `/profile [save\|apply\|delete\|<name>]` · `--profile <name>` |
 | `extensions/resume-picker` | 会话恢复选择器 + 跨项目会话全文检索（rg），命中后切回历史会话。 | `/resume-picker [--all] [过滤词]` · `/search <关键词>` |
@@ -71,6 +72,14 @@
 | `extensions/cost-usage` | 只读追踪会话美元成本、按模型 token、时长与编辑增删行，并在 OAuth 模式查看 Codex 订阅套餐额度与重置时间。 | `/cost` · `/usage` |
 | `extensions/web` | 浏览器 Web UI：管理整机 `~/.pi/agent/sessions` 的 Pi 会话并从 CLI 到 Web 聊天；后端零依赖 HTTP + SSE，每个会话一个 `pi --mode rpc` 子进程，支持流式事件/工具调用/图片/审批对话框。 | `/web` · `/web status\|stop` · `--web` / `--web-host` / `--web-port` / `--web-token` |
 | `extensions/honeypot` | LLM 攻防蜜罐实验：同步 jailbreak-prompts、DecoyPot/CTF 场景、NERV 风格蓝队检测与 prompt-manager 清单导出（授权红队评测）。 | `/honeypot` · `--honeypot=true` · [详情](docs/extensions/honeypot.md) |
+
+### tmux 工作标题（直接 MCP 工具）
+
+在 tmux 中启动 Pi 后，`extensions/tmux-title` 自动注册本地 stdio MCP `tmux_title`，以 `direct` 暴露为常规工具。调用时机仅写在工具描述中：每次工作前直接调用 `mcp__tmux_title__set_title({title:"任务摘要"})`，主题明显变化时再更新；不需要读取 Skill、经过 codemode，也不注入每轮提醒消息。重启或 `/reload` 后生效，可在 `/mcp` 检查连接；需 Pi 原生 MCP 注册 API、启用内置 MCP、安装 tmux 及本包依赖。
+
+只修改启动窗格所属窗口，不跟随焦点、不接受任意目标；非 tmux 时不注册，工具描述要求后台 worker 跳过。改名会关闭该窗口的 `automatic-rename`，不改全局配置。模型指引不是强制调用拦截，工具失败也不阻塞主任务。
+
+其他 stdio MCP 客户端可用 `node /绝对路径/extensions/tmux-title/server.mjs` 启动，并继承目标窗格的 `TMUX` 和 `TMUX_PANE` 环境变量。
 
 ### CodeBuddy 工具调用兼容性与实测
 
@@ -183,11 +192,30 @@ teammate 成员拥有独立持久 session，可在多轮消息间 idle，并在�
 
 根会话容量由 localagent 与 teammate 共用：默认最多 9 个驻留线程、9 个同时执行线程（都包含 leader，即最多 8 个驻留/8 个执行中的子 Agent）；可通过 `PI_AGENT_MAX_THREADS` 和 `PI_AGENT_MAX_CONCURRENT` 调整。teammate 仅在实际 turn 占执行槽，idle 时只占驻留槽；驻留名额满时新建会报错，超过执行上限的工作按 FIFO 等待，完成、失败、kill 和 session 切换都会释放或重置配额。
 
+## `/agent <任务>` 单次委派
+
+```text
+/agent 修复 auth 超时，补回归测试，不改变公开接口
+/agent 只读调查配置加载顺序，返回文件位置和证据
+```
+
+只把本次任务交给默认一个后台 LocalAgent，不开启或关闭持续协调模式。主会话先整理目标、责任路径、非目标和验收条件，创建契约并绑定派发；成功后返回逻辑任务 ID 和执行 task ID，立即结束当前回合，你可以继续提问，不必等 worker。
+
+worker 用 `localagent_report` 返回范围/接口变化、阻塞和交付，主会话用 `localagent_message` 定向沟通。交付包含修改文件、实际验证命令与结果、特殊处理、计划偏差、风险和剩余工作；主会话检查证据后才验收。阻塞时交接后结束，不无限等待；需要继续时使用同一逻辑任务的新执行实例。
+
+`/agent` 是原生 `/skill:agent` 的快捷入口，长指令位于 `skills/agent/SKILL.md`。界面默认只显示折叠的 `[skill] agent` 和你的任务，可用原生展开快捷键（默认 Ctrl+O）查看正文；模型仍收到完整指令，并非减少上下文。Skill 仅显式调用，不因后续无关请求自动触发。主会话忙时作为 follow-up 排队，不打断当前任务。
+
+需要 coordinator/localagent/tasks 能力、已加载的 agent Skill 及持久父会话；这不是文件沙箱或硬调度保证，不绕过只读/审批限制或责任冲突，也不静默代做。安装/更新后 `/reload`；入口不可见时检查 coordinator 扩展，Skill 缺失时检查 skills 过滤设置及同名 Skill 冲突，不擅自重新启用资源。关闭持续模式时不会因此开启常驻诊断告警。详见 [单次委派](docs/extensions/coordinator.md#agent-单次委派)。
+
 ## `/coordinator` 主会话协调模式
 
 `/coordinator on|off|status`（无参数查看状态）手动选择协调模式；也支持 `pi --coordinator` / `--coordinator=false` 和启动环境变量 `PI_COORDINATOR_MODE=on|off`，默认关闭。主会话负责沟通、任务派发、纠偏和验收，一次性 LocalAgent 负责具体执行；不隐藏主会话或 worker 的既有工具，不改变模型/effort。
 
 通过 `coordinator_task` 管理可交接的逻辑任务，`task_agent` 用 `coordinator_task_id` 绑定；`localagent_message` 定向纠偏，worker 用 `localagent_report` 上报。共享目录按具体路径单写者调度，不是文件沙箱；blocked 交接后释放，delivered 仍需主会话验收。在途受管理任务存在时暂缓会话树切分支，等待结束或显式停止后再切换。模式与 Ultra 独立，Plan/审批/叶子边界继续有效。详见 [协调模式](docs/extensions/coordinator.md)。
+
+`coordinator_task` 默认只预览前 8 个实际显示行，使用原生 Ctrl+O 展开/收起；仅折叠 UI，不裁剪模型内容。
+
+`async_bash` 的终态通知绑定发起会话及其代际：reload、会话结束或一次性 worker 销毁后不再调用旧 Pi，也不将结果投递到无关会话；输出保留创建时的路径。`async_status` 的 `notification` 字段区分接受发送、抑制、owner 关闭、失败或跳过；`accepted` 仅表示 Pi API 接受发送，不代表模型已处理。发送异常不会提前标记通知成功。
 
 ## `/effort` 与 Codex Ultra
 
@@ -234,14 +262,17 @@ Pi 也支持 `.pi/SYSTEM.md` 和 `APPEND_SYSTEM.md`，但 `/init` 有意以 `AGE
 `extensions/imagegen` 是 codex 内置 `image_gen.imagegen` 工具的 pi 移植（参考 `codex/codex-rs/ext/image-generation`）。它复用 pi 已有的 openai-codex ChatGPT 订阅 OAuth 凭证，直连官方图片 API，无需 API key、无需 models.json 里的 image provider 配置：
 
 - `POST https://chatgpt.com/backend-api/codex/images/generations` 生成；`POST …/images/edits` 编辑（JSON body + data URL 图片，非 multipart）
-- 模型固定 `gpt-image-2`，`background`/`quality`/`size` 全部 `auto`（与 codex 内置工具一致，不暴露旋钮）
+- 模型固定 `gpt-image-2`，`background`/`quality`/`size` 全部 `auto`（保留原有静态图默认值，不暴露旋钮）
+- 动图（协议已接入，实际可用性受服务端开放限制；当前实测可能返回 `GIF output is not enabled for this request.`）：传 `gif: {}` 使用默认 9 帧、每帧 200ms；可设 `frame_count`（整数 2–16）、`frame_duration_ms`（整数 20–2000）。生成和编辑均支持；请求展开为同级 `output_format: "gif"` 和帧控制字段，端点与 OAuth 不变。不传 `gif` 仍为静态图。
 - 参数：`prompt`；编辑时二选一传 `referenced_image_paths`（本地图片绝对路径，≤5）或 `num_last_images_to_include`（最近会话图片 1-5）
 - 认证：通过 `ctx.modelRegistry` 找 openai-codex 模型并走 `getApiKeyAndHeaders` 取 OAuth token；API key 模式会明确报错
 
-`generate_image` 会把结果保存到 `~/.pi/agent/generated_images/<sessionId>/<toolCallId>.png`（codex 的 `$CODEX_HOME/generated_images/<thread>/<call>.png` 布局），同时把图片作为 image content block 返回给模型以便检查与迭代（codex 同款行为；当前模型不支持图片输入时 pi 会自动降级为文本提示）。两个开关：
+`generate_image` 会把结果保存到 `~/.pi/agent/generated_images/<sessionId>/<toolCallId>.png` 或 `.gif`（按返回文件头识别，原样保存全部帧；codex 的 `$CODEX_HOME/generated_images/<thread>/<call>.png` 布局），同时把图片作为 image content block 返回给模型以便检查与迭代（codex 同款行为；当前模型不支持图片输入时 pi 会自动降级为文本提示）。两个开关：
 
 - `--imagegen=false`：整体禁用该工具
 - `--imagegen-return-image=false`：不把图片回传模型（省上下文），只返回保存路径，模型可用 read 工具查看图片
+
+动图示例：`generate_image({prompt: "一只挥手的小猫，循环动画", gif: {frame_count: 9, frame_duration_ms: 200}})`。内联预览可能只显示单帧，播放请使用保存的 `.gif` 文件。编辑已有 GIF 时按 Codex 指引先检查各帧并制作等尺寸规则网格 spritesheet，再传该图并设置 `gif`，不要直接传 GIF。
 
 注意：生图通常需要 20 秒到几分钟，工具内置 300s 超时与 5s 进度更新。
 
@@ -287,7 +318,7 @@ OpenSpec: demo-change · 3/8 · ████░░░░ · Alt+O 切换 · Alt+
 └─ ○ Run verification
 ```
 
-最新计划会保存为 session custom entry。`/resume`、`/reload`、session tree 切换或 compaction 后，扩展会根据当前分支最后一次 `codex-plan` 快照恢复状态：如果仍有 `pending` 或 `in_progress` 步骤，则恢复 overlay；如果最后一次计划已经全部 `completed`，则不会显示陈旧的常驻列表。
+最新计划会保存为各自 session 的 custom entry。主会话和每个 LocalAgent 的计划状态及 overlay 按扩展实例隔离，即使同进程复用已缓存的扩展模块，`update_plan`、分支恢复或销毁也不会覆盖其他会话的计划；此隔离不改变共享的 Plan 模式权限限制。`/resume`、`/reload`、session tree 切换或 compaction 后，扩展会根据当前分支最后一次 `codex-plan` 快照恢复状态：如果仍有 `pending` 或 `in_progress` 步骤，则恢复 overlay；如果最后一次计划已经全部 `completed`，则不会显示陈旧的常驻列表。
 
 ## Compact UI
 
@@ -312,6 +343,8 @@ npm install
 npm test
 npm run typecheck
 ```
+
+排查压缩/重试开关被改写时，可使用[临时设置写入追踪](docs/settings-write-trace.md)：用 `bash scripts/with-settings-trace.sh` 给原启动命令加前缀，仅记录写入元数据和调用栈，不修改 SDK 或用户配置。
 
 ## 参考源码
 

@@ -31,7 +31,8 @@ import { notifyTaskTerminal } from "../tasks/notifications.js";
 import { appendTaskOutput, evictTaskOutput, flushTaskOutput, initTaskOutput } from "../tasks/diskOutput.js";
 import { getTaskOutputPath } from "../tasks/outputPath.js";
 import { ownerFromSessionFile } from "../tasks/currentOwner.js";
-import { registerChildReaper, unregisterChildReaper } from "../tasks/childReaper.js";
+import { registerChildReaper } from "../tasks/childReaper.js";
+import { getSessionLifetime, type SessionLifetimeToken } from "../shared/sessionLifetime.js";
 import { logError } from "../tasks/logging.js";
 
 /** 每任务内存里保留的输出尾部上限；完整输出始终在 outputFile 里。 */
@@ -103,7 +104,8 @@ interface AsyncStatusDetails {
   exitCode?: number;
   elapsedMs?: number;
   outputFile?: string;
-  tasks?: { taskId: string; status: AsyncStatus; label?: string }[];
+  notification?: AsyncTaskState["notification"];
+  tasks?: { taskId: string; status: AsyncStatus; label?: string; notification?: AsyncTaskState["notification"] }[];
 }
 
 interface AsyncKillDetails {
@@ -116,6 +118,7 @@ interface AsyncTaskState {
   id: string;
   command: string;
   cwd: string;
+  outputFile: string;
   label?: string;
   child: ReturnType<typeof spawn>;
   pid?: number;
@@ -135,6 +138,9 @@ interface AsyncTaskState {
    * 回收」—— 只有记到 owner 的任务才会在成员被 kill 时一并终止。
    */
   ownerAgentId?: string;
+  /** Captured while the caller is live; never queries an invalidated Pi API. */
+  lifetime?: SessionLifetimeToken;
+  notification?: "accepted" | "suppressed" | "owner_closed" | "failed" | "skipped";
 }
 
 /**
@@ -368,6 +374,7 @@ export async function spawnAsyncShell(
     notify: boolean;
     /** Owning teammate (`name@team`), resolved from the CALLER's session file. */
     ownerAgentId?: string;
+    lifetime?: SessionLifetimeToken;
     /**
      * 唤醒策略。缺省时不抑制（等同未中止）。
      *
@@ -376,6 +383,8 @@ export async function spawnAsyncShell(
     wakeup?: WakeupControl;
   },
 ): Promise<AsyncTaskState> {
+  const lifetime = opts.lifetime ?? getSessionLifetime(pi).capture();
+  if (!lifetime.isActive()) throw new Error("Async task owner is closed");
   const id = generateTaskId("async_shell");
   const origin = copyTaskOrigin(opts);
   const activity = { ...origin, taskId: id, operationId: id, cwd: opts.cwd };
@@ -385,6 +394,7 @@ export async function spawnAsyncShell(
   const ownerAgentId = opts.ownerAgentId;
   let child: ReturnType<typeof spawn>;
   try {
+    if (!lifetime.isActive()) throw new Error("Async task owner is closed");
     child = spawn("/bin/bash", ["-lc", opts.command], {
       cwd: opts.cwd,
       env: process.env,
@@ -403,6 +413,7 @@ export async function spawnAsyncShell(
     id,
     command: opts.command,
     cwd: opts.cwd,
+    outputFile,
     label: opts.label,
     child,
     pid: child.pid,
@@ -412,6 +423,7 @@ export async function spawnAsyncShell(
     killed: false,
     notify: opts.notify,
     ownerAgentId,
+    lifetime,
   };
   registry().set(id, task);
 
@@ -484,8 +496,14 @@ export async function spawnAsyncShell(
       logError(e, "async updateTaskState");
     }
 
-    if (!task.notify) return;
+    // Output remains durable even when the originating runtime is gone or
+    // notification was explicitly disabled. These helpers use plain task data.
     void flushTaskOutput(id).catch((e: unknown) => logError(e, "async flushTaskOutput"));
+    if (!task.notify) return;
+    if (task.lifetime && !task.lifetime.isActive()) {
+      task.notification = "owner_closed";
+      return;
+    }
 
     const name = opts.label ?? description;
     const verdict = status === "completed" ? "完成" : status === "killed" ? "被终止" : "失败";
@@ -499,7 +517,7 @@ export async function spawnAsyncShell(
     // llmVisible:false 让原始 XML 不进模型上下文（由 before_agent_start 的汇总承担）。
     const suppressed = opts.wakeup?.isUserAborted() === true;
     try {
-      notifyTaskTerminal(pi, store as never, {
+      const accepted = notifyTaskTerminal(pi, store as never, {
         taskId: id,
         taskType: "async_shell",
         status: terminal,
@@ -516,12 +534,14 @@ export async function spawnAsyncShell(
         ...(suppressed ? { llmVisible: false } : {}),
         retainMs: 5 * 60_000,
       });
+      task.notification = accepted ? (suppressed ? "suppressed" : "accepted") : "skipped";
     } catch (e) {
-      // A dead session has nobody to wake; the output file still holds the
-      // result. Failing here must not crash the process.
+      task.notification = "failed";
+      // Unexpected active-session failures stay observable and remain eligible
+      // for retry in the store; lifetime expiry is handled before any Pi call.
       logError(e, "async notifyTaskTerminal");
     }
-    if (suppressed) {
+    if (suppressed && (!task.lifetime || task.lifetime.isActive())) {
       // 记账，供 before_agent_start 交付。放在 notify 之后：即使 notify 抛错，
       // 结果也不会因此从交付列表里消失（输出文件仍在磁盘上）。
       try {
@@ -538,11 +558,14 @@ export async function spawnAsyncShell(
         logError(e, "async recordSuppressed");
       }
     }
-    // 已完成的后台任务不再需要 task 面板占位；输出已落盘。
-    void evictTaskOutput(id).catch(() => {});
   };
 
   child.on("exit", finish);
+  // exit can precede the final stdout/stderr chunks. Keep the captured output
+  // sink until close, otherwise a late chunk can recreate it in a new session.
+  child.once("close", () => {
+    void evictTaskOutput(id).catch((e: unknown) => logError(e, "async evictTaskOutput"));
+  });
   child.on("error", (err) => {
     try {
       appendTaskOutput(id, `\n[spawn error] ${err.message}\n`);
@@ -660,7 +683,15 @@ export const AsyncShellTask = {
       task.notify
         ? st === "running"
           ? "wake-up: on completion it notifies and wakes the session automatically — do NOT poll or sleep"
-          : "wake-up: already delivered"
+          : task.notification === "owner_closed"
+            ? "wake-up: skipped (originating session closed); output retained"
+            : task.notification === "failed"
+              ? "wake-up: notification failed; output retained"
+              : task.notification === "suppressed"
+                ? "wake-up: suppressed at completion (user aborted)"
+                : task.notification === "skipped"
+                  ? "wake-up: skipped (owner inactive or notification already handled)"
+                  : "wake-up: accepted by session"
         : "wake-up: disabled (notify=never) — check with async_status",
     );
     return lines;
@@ -709,6 +740,7 @@ export default function asyncExtension(pi: ExtensionAPI): void {
    * is a plain object, so writes after session teardown are harmless.
    */
   let captured: TaskStoreLike | undefined;
+  const lifetime = getSessionLifetime(pi);
 
   /**
    * 「用户中止纪元」状态机（见 createAbortEpoch 的注释）。
@@ -725,6 +757,7 @@ export default function asyncExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_start", (_event, ctx) => {
+    lifetime.restart();
     try {
       const handle = getTasksHandle(pi);
       captured = handle.store;
@@ -763,10 +796,13 @@ export default function asyncExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", async () => {
-    unregisterChildReaper("async");
+    lifetime.close();
+    // The "async" reaper is process-global and captures no Pi/session state.
+    // Keep it registered: another root/worker may still own background tasks.
     // 会话结束：中止纪元与待交付列表都是本会话的派生态，不能跨会话泄到下一个。
     aborted.reset();
-    const running = [...registry().values()].filter((t) => t.endedAt === undefined);
+    const owned = [...registry().values()].filter((t) => t.lifetime?.owner === lifetime.owner);
+    const running = owned.filter((t) => t.endedAt === undefined);
     await Promise.all(
       running.map(async (t) => {
         try {
@@ -777,7 +813,7 @@ export default function asyncExtension(pi: ExtensionAPI): void {
         }
       }),
     );
-    registry().clear();
+    for (const task of owned) registry().delete(task.id);
   });
 
   // ---------- ① async_bash ----------
@@ -831,10 +867,11 @@ export default function asyncExtension(pi: ExtensionAPI): void {
               ?.sessionManager?.getSessionFile?.(),
           ),
           wakeup: aborted.wakeup,
+          lifetime: lifetime.capture(),
         });
         const text =
           `started (taskId=${task.id}${task.pid ? `, pid=${task.pid}` : ""}).\n` +
-          `output: ${getTaskOutputPath(task.id)}\n` +
+          `output: ${task.outputFile}\n` +
           (task.notify
             ? "You will be notified automatically when it finishes — end your turn or do other work; do not poll."
             : "notify=never: check it with async_status.");
@@ -893,14 +930,15 @@ export default function asyncExtension(pi: ExtensionAPI): void {
                 .map(
                   (t) =>
                     `- ${t.id}  [${statusOf(t)}]  ${formatDuration(elapsedOf(t))}  ` +
-                    `${t.label ?? t.command.slice(0, 60)}`,
+                    `${t.label ?? t.command.slice(0, 60)}` +
+                    (t.notification === "failed" || t.notification === "owner_closed" ? ` (notification: ${t.notification})` : ""),
                 )
                 .join("\n"),
             },
           ],
           details: {
             action: "async_status" as const,
-            tasks: all.map((t) => ({ taskId: t.id, status: statusOf(t), label: t.label })),
+            tasks: all.map((t) => ({ taskId: t.id, status: statusOf(t), label: t.label, notification: t.notification })),
           },
         };
       }
@@ -922,14 +960,15 @@ export default function asyncExtension(pi: ExtensionAPI): void {
         `${task.label ? ` · ${task.label}` : ""}`;
       const body = task.tail.trim().length > 0 ? `\n${tailLines(task.tail, maxLines)}` : "";
       return {
-        content: [{ type: "text" as const, text: head + body }],
+        content: [{ type: "text" as const, text: head + (task.notification ? `\nnotification: ${task.notification}` : "") + body }],
         details: {
           action: "async_status" as const,
           taskId: task.id,
           status: st,
           exitCode: task.exitCode ?? undefined,
           elapsedMs: elapsedOf(task),
-          outputFile: getTaskOutputPath(task.id),
+          outputFile: task.outputFile,
+          notification: task.notification,
         },
       };
     },

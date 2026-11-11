@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildWorkerRuntime } from "./workerRuntime.js";
+import { getSessionLifetime } from "../shared/sessionLifetime.js";
 import type { FastModeState } from "../fast-mode/core.js";
 import { isForkWorker, registerForkWorker } from "./workerIdentity.js";
 import { setAgentMutationPaused, _resetAgentMutationPauseForTest } from "../shared/agentMutationPause.js";
@@ -14,6 +15,17 @@ function harness(read: () => FastModeState, oauth = true) {
 }
 
 describe("leaf worker runtime", () => {
+  it("closes async tokens captured before inline runtime installation without SDK shutdown events", () => {
+    const pi = { events: {}, on: () => {} };
+    const token = getSessionLifetime(pi).capture();
+    let open = true;
+    buildWorkerRuntime(() => ({ enabled: false }), () => open)(pi as never);
+    expect(token.isActive()).toBe(true);
+    // spawnLocalAgent.closeWorker uses this flag before AgentSession.dispose.
+    open = false;
+    expect(token.isActive()).toBe(false);
+  });
+
   it("follows off → Fast → UltraFast → off without changing prior payloads", () => {
     let state: FastModeState = { enabled: false };
     const h = harness(() => state);

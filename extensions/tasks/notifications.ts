@@ -1,8 +1,8 @@
 // Terminal task 通知 — 把 task 终态广播到 Pi 的所有可见通道(LLM / TUI / RPC / JSON / session)。
 //
 // 设计要点:
-//   - notified 是原子 CAS — 通过 `markTaskNotified` 在 store.set 内部 read-then-write。
-//     防止 TaskStopTool 与各 task type 自身 result handler 双发通知(等价 Claude markTaskNotified)。
+//   - 先用跨 realm 的独占 claim 防止重入双发；sendMessage 接受后才提交 notified。
+//     发送抛错会释放 claim，不把失败误记成成功。
 //   - 复用 Pi 的 `pi.sendMessage` 单一入口 — 它会自动路由到:
 //       (a) RPC mode → stdout JSONL message_start/message_end 事件
 //       (b) JSON mode → 同上
@@ -110,20 +110,32 @@ export interface NotifyTaskTerminalOptions {
   extra?: Record<string, unknown>;
 }
 
-/**
- * 原子 CAS:把 task.notified 从 false 翻到 true。
- *
- * - 调用方应只有"翻转成功(返回 true)"才发通知。
- * - 任务不存在或已 notified 时返回 false(调用方应静默跳过)。
- *
- * 等价 Claude `claude/tasks/RemoteAgentTask/RemoteAgentTask.tsx:markTaskNotified`,
- * 但本期不限定 task type — 任何 TaskStateBase 都可被 mark。
- */
+const NOTIFICATION_CLAIMS = Symbol.for("pi.tasks.notification-claims");
+type NotificationClaims = WeakMap<TaskStore, Map<string, symbol>>;
+
+/** Shared across jiti realms; no snapshot writes that could recursively retry a failed send. */
+function notificationClaims(store: TaskStore): Map<string, symbol> {
+  const global = globalThis as unknown as Record<symbol, NotificationClaims | undefined>;
+  const registry = global[NOTIFICATION_CLAIMS] ??= new WeakMap();
+  let claims = registry.get(store);
+  if (!claims) {
+    claims = new Map();
+    registry.set(store, claims);
+  }
+  return claims;
+}
+
+/** Explicit CAS for intentional suppression; active sends own their commit. */
 export function markTaskNotified(
   taskId: string,
   store: TaskStore,
   retainMs: number = PANEL_GRACE_MS,
 ): boolean {
+  return commitTaskNotification(taskId, store, retainMs);
+}
+
+function commitTaskNotification(taskId: string, store: TaskStore, retainMs: number, claim?: symbol): boolean {
+  if (notificationClaims(store).get(taskId) !== claim) return false;
   let flipped = false;
   store.set((prev) => {
     const task = prev[taskId];
@@ -222,7 +234,8 @@ export function notifyTaskTerminal(
   pi: ExtensionAPI,
   store: TaskStore,
   opts: NotifyTaskTerminalOptions,
-): void {
+): boolean {
+  // True means the synchronous Pi API accepted a send, not downstream delivery.
   // Refuse to speak for a teammate that no longer exists. Without this a
   // background task whose owner was killed still reports its completion and
   // WAKES the leader (observed: a leaked async_bash notified the leader after
@@ -234,49 +247,64 @@ export function notifyTaskTerminal(
     // Mark notified so the CAS stays single-shot and the task can be evicted
     // normally; it simply produces no message.
     markTaskNotified(opts.taskId, store, opts.retainMs);
-    return;
+    return false;
   }
-  if (!markTaskNotified(opts.taskId, store, opts.retainMs)) return;
-  const content = buildTaskNotificationXml(opts);
-  const llmVisible = opts.llmVisible !== false;
-  const details: TaskNotificationDetails = {
-    taskId: opts.taskId,
-    taskType: opts.taskType,
-    status: opts.status,
-    description: opts.description,
-    summary: opts.summary ?? `${opts.description} ${statusText(opts.status)}`,
-    outputFile: opts.outputFile,
-    toolUseId: opts.toolUseId,
-    exitCode: opts.exitCode,
-    finalMessage: opts.finalMessage,
-    worktreePath: opts.worktreePath,
-    worktreeBranch: opts.worktreeBranch,
-    durationMs: opts.durationMs,
-    timestamp: Date.now(),
-    // llmVisible:false 时打标记 — installTaskNotificationContextFilter 据此
-    // 把本条从 LLM payload 剥离(TUI/RPC/JSONL 不受影响)。
-    extra: llmVisible ? opts.extra : { ...opts.extra, llmVisible: false },
-  };
-  pi.sendMessage<TaskNotificationDetails>(
-    {
-      customType: TASK_NOTIFICATION_CUSTOM_TYPE,
-      content,
-      // Async wakeups (background task completes while the user is
-      // doing something else) paint a row to the TUI so the completion
-      // is visible. Sync paths suppress by default: the originating
-      // tool's own renderResult already surfaces the terminal line in
-      // the same conversation slot, and a second customMessage row was
-      // the visible "三块 task_agent 信息" duplication the user reported.
-      // 显式 opts.display 可解耦 display 与 triggerTurn(例如后台终态
-      // 不抢 turn 但仍画一行)。Note: display:false only hides the TUI
-      // surface — the RPC stream and JSONL persistence still receive
-      // the full XML payload via Pi's sendMessage routing; LLM context
-      // 由 llmVisible 选项 + context 过滤器控制。
-      display: opts.display ?? opts.triggerTurn === true,
-      details,
-    },
-    buildSendMessageOptions(opts),
-  );
+  // An exclusive synchronous claim is shared across extension realms. Keep it
+  // held through commit (and its synchronous listeners) as well as sendMessage.
+  const claims = notificationClaims(store);
+  if (claims.has(opts.taskId)) return false;
+  const claim = Symbol("notification-send");
+  claims.set(opts.taskId, claim);
+  try {
+    const task = store.getTask(opts.taskId);
+    if (!task || task.notified) return false;
+    const content = buildTaskNotificationXml(opts);
+    const llmVisible = opts.llmVisible !== false;
+    const details: TaskNotificationDetails = {
+      taskId: opts.taskId,
+      taskType: opts.taskType,
+      status: opts.status,
+      description: opts.description,
+      summary: opts.summary ?? `${opts.description} ${statusText(opts.status)}`,
+      outputFile: opts.outputFile,
+      toolUseId: opts.toolUseId,
+      exitCode: opts.exitCode,
+      finalMessage: opts.finalMessage,
+      worktreePath: opts.worktreePath,
+      worktreeBranch: opts.worktreeBranch,
+      durationMs: opts.durationMs,
+      timestamp: Date.now(),
+      // llmVisible:false 时打标记 — installTaskNotificationContextFilter 据此
+      // 把本条从 LLM payload 剥离(TUI/RPC/JSONL 不受影响)。
+      extra: llmVisible ? opts.extra : { ...opts.extra, llmVisible: false },
+    };
+    pi.sendMessage<TaskNotificationDetails>(
+      {
+        customType: TASK_NOTIFICATION_CUSTOM_TYPE,
+        content,
+        // Async wakeups (background task completes while the user is
+        // doing something else) paint a row to the TUI so the completion
+        // is visible. Sync paths suppress by default: the originating
+        // tool's own renderResult already surfaces the terminal line in
+        // the same conversation slot, and a second customMessage row was
+        // the visible "三块 task_agent 信息" duplication the user reported.
+        // 显式 opts.display 可解耦 display 与 triggerTurn(例如后台终态
+        // 不抢 turn 但仍画一行)。Note: display:false only hides the TUI
+        // surface — the RPC stream and JSONL persistence still receive
+        // the full XML payload via Pi's sendMessage routing; LLM context
+        // 由 llmVisible 选项 + context 过滤器控制。
+        display: opts.display ?? opts.triggerTurn === true,
+        details,
+      },
+      buildSendMessageOptions(opts),
+    );
+    commitTaskNotification(opts.taskId, store, opts.retainMs ?? PANEL_GRACE_MS, claim);
+    return true;
+  } finally {
+    // A rejected API call leaves notified/retention untouched and retryable.
+    // Releasing a claim must not notify listeners or trigger recursive retries.
+    if (claims.get(opts.taskId) === claim) claims.delete(opts.taskId);
+  }
 }
 
 /**

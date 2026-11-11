@@ -19,6 +19,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 | `/plan [on\|off]`（`Alt+P`） | plan-mode | 进入/退出只读规划闸门 |
 | `/profile [save\|apply\|delete\|<name>]` | profiles | 保存/切换模型+工具+thinking+审批的命名预设 |
 | `/resume-picker [--all] [过滤词]`, `/search <关键词>` | resume-picker | 恢复历史会话、跨项目全文检索会话（改名避让 pi 内置 `/resume`) |
+| `/agent <任务>`（或 `/skill:agent`） | coordinator + skills/agent | 原生 Skill 折叠展示的单次委派入口；默认一个后台 LocalAgent，主会话不阻塞，异常通信和证据交付 |
 | `/coordinator [on\|off\|status]` | coordinator | 手动开启主会话沟通/派发/验收模式，具体执行交给一次性 LocalAgent；不隐藏既有工具，另支持 `--coordinator` / `PI_COORDINATOR_MODE` |
 | `/autopilot [on [目标]\|off\|status]` | autopilot | 自主续跑控制器 |
 | `/loop [interval] <prompt>`、`/loop list`、`/loop cancel <id\|all>` | loop | 定时重复运行提示词或斜杠命令；创建后立即执行一次 |
@@ -79,6 +80,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **控制“能不能执行某工具/命令”**：`/approvals`（规则 + default/acceptEdits/bypass 模式，保护 .git/.pi/~/.ssh，拦 rm -rf/sudo 等）。
 - **人工检查本会话代码修改**：对话界面 `Ctrl+R` 或 `/changes`，逐文件看相对 HEAD 的完整差异，`d` 确认完成仅隐藏当前版本、不是提交；下次修改重新出现。按 `o` 可切换当前目录和跨目录仓库模式；想让模型评审则用 `/review`，整个工作树文本差异用 `/diff`。
 - **想先看方案再动手**：`/plan`（只读探查→提交计划→批准后恢复写工具）。
+- **只把本次工作交给后台 worker，自己继续聊天**：`/agent <任务>`；显式契约绑定、异常用 `localagent_report`、定向沟通用 `localagent_message`，主会话证据验收。需要可用的 coordinator/localagent/tasks 和持久父会话；保留只读/审批边界，提示词不是硬隔离，不改变持续模式或开启常驻告警。`/agent` 转发原生 `/skill:agent`，默认仅折叠显示 `[skill] agent`，全文仍进入上下文；忙时 follow-up 排队，Skill 缺失报错不回退全文。安装更新后 `/reload`；详见 `docs/extensions/coordinator.md` 的单次委派。
 - **主会话只管沟通、派发和验收，具体工作交给 worker**：`/coordinator on`（也支持 CLI/env，默认关闭）；保留既有工具，按逻辑任务和文件责任协作，详见 `docs/extensions/coordinator.md`。与 `/autopilot` 自动续跑不同，也不等于长期 teammate。
 - **想让 agent 不停手连续推进长任务**：`/autopilot on [目标]`（有预算/轮数/收益递减停止）。
 - **想定时轮询状态或重复执行命令**：`/loop [interval] <prompt>`（会立即执行一次，后续仅在空闲时触发）。
