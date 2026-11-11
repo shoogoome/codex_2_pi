@@ -40,6 +40,7 @@
 
 | 扩展 | 一句话能力 | 主要命令 / 入口 | 详情 |
 |---|---|---|---|
+| `session-name` | 模型工作前直接调用工具修改当前 Pi 会话 name，不依赖 tmux、MCP 或 Skill。 | `set_session_name` | [session-name.md](extensions/session-name.md) |
 | `profiles` | 命名配置预设（模型 + 工具 + thinking + 审批模式）一键保存/切换/删除，支持 `--profile` 启动应用。 | `/profile`（`save`/`apply`/`delete`/`<name>`）· `--profile <name>` | [profiles.md](extensions/profiles.md) |
 | `resume-picker` | 会话恢复选择器 + 跨项目会话全文检索（rg，缺失时降级内存匹配），命中后切回历史会话。 | `/resume-picker [--all] [过滤词]` · `/search <关键词>` | [resume-picker.md](extensions/resume-picker.md) |
 | `autopilot` | 自主续跑控制器：一轮结束后自动注入隐藏 follow-up 连续推进，默认关闭，按预算/轮数/收益递减自动停止。 | `/autopilot`（`on [objective]`/`off`/`status`） | [autopilot.md](extensions/autopilot.md) |

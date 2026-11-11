@@ -59,6 +59,8 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 
 ## 模型可调用的工具（非命令）
 
+- **set_session_name**（session-name）：常规工具，模型工作前或主题明显变化时用任务摘要修改当前 Pi 会话 name；不依赖 tmux、MCP 或额外 Skill，不改其他会话。详见 `docs/extensions/session-name.md`。
+
 - **task_agent**（localagent）：默认从当前活动上下文精简 fork 后台子 agent，继承启动时主会话 provider/model/thinking，Fast/UltraFast 按请求动态跟随主会话，终态自动回传最终回答。fork 是叶子 worker，不能创建其他 agent、teammate 或 team；主会话传 `team_name`+`name` 可改为创建长生命周期 teammate。
 - **coordinator_task / localagent_message / localagent_report**（coordinator）：可交接逻辑任务账本、主模型定向纠偏及运行时绑定的 worker 报告；交付仍需主会话验收，阻塞后交接释放，详见 `docs/extensions/coordinator.md`。
 - **task_bash**（localshell）：后台执行 shell 命令（超时自动转后台）。

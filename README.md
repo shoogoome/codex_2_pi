@@ -52,6 +52,7 @@
 | `extensions/memory` | Claude Code 风格自动长期记忆：按当前模型窗口动态限额，全局 `memory.contextRatio` 设置占比（默认 2%），限制累计注入；按需提炼，支持备份去重目录并收拢会话已注入记忆。 | `/memory [list\|show\|init\|compact]` · `/memory-compact` · `/remember <text>` |
 | `extensions/approvals` | 唯一审批闸门:权限模式 × 规则库 × 命令安全 × 受保护路径 × MCP 逐工具，统一 allow/ask/deny。 | `/approvals [mode\|rules\|allow\|ask\|deny\|remove]` |
 | `extensions/plan-mode` | 只读规划闸门:仅可探查，模型提交计划经批准后才恢复写工具。 | `/plan [on\|off]` · `Alt+P` · `exit_plan_mode` |
+| `extensions/session-name` | 直接暴露会话命名工具，引导模型工作前更新当前 Pi 会话 name；不依赖 tmux 或 MCP。 | `set_session_name` · [详情](docs/extensions/session-name.md) |
 | `extensions/tmux-title` | 直接暴露本地 stdio MCP，通过工具描述引导模型工作前更新 tmux 窗口标题。 | `mcp__tmux_title__set_title` |
 | `extensions/behavior` | 向系统提示词追加「工作准则」：Codex 式自主性 + Claude Code 式工程规则（默认开）。 | `--behavior=false` · `PI_BEHAVIOR=0` |
 | `extensions/profiles` | 命名配置预设（模型+工具+thinking+审批）一键保存/切换/删除。 | `/profile [save\|apply\|delete\|<name>]` · `--profile <name>` |
@@ -72,6 +73,10 @@
 | `extensions/cost-usage` | 只读追踪会话美元成本、按模型 token、时长与编辑增删行，并在 OAuth 模式查看 Codex 订阅套餐额度与重置时间。 | `/cost` · `/usage` |
 | `extensions/web` | 浏览器 Web UI：管理整机 `~/.pi/agent/sessions` 的 Pi 会话并从 CLI 到 Web 聊天；后端零依赖 HTTP + SSE，每个会话一个 `pi --mode rpc` 子进程，支持流式事件/工具调用/图片/审批对话框。 | `/web` · `/web status\|stop` · `--web` / `--web-host` / `--web-port` / `--web-token` |
 | `extensions/honeypot` | LLM 攻防蜜罐实验：同步 jailbreak-prompts、DecoyPot/CTF 场景、NERV 风格蓝队检测与 prompt-manager 清单导出（授权红队评测）。 | `/honeypot` · `--honeypot=true` · [详情](docs/extensions/honeypot.md) |
+
+### Pi 会话名称
+
+`extensions/session-name` 提供常规工具 `set_session_name({name:"任务摘要"})`，通过 Pi 原生 API 修改当前会话的显示名称。仅靠工具描述引导模型工作前调用，不读取 Skill、不经过 codemode、不注入每轮提醒。不依赖 tmux，和窗口标题工具独立；重启或 `/reload` 生效。[详情](docs/extensions/session-name.md)。
 
 ### tmux 工作标题（直接 MCP 工具）
 
