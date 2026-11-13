@@ -52,8 +52,10 @@
 | `extensions/memory` | Claude Code 风格自动长期记忆：按当前模型窗口动态限额，全局 `memory.contextRatio` 设置占比（默认 2%），限制累计注入；按需提炼，支持备份去重目录并收拢会话已注入记忆。 | `/memory [list\|show\|init\|compact]` · `/memory-compact` · `/remember <text>` |
 | `extensions/approvals` | 唯一审批闸门:权限模式 × 规则库 × 命令安全 × 受保护路径 × MCP 逐工具，统一 allow/ask/deny。 | `/approvals [mode\|rules\|allow\|ask\|deny\|remove]` |
 | `extensions/plan-mode` | 只读规划闸门:仅可探查，模型提交计划经批准后才恢复写工具。 | `/plan [on\|off]` · `Alt+P` · `exit_plan_mode` |
+| `extensions/work-log` | 模型按工作里程碑记录任务、日期和进度，全局本地目录按年/月/日组织，供外部定时汇总。 | `record_work` · `PI_WORK_LOG_DIR` · [详情](docs/extensions/work-log.md) |
 | `extensions/session-name` | 直接暴露会话命名工具，引导模型工作前更新当前 Pi 会话 name；不依赖 tmux 或 MCP。 | `set_session_name` · [详情](docs/extensions/session-name.md) |
 | `extensions/tmux-title` | 直接暴露本地 stdio MCP，通过工具描述引导模型工作前更新 tmux 窗口标题。 | `mcp__tmux_title__set_title` |
+| `extensions/package-prompts` | 集中维护包级系统提示词；优先 codemode、独立长任务非阻塞委派 LocalAgent、批量命名，独立工具保持解耦。 | 自动注入 · [详情](docs/extensions/package-prompts.md) |
 | `extensions/behavior` | 向系统提示词追加「工作准则」：Codex 式自主性 + Claude Code 式工程规则（默认开）。 | `--behavior=false` · `PI_BEHAVIOR=0` |
 | `extensions/profiles` | 命名配置预设（模型+工具+thinking+审批）一键保存/切换/删除。 | `/profile [save\|apply\|delete\|<name>]` · `--profile <name>` |
 | `extensions/resume-picker` | 会话恢复选择器 + 跨项目会话全文检索（rg），命中后切回历史会话。 | `/resume-picker [--all] [过滤词]` · `/search <关键词>` |

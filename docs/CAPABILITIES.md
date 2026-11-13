@@ -22,6 +22,7 @@
 
 | 扩展 | 一句话能力 | 主要命令 / 入口 | 详情 |
 |---|---|---|---|
+| `package-prompts` | 包级系统提示词统一入口：优先 codemode、非阻塞 LocalAgent 委派与批量命名，不修改独立工具描述。 | 自动注入 | [package-prompts.md](extensions/package-prompts.md) |
 | `context-viewer` | 只读查看当前有效系统提示词及隐藏注入内容，排除聊天历史和工具结果。 | `/context` · `/system-prompt` | [context-viewer.md](extensions/context-viewer.md) |
 | `context-pipeline` | 分层上下文管理：发送前按预算截断 tool_result、无 LLM 的 microcompact 清旧工具结果，并为 Pi 原生自动/手动压缩生成结构化摘要。 | `/prune`（`status`/`soft`/`hard`）· `/context-prune` | [context-pipeline.md](extensions/context-pipeline.md) |
 | `compact-continue` | Pi 阈值压缩后保守判断是否仍有可执行工作；仅在 toolResult、截断/tool-use 回合或未完成计划等强信号下隐藏续跑一次，真实用户/自动队列优先。 | `--compact-continue`（默认开）· `--compact-continue=false` 关闭 | [compact-continue.md](extensions/compact-continue.md) |
@@ -40,6 +41,7 @@
 
 | 扩展 | 一句话能力 | 主要命令 / 入口 | 详情 |
 |---|---|---|---|
+| `work-log` | 全局本地工作日志：任务、日期、进度和结果按年/月/日保存，供外部定时任务汇总。 | `record_work` · `PI_WORK_LOG_DIR` · `--work-log-dir` | [work-log.md](extensions/work-log.md) |
 | `session-name` | 模型工作前直接调用工具修改当前 Pi 会话 name，不依赖 tmux、MCP 或 Skill。 | `set_session_name` | [session-name.md](extensions/session-name.md) |
 | `profiles` | 命名配置预设（模型 + 工具 + thinking + 审批模式）一键保存/切换/删除，支持 `--profile` 启动应用。 | `/profile`（`save`/`apply`/`delete`/`<name>`）· `--profile <name>` | [profiles.md](extensions/profiles.md) |
 | `resume-picker` | 会话恢复选择器 + 跨项目会话全文检索（rg，缺失时降级内存匹配），命中后切回历史会话。 | `/resume-picker [--all] [过滤词]` · `/search <关键词>` | [resume-picker.md](extensions/resume-picker.md) |

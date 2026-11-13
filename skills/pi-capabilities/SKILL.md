@@ -47,6 +47,8 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 
 ## 无命令 / 靠 flag 或按键的能力
 
+- **package-prompts**：包级系统提示词统一入口；跨工具编排规则集中维护：工作时优先 codemode，偏独立的长任务可交给后台 LocalAgent、主会话不阻塞，并将可用的标题/会话命名操作合并到一次 codemode；不改独立工具描述。新增约定放在 `extensions/package-prompts/src/prompt.ts`，详见 `docs/extensions/package-prompts.md`。
+
 - **claude-ui**：Claude Code 风格无边框 TUI 皮肤（● 助手前导、用户灰底整行、工具去背景盒 ⎿、整行底色 diff）。`--claude-ui`（默认开），长输出用 `Ctrl+O` 展开/收起；`--claude-ui=false` 回退 compact-ui。
 - **compact-ui**：Codex 风格紧凑 UI（消息前缀化 + 内置工具短渲染），与 claude-ui 互斥。
 - **input-history**：跨会话输入历史 + 反向增量搜索，默认 `Alt+R`（可改绑 `ctrl+r`）。
@@ -58,6 +60,8 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **token-speed**：footer 常驻 `⚡ 42.3 tok/s · avg 38.1`（流式中显示 `⚡ ~167 tok/s` 估算），`--token-speed=false` 关闭；测量口径为首个→最后 delta 的 decode 窗口。
 
 ## 模型可调用的工具（非命令）
+
+- **record_work**（work-log）：在任务开始、阶段进展、完成或阻塞时记录任务进度；默认全局 `~/.pi/agent/work-log/YYYY/MM/DD/*.json`，`PI_WORK_LOG_DIR` / `--work-log-dir` 可改目录，供外部定时汇总；不是自动工具审计。详见 `docs/extensions/work-log.md`。
 
 - **set_session_name**（session-name）：常规工具，模型工作前或主题明显变化时用任务摘要修改当前 Pi 会话 name；不依赖 tmux、MCP 或额外 Skill，不改其他会话。详见 `docs/extensions/session-name.md`。
 
