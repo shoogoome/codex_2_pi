@@ -40,6 +40,7 @@
 
 | 扩展 | 能力 | 主要命令 / 入口 |
 |---|---|---|
+| `extensions/thinking-style` | 思考块透明背景：清理原生渲染产生的斜体/standout 及 ANSI 背景，兼容旧 screen/tmux 白底问题，保留文字颜色，不影响正文和工具背景。 | 自动生效 · [详情](docs/extensions/thinking-style.md) |
 | `extensions/claude-ui` | Claude Code 风格无边框 TUI 皮肤:● 助手前导、用户灰底整行、工具去背景盒 ⎿、整行底色 diff、长输出折叠。 | `--claude-ui`（默认开）· `Ctrl+O` 展开 |
 | `extensions/input-history` | 跨会话输入历史持久化 + 反向增量搜索。 | `Alt+R`（可改绑 `ctrl+r`） |
 | `extensions/session-summary` | 输入框上方标题为 `summary`、框内全灰色的可滚动摘要：用户输入和完整 Agent run 各一行，模型、展示条数及最近 N 轮上下文共存于全局 `settings.json`。 | `/session-summary context <0-20>` · `/session-summary model <provider/model>` · `Alt+↑/↓` |

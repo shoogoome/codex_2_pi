@@ -49,6 +49,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 
 - **package-prompts**：包级系统提示词统一入口；跨工具编排规则集中维护：工作时优先 codemode，偏独立的长任务可交给后台 LocalAgent、主会话不阻塞，并将可用的标题/会话命名操作合并到一次 codemode；不改独立工具描述。新增约定放在 `extensions/package-prompts/src/prompt.ts`，详见 `docs/extensions/package-prompts.md`。
 
+- **thinking-style**：思考块透明背景；在最终显示层清理原生斜体/standout 与 ANSI 背景，解决旧 screen/tmux 将斜体显示成白底的问题；保留文字颜色，不影响正文、工具或 diff。详见 `docs/extensions/thinking-style.md`。
 - **claude-ui**：Claude Code 风格无边框 TUI 皮肤（● 助手前导、用户灰底整行、工具去背景盒 ⎿、整行底色 diff）。`--claude-ui`（默认开），长输出用 `Ctrl+O` 展开/收起；`--claude-ui=false` 回退 compact-ui。
 - **compact-ui**：Codex 风格紧凑 UI（消息前缀化 + 内置工具短渲染），与 claude-ui 互斥。
 - **input-history**：跨会话输入历史 + 反向增量搜索，默认 `Alt+R`（可改绑 `ctrl+r`）。

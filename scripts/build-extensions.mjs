@@ -39,6 +39,8 @@ const EXT_ROOT = join(REPO_ROOT, "extensions");
  *   - pets:     resolves ../catalog (spritesheet.png, pet.json) from import.meta.url
  *   - codebuddy-reasoning: must use jiti host aliases; native JS imports can
  *     resolve an older workspace pi-ai instead of the running Pi version.
+ *   - thinking-style: patches the live host's AssistantMessageComponent;
+ *     must use jiti host aliases, not an older workspace component class.
  * "shared" is skipped implicitly (no index.ts entry; it is imported by others).
  * (imagegen was historically skipped for a SKILL.md resource; the codex-port
  * rewrite has no resource deps and bundles normally.)
@@ -46,7 +48,7 @@ const EXT_ROOT = join(REPO_ROOT, "extensions");
 // These two coordinate live child UI state. Native ESM caches compiled .js
 // factories across /reload, even with a fresh jiti + moduleCache:false. Keep
 // source entries so /reload can actually replace the producer and consumer.
-const SKIP = new Set(["pets", "shared", "honeypot", "codebuddy-reasoning", "tasks", "localagent", "coordinator", "tmux-title"]);
+const SKIP = new Set(["pets", "shared", "honeypot", "codebuddy-reasoning", "tasks", "localagent", "coordinator", "tmux-title", "thinking-style"]);
 
 /** Discover extension directories that have an index.ts entry point. */
 function discoverExtensions() {
