@@ -44,6 +44,7 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 | `/init` | init | 生成项目 AGENTS.md |
 | `/side [message]` | side | 基于当前 leaf 上下文的临时 side 会话 overlay |
 | `/goal <目标>`, `/goal resume` | goal | thread goal 创建/恢复 |
+| `/repo-branch [list\|on\|off\|toggle\|record\|remove\|clear]` | repo-branch | 管理当前会话记录的仓库与 Git 分支及常驻展示框 |
 
 ## 无命令 / 靠 flag 或按键的能力
 
@@ -65,6 +66,8 @@ description: 本包(pi-codex-replica)为 Pi 增补的全部扩展能力速查。
 - **record_work**（work-log）：在任务开始、阶段进展、完成或阻塞时记录任务进度；默认全局 `~/.pi/agent/work-log/YYYY/MM/DD/*.json`，`PI_WORK_LOG_DIR` / `--work-log-dir` 可改目录，供外部定时汇总；不是自动工具审计。详见 `docs/extensions/work-log.md`。
 
 - **set_session_name**（session-name）：常规工具，模型工作前或主题明显变化时用任务摘要修改当前 Pi 会话 name；不依赖 tmux、MCP 或额外 Skill，不改其他会话。详见 `docs/extensions/session-name.md`。
+
+- **record_repo_branch**（repo-branch）：记录、更新、移除、清空或查询当前会话涉及的仓库与对应 Git 分支，并在输入框上方常驻小框展示。详见 `docs/extensions/repo-branch.md`。
 
 - **task_agent**（localagent）：默认从当前活动上下文精简 fork 后台子 agent，继承启动时主会话 provider/model/thinking，Fast/UltraFast 按请求动态跟随主会话，终态自动回传最终回答。fork 是叶子 worker，不能创建其他 agent、teammate 或 team；主会话传 `team_name`+`name` 可改为创建长生命周期 teammate。
 - **coordinator_task / localagent_message / localagent_report**（coordinator）：可交接逻辑任务账本、主模型定向纠偏及运行时绑定的 worker 报告；交付仍需主会话验收，阻塞后交接释放，详见 `docs/extensions/coordinator.md`。

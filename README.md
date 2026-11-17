@@ -55,6 +55,7 @@
 | `extensions/plan-mode` | 只读规划闸门:仅可探查，模型提交计划经批准后才恢复写工具。 | `/plan [on\|off]` · `Alt+P` · `exit_plan_mode` |
 | `extensions/work-log` | 模型按工作里程碑记录任务、日期和进度，全局本地目录按年/月/日组织，供外部定时汇总。 | `record_work` · `PI_WORK_LOG_DIR` · [详情](docs/extensions/work-log.md) |
 | `extensions/session-name` | 直接暴露会话命名工具，引导模型工作前更新当前 Pi 会话 name；不依赖 tmux 或 MCP。 | `set_session_name` · [详情](docs/extensions/session-name.md) |
+| `extensions/repo-branch` | 记录当前会话涉及的仓库与对应 Git 分支，并在输入框上方常驻小框展示，随会话分支持久化恢复。 | `record_repo_branch` · `/repo-branch` · [详情](docs/extensions/repo-branch.md) |
 | `extensions/tmux-title` | 直接暴露本地 stdio MCP，通过工具描述引导模型工作前更新 tmux 窗口标题。 | `mcp__tmux_title__set_title` |
 | `extensions/package-prompts` | 集中维护包级系统提示词；优先 codemode、独立长任务非阻塞委派 LocalAgent、批量命名，独立工具保持解耦。 | 自动注入 · [详情](docs/extensions/package-prompts.md) |
 | `extensions/behavior` | 向系统提示词追加「工作准则」：Codex 式自主性 + Claude Code 式工程规则（默认开）。 | `--behavior=false` · `PI_BEHAVIOR=0` |
